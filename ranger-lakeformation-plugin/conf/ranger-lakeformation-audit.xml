@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<configuration xmlns:xi="http://www.w3.org/2001/XInclude">
+
+    <!-- ========================== -->
+    <!-- Audit Global Settings      -->
+    <!-- ========================== -->
+
+    <property>
+        <name>xasecure.audit.is.enabled</name>
+        <value>true</value>
+        <description>Enable or disable audit logging globally.</description>
+    </property>
+
+    <!-- ========================== -->
+    <!-- Solr Audit Destination     -->
+    <!-- ========================== -->
+
+    <property>
+        <name>xasecure.audit.destination.solr</name>
+        <value>false</value>
+        <description>Enable audit logging to Apache Solr.</description>
+    </property>
+
+    <property>
+        <name>xasecure.audit.destination.solr.urls</name>
+        <value>http://solr-host:6083/solr/ranger_audits</value>
+        <description>Solr URL for audit log collection.</description>
+    </property>
+
+    <property>
+        <name>xasecure.audit.destination.solr.batch.filespool.dir</name>
+        <value>/var/log/ranger/lakeformation/audit/solr/spool</value>
+        <description>
+            Local spool directory for Solr audit batches.
+            Used when Solr is temporarily unreachable.
+        </description>
+    </property>
+
+
+    <!-- ========================== -->
+    <!-- HDFS Audit Destination     -->
+    <!-- ========================== -->
+
+    <property>
+        <name>xasecure.audit.destination.hdfs</name>
+        <value>false</value>
+        <description>Enable audit logging to HDFS.</description>
+    </property>
+
+    <property>
+        <name>xasecure.audit.destination.hdfs.dir</name>
+        <value>hdfs://namenode:8020/ranger/audit</value>
+        <description>HDFS directory for audit logs.</description>
+    </property>
+
+    <property>
+        <name>xasecure.audit.destination.hdfs.batch.filespool.dir</name>
+        <value>/var/log/ranger/lakeformation/audit/hdfs/spool</value>
+        <description>Local spool directory for HDFS audit batches.</description>
+    </property>
+
+    <!-- ========================== -->
+    <!-- Log4j Audit Destination    -->
+    <!-- ========================== -->
+
+    <property>
+        <name>xasecure.audit.destination.log4j</name>
+        <value>true</value>
+        <description>
+            Enable audit logging to Log4j. Useful for local development
+            and debugging. Logs to the ranger.audit logger.
+        </description>
+    </property>
+
+    <property>
+        <name>xasecure.audit.destination.log4j.logger</name>
+        <value>ranger.audit</value>
+        <description>Log4j logger name for audit events.</description>
+    </property>
+
+    <!-- ========================== -->
+    <!-- S3 Audit Destination       -->
+    <!-- ========================== -->
+
+    <property>
+        <name>xasecure.audit.destination.amazon_s3</name>
+        <value>false</value>
+        <description>Enable audit logging to Amazon S3.</description>
+    </property>
+
+    <property>
+        <name>xasecure.audit.destination.amazon_s3.bucket</name>
+        <value></value>
+        <description>S3 bucket name for audit logs.</description>
+    </property>
+
+    <property>
+        <name>xasecure.audit.destination.amazon_s3.prefix</name>
+        <value>ranger/audit/lakeformation</value>
+        <description>S3 key prefix for audit log objects.</description>
+    </property>
+
+    <property>
+        <name>xasecure.audit.destination.amazon_s3.region</name>
+        <value>us-east-1</value>
+        <description>AWS region for the S3 audit bucket.</description>
+    </property>
+
+    <!-- ========================== -->
+    <!-- Audit Queue / Batching     -->
+    <!-- ========================== -->
+
+    <property>
+        <name>xasecure.audit.queue.max.capacity</name>
+        <value>5120</value>
+        <description>
+            Maximum number of audit events to queue in memory
+            before flushing to the destination.
+        </description>
+    </property>
+
+    <property>
+        <name>xasecure.audit.queue.max.flush.interval.ms</name>
+        <value>5000</value>
+        <description>
+            Maximum interval in milliseconds between audit flushes.
+        </description>
+    </property>
+
+</configuration>

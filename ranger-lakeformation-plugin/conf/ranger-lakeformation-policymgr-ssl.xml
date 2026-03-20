@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  SSL configuration for Ranger Admin REST communication.
+  Referenced by ranger.plugin.lakeformation.policy.rest.ssl.config.file
+  in ranger-lakeformation-security.xml.
+-->
+<configuration xmlns:xi="http://www.w3.org/2001/XInclude">
+
+    <property>
+        <name>xasecure.policymgr.clientssl.keystore</name>
+        <value>/etc/ranger/lakeformation/ssl/keystore.jks</value>
+        <description>Path to the client keystore for mutual TLS.</description>
+    </property>
+
+    <property>
+        <name>xasecure.policymgr.clientssl.keystore.password</name>
+        <value>changeit</value>
+        <description>Password for the client keystore.</description>
+    </property>
+
+    <property>
+        <name>xasecure.policymgr.clientssl.keystore.type</name>
+        <value>jks</value>
+        <description>Keystore type (jks, pkcs12).</description>
+    </property>
+
+    <property>
+        <name>xasecure.policymgr.clientssl.truststore</name>
+        <value>/etc/ranger/lakeformation/ssl/truststore.jks</value>
+        <description>Path to the truststore for verifying Ranger Admin's certificate.</description>
+    </property>
+
+    <property>
+        <name>xasecure.policymgr.clientssl.truststore.password</name>
+        <value>changeit</value>
+        <description>Password for the truststore.</description>
+    </property>
+
+    <property>
+        <name>xasecure.policymgr.clientssl.truststore.type</name>
+        <value>jks</value>
+        <description>Truststore type (jks, pkcs12).</description>
+    </property>
+
+</configuration>

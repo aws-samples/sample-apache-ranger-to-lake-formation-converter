@@ -1,0 +1,268 @@
+{
+    "id": 0,
+    "name": "lakeformation",
+    "displayName": "AWS Lake Formation",
+    "implClass": "org.apache.ranger.services.lakeformation.LakeFormationResourceLookupService",
+    "label": "Lake Formation",
+    "description": "AWS Lake Formation Permission Management via Ranger",
+    "options": {
+        "enableDenyAndExceptionsInPolicies": "false"
+    },
+    "resources": [
+        {
+            "itemId": 1,
+            "name": "catalog",
+            "type": "string",
+            "level": 5,
+            "mandatory": false,
+            "lookupSupported": false,
+            "recursiveSupported": false,
+            "excludesSupported": false,
+            "matcher": "org.apache.ranger.plugin.resourcematcher.RangerDefaultResourceMatcher",
+            "matcherOptions": {
+                "wildCard": "true",
+                "ignoreCase": "true"
+            },
+            "label": "Catalog ID",
+            "description": "AWS Glue Data Catalog ID (account ID). Leave blank for default catalog."
+        },
+        {
+            "itemId": 2,
+            "name": "database",
+            "type": "string",
+            "level": 10,
+            "parent": "catalog",
+            "mandatory": true,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "excludesSupported": true,
+            "isValidLeaf": true,
+            "matcher": "org.apache.ranger.plugin.resourcematcher.RangerDefaultResourceMatcher",
+            "matcherOptions": {
+                "wildCard": "true",
+                "ignoreCase": "true"
+            },
+            "label": "Database",
+            "description": "Glue Data Catalog database name. Supports wildcards.",
+            "accessTypeRestrictions": [
+                "create_table", "alter", "drop", "describe", "create_database"
+            ]
+        },
+        {
+            "itemId": 3,
+            "name": "table",
+            "type": "string",
+            "level": 20,
+            "parent": "database",
+            "mandatory": false,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "excludesSupported": true,
+            "isValidLeaf": true,
+            "matcher": "org.apache.ranger.plugin.resourcematcher.RangerDefaultResourceMatcher",
+            "matcherOptions": {
+                "wildCard": "true",
+                "ignoreCase": "true"
+            },
+            "label": "Table",
+            "description": "Glue Data Catalog table name. Supports wildcards.",
+            "accessTypeRestrictions": [
+                "select", "insert", "delete", "describe", "alter", "drop"
+            ]
+        },
+        {
+            "itemId": 4,
+            "name": "column",
+            "type": "string",
+            "level": 30,
+            "parent": "table",
+            "mandatory": false,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "excludesSupported": true,
+            "isValidLeaf": true,
+            "matcher": "org.apache.ranger.plugin.resourcematcher.RangerDefaultResourceMatcher",
+            "matcherOptions": {
+                "wildCard": "true",
+                "ignoreCase": "true"
+            },
+            "label": "Column",
+            "description": "Table column name. Supports wildcards.",
+            "accessTypeRestrictions": [
+                "select"
+            ]
+        },
+        {
+            "itemId": 5,
+            "name": "datalocation",
+            "type": "path",
+            "level": 10,
+            "mandatory": true,
+            "lookupSupported": false,
+            "recursiveSupported": true,
+            "excludesSupported": false,
+            "matcher": "org.apache.ranger.plugin.resourcematcher.RangerPathResourceMatcher",
+            "matcherOptions": {
+                "wildCard": "true",
+                "ignoreCase": "false"
+            },
+            "label": "S3 Data Location",
+            "description": "S3 path for data location permissions (e.g., s3://bucket/prefix/).",
+            "accessTypeRestrictions": [
+                "data_location_access"
+            ]
+        }
+    ],
+    "accessTypes": [
+        {
+            "itemId": 1,
+            "name": "select",
+            "label": "Select",
+            "category": "READ",
+            "impliedGrants": []
+        },
+        {
+            "itemId": 2,
+            "name": "insert",
+            "label": "Insert",
+            "category": "UPDATE",
+            "impliedGrants": []
+        },
+        {
+            "itemId": 3,
+            "name": "delete",
+            "label": "Delete",
+            "category": "DELETE",
+            "impliedGrants": []
+        },
+        {
+            "itemId": 4,
+            "name": "describe",
+            "label": "Describe",
+            "category": "READ",
+            "impliedGrants": []
+        },
+        {
+            "itemId": 5,
+            "name": "alter",
+            "label": "Alter",
+            "category": "MANAGE",
+            "impliedGrants": []
+        },
+        {
+            "itemId": 6,
+            "name": "drop",
+            "label": "Drop",
+            "category": "DELETE",
+            "impliedGrants": []
+        },
+        {
+            "itemId": 7,
+            "name": "create_database",
+            "label": "Create Database",
+            "category": "CREATE",
+            "impliedGrants": []
+        },
+        {
+            "itemId": 8,
+            "name": "create_table",
+            "label": "Create Table",
+            "category": "CREATE",
+            "impliedGrants": []
+        },
+        {
+            "itemId": 9,
+            "name": "data_location_access",
+            "label": "Data Location Access",
+            "category": "MANAGE",
+            "impliedGrants": []
+        },
+        {
+            "itemId": 10,
+            "name": "all_database",
+            "label": "All (Database)",
+            "impliedGrants": [
+                "create_table", "alter", "drop", "describe", "create_database"
+            ]
+        },
+        {
+            "itemId": 11,
+            "name": "all_table",
+            "label": "All (Table)",
+            "impliedGrants": [
+                "select", "insert", "delete", "describe", "alter", "drop"
+            ]
+        }
+    ],
+    "configs": [
+        {
+            "itemId": 1,
+            "name": "aws.region",
+            "type": "string",
+            "mandatory": true,
+            "defaultValue": "us-east-1",
+            "label": "AWS Region",
+            "description": "AWS region for Lake Formation and Glue APIs."
+        },
+        {
+            "itemId": 2,
+            "name": "aws.catalog.id",
+            "type": "string",
+            "mandatory": false,
+            "defaultValue": "",
+            "label": "Glue Catalog ID",
+            "description": "AWS account ID for the Glue Data Catalog. Blank uses default."
+        },
+        {
+            "itemId": 3,
+            "name": "aws.access.key",
+            "type": "string",
+            "mandatory": false,
+            "label": "AWS Access Key",
+            "description": "AWS access key ID. Leave blank to use IAM role or instance profile."
+        },
+        {
+            "itemId": 4,
+            "name": "aws.secret.key",
+            "type": "password",
+            "mandatory": false,
+            "label": "AWS Secret Key",
+            "description": "AWS secret access key. Leave blank to use IAM role or instance profile."
+        },
+        {
+            "itemId": 5,
+            "name": "aws.role.arn",
+            "type": "string",
+            "mandatory": false,
+            "label": "IAM Role ARN",
+            "description": "IAM role ARN to assume via STS for Lake Formation API calls."
+        },
+        {
+            "itemId": 6,
+            "name": "aws.endpoint.lakeformation",
+            "type": "string",
+            "mandatory": false,
+            "label": "Lake Formation Endpoint",
+            "description": "Custom Lake Formation API endpoint URL. Blank uses default regional endpoint."
+        },
+        {
+            "itemId": 7,
+            "name": "aws.endpoint.glue",
+            "type": "string",
+            "mandatory": false,
+            "label": "Glue Endpoint",
+            "description": "Custom Glue API endpoint URL. Blank uses default regional endpoint."
+        },
+        {
+            "itemId": 8,
+            "name": "ranger.plugin.audit.filters",
+            "type": "string",
+            "mandatory": false,
+            "label": "Ranger Default Audit Filters",
+            "defaultValue": "[ {'accessResult': 'DENIED', 'isAudited': true} ]"
+        }
+    ],
+    "enums": [],
+    "contextEnrichers": [],
+    "policyConditions": []
+}
