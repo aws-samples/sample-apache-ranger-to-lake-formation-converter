@@ -9,14 +9,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
 import software.amazon.awssdk.services.lakeformation.model.ConcurrentModificationException;
 import software.amazon.awssdk.services.lakeformation.model.GrantPermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.LakeFormationException;
 import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -25,8 +23,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -112,60 +108,9 @@ class LakeFormationClientTest {
     }
 
     @Test
-    void grantPermission_retriesOnThrottling_thenSucceeds() throws Exception {
-        LakeFormationException throttle = (LakeFormationException) LakeFormationException.builder()
-                .message("Rate exceeded")
-                .awsErrorDetails(AwsErrorDetails.builder()
-                        .errorCode("ThrottlingException")
-                        .errorMessage("Rate exceeded")
-                        .serviceName("LakeFormation")
-                        .sdkHttpResponse(null)
-                        .build())
-                .build();
-
-        when(awsClient.grantPermissions(any(GrantPermissionsRequest.class)))
-                .thenThrow(throttle)
-                .thenReturn(null);
-
-        client.grantPermission(makeGrantOp());
-
-        verify(awsClient, times(2)).grantPermissions(any(GrantPermissionsRequest.class));
-        assertEquals(1, sleepDurations.size());
-        assertEquals(100L, sleepDurations.get(0).longValue());
-    }
-
-    @Test
-    void grantPermission_failsAfterExhaustingRetries_throttling() {
-        LakeFormationException throttle = (LakeFormationException) LakeFormationException.builder()
-                .message("Rate exceeded")
-                .awsErrorDetails(AwsErrorDetails.builder()
-                        .errorCode("ThrottlingException")
-                        .errorMessage("Rate exceeded")
-                        .serviceName("LakeFormation")
-                        .sdkHttpResponse(null)
-                        .build())
-                .build();
-
-        when(awsClient.grantPermissions(any(GrantPermissionsRequest.class)))
-                .thenThrow(throttle);
-
-        LakeFormationClientException ex = assertThrows(LakeFormationClientException.class,
-                () -> client.grantPermission(makeGrantOp()));
-
-        verify(awsClient, times(4)).grantPermissions(any(GrantPermissionsRequest.class));
-        assertTrue(ex.getMessage().contains("throttled"));
-    }
-
-    @Test
-    void grantPermission_nonRetryableLakeFormationException_failsImmediately() {
+    void grantPermission_nonRetryableException_failsImmediately() {
         LakeFormationException nonRetryable = (LakeFormationException) LakeFormationException.builder()
                 .message("Access denied")
-                .awsErrorDetails(AwsErrorDetails.builder()
-                        .errorCode("AccessDeniedException")
-                        .errorMessage("Access denied")
-                        .serviceName("LakeFormation")
-                        .sdkHttpResponse(null)
-                        .build())
                 .build();
 
         when(awsClient.grantPermissions(any(GrantPermissionsRequest.class)))
@@ -203,27 +148,6 @@ class LakeFormationClientTest {
 
         verify(awsClient, times(2)).revokePermissions(any(RevokePermissionsRequest.class));
         assertEquals(1, sleepDurations.size());
-    }
-
-    @Test
-    void revokePermission_failsAfterExhaustingRetries_throttling() {
-        LakeFormationException throttle = (LakeFormationException) LakeFormationException.builder()
-                .message("Rate exceeded")
-                .awsErrorDetails(AwsErrorDetails.builder()
-                        .errorCode("Throttling")
-                        .errorMessage("Rate exceeded")
-                        .serviceName("LakeFormation")
-                        .sdkHttpResponse(null)
-                        .build())
-                .build();
-
-        when(awsClient.revokePermissions(any(RevokePermissionsRequest.class)))
-                .thenThrow(throttle);
-
-        assertThrows(LakeFormationClientException.class,
-                () -> client.revokePermission(makeRevokeOp()));
-
-        verify(awsClient, times(4)).revokePermissions(any(RevokePermissionsRequest.class));
     }
 
     // --- Backoff tests ---

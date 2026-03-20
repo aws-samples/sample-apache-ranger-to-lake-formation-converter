@@ -23,7 +23,8 @@ import java.util.stream.Collectors;
 
 /**
  * Wrapper around the AWS Lake Formation SDK that handles grant/revoke
- * operations with retry logic for ConcurrentModificationException and throttling.
+ * operations with retry logic for ConcurrentModificationException.
+ * Throttling retries are handled internally by the AWS SDK v2 retry policy.
  */
 public class LakeFormationClient {
 
@@ -58,7 +59,8 @@ public class LakeFormationClient {
 
     /**
      * Grant permissions on a Lake Formation resource.
-     * Retries on ConcurrentModificationException and throttling with exponential backoff.
+     * Retries on ConcurrentModificationException with exponential backoff.
+     * Throttling is handled by the AWS SDK's built-in retry policy.
      *
      * @param op the permission operation describing the grant
      * @throws LakeFormationClientException if the operation fails after exhausting retries
@@ -92,7 +94,8 @@ public class LakeFormationClient {
 
     /**
      * Revoke permissions on a Lake Formation resource.
-     * Retries on ConcurrentModificationException and throttling with exponential backoff.
+     * Retries on ConcurrentModificationException with exponential backoff.
+     * Throttling is handled by the AWS SDK's built-in retry policy.
      *
      * @param op the permission operation describing the revoke
      * @throws LakeFormationClientException if the operation fails after exhausting retries
@@ -125,7 +128,8 @@ public class LakeFormationClient {
     }
 
     /**
-     * Execute an operation with retry logic for ConcurrentModificationException and throttling.
+     * Execute an operation with retry logic for ConcurrentModificationException.
+     * Throttling is handled by the AWS SDK's built-in retry policy.
      */
     private void executeWithRetry(String operationType, LFPermissionOperation op, RetryableAction action)
             throws LakeFormationClientException {
@@ -151,28 +155,8 @@ public class LakeFormationClient {
                         operationType, attempt, op.getSourcePolicyId(), backoffMs);
                 doSleep(backoffMs);
                 backoffMs = nextBackoff(backoffMs);
-            } catch (software.amazon.awssdk.services.lakeformation.model.LakeFormationException e) {
-                if (isThrottlingException(e)) {
-                    attempt++;
-                    if (attempt > retryConfig.getMaxRetries()) {
-                        LOG.error("{} failed after {} retries due to throttling: policyId={}, resource={}",
-                                operationType, retryConfig.getMaxRetries(), op.getSourcePolicyId(), op.getResource());
-                        throw new LakeFormationClientException(
-                                operationType + " failed after " + retryConfig.getMaxRetries()
-                                        + " retries (throttled) for policyId=" + op.getSourcePolicyId(), e);
-                    }
-                    LOG.warn("{} attempt {} throttled for policyId={}, retrying in {}ms",
-                            operationType, attempt, op.getSourcePolicyId(), backoffMs);
-                    doSleep(backoffMs);
-                    backoffMs = nextBackoff(backoffMs);
-                } else {
-                    LOG.error("{} failed with non-retryable error for policyId={}: {}",
-                            operationType, op.getSourcePolicyId(), e.getMessage());
-                    throw new LakeFormationClientException(
-                            operationType + " failed for policyId=" + op.getSourcePolicyId(), e);
-                }
             } catch (Exception e) {
-                LOG.error("{} failed with unexpected error for policyId={}: {}",
+                LOG.error("{} failed with error for policyId={}: {}",
                         operationType, op.getSourcePolicyId(), e.getMessage());
                 throw new LakeFormationClientException(
                         operationType + " failed for policyId=" + op.getSourcePolicyId(), e);
@@ -239,17 +223,6 @@ public class LakeFormationClient {
             Thread.currentThread().interrupt();
             LOG.warn("Retry sleep interrupted");
         }
-    }
-
-    /**
-     * Check if an exception is a throttling error.
-     */
-    private boolean isThrottlingException(software.amazon.awssdk.services.lakeformation.model.LakeFormationException e) {
-        String errorCode = e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : null;
-        return "ThrottlingException".equals(errorCode)
-                || "Throttling".equals(errorCode)
-                || "TooManyRequestsException".equals(errorCode)
-                || "RequestLimitExceeded".equals(errorCode);
     }
 
     /**
