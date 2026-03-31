@@ -1,3 +1,4 @@
 .jqwik-database
 .vscode
 target/
+logs/
