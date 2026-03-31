@@ -694,7 +694,7 @@ The custom Lake Formation service definition follows the Ranger service definiti
 |----------|--------|-------------------|
 | Authentication Failure | Ranger Admin REST API (401/403) | Log error with HTTP status, do not retry, report to caller |
 | Network Timeout | Ranger Admin or AWS APIs | Retry with exponential backoff (configurable max retries) |
-| Rate Limiting | AWS Lake Formation API (throttling) | Backoff and retry, respect Retry-After headers |
+| Rate Limiting | AWS Lake Formation API (throttling) | Handled internally by AWS SDK v2 retry policy |
 | Concurrent Modification | AWS Lake Formation API | Retry with exponential backoff |
 | Malformed Policy | Ranger policy JSON | Log error, skip policy, continue batch |
 | Unmapped Principal | Principal mapping configuration | Log warning, skip permission entry |
@@ -778,7 +778,6 @@ Each property test should:
 - Specific conversion examples (known Ranger policy → expected LF operations)
 - Authentication error handling (Req 1.4)
 - ConcurrentModificationException retry (Req 4.4)
-- Rate limit retry (Req 4.5)
 - Connectivity loss resilience (Req 4.7)
 - Service definition JSON structure validation (Req 5.1, 5.2, 5.3)
 - Configuration loading from file (Req 9.1)

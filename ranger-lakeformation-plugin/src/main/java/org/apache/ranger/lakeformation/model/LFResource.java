@@ -10,7 +10,8 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Represents a Lake Formation resource target (database, table, column, or row filter).
+ * Represents a Lake Formation resource target (database, table, column, row filter,
+ * or data location).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class LFResource {
@@ -20,6 +21,7 @@ public class LFResource {
     private final String tableName;
     private final Set<String> columnNames;
     private final String rowFilterExpression;
+    private final String dataLocationPath;
 
     @JsonCreator
     public LFResource(
@@ -28,6 +30,12 @@ public class LFResource {
             @JsonProperty("tableName") String tableName,
             @JsonProperty("columnNames") Set<String> columnNames,
             @JsonProperty("rowFilterExpression") String rowFilterExpression) {
+        this(catalogId, databaseName, tableName, columnNames, rowFilterExpression, null);
+    }
+
+    public LFResource(String catalogId, String databaseName, String tableName,
+                      Set<String> columnNames, String rowFilterExpression,
+                      String dataLocationPath) {
         this.catalogId = catalogId;
         this.databaseName = databaseName;
         this.tableName = tableName;
@@ -35,6 +43,7 @@ public class LFResource {
                 ? Collections.unmodifiableSet(new HashSet<>(columnNames))
                 : null;
         this.rowFilterExpression = rowFilterExpression;
+        this.dataLocationPath = dataLocationPath;
     }
 
     public String getCatalogId() {
@@ -57,6 +66,10 @@ public class LFResource {
         return rowFilterExpression;
     }
 
+    public String getDataLocationPath() {
+        return dataLocationPath;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -66,12 +79,13 @@ public class LFResource {
                 && Objects.equals(databaseName, that.databaseName)
                 && Objects.equals(tableName, that.tableName)
                 && Objects.equals(columnNames, that.columnNames)
-                && Objects.equals(rowFilterExpression, that.rowFilterExpression);
+                && Objects.equals(rowFilterExpression, that.rowFilterExpression)
+                && Objects.equals(dataLocationPath, that.dataLocationPath);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(catalogId, databaseName, tableName, columnNames, rowFilterExpression);
+        return Objects.hash(catalogId, databaseName, tableName, columnNames, rowFilterExpression, dataLocationPath);
     }
 
     @Override
@@ -87,6 +101,9 @@ public class LFResource {
         }
         if (rowFilterExpression != null) {
             sb.append(", rowFilterExpression='").append(rowFilterExpression).append('\'');
+        }
+        if (dataLocationPath != null) {
+            sb.append(", dataLocationPath='").append(dataLocationPath).append('\'');
         }
         sb.append('}');
         return sb.toString();

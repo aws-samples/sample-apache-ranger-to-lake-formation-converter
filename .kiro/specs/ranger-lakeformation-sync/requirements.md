@@ -77,11 +77,10 @@ This document specifies the requirements for a Java-based utility that bridges A
 1. WHEN the Sync_Service starts, THE Sync_Service SHALL register with Ranger_Admin as a RangerPlugin instance using the custom Lake Formation service definition and begin receiving policy updates via the RangerBasePlugin policy refresh mechanism.
 2. WHILE the Sync_Service is running, THE Sync_Service SHALL periodically receive updated policies from Ranger_Admin and apply the corresponding LF_Permission grant and revoke operations to Lake_Formation.
 3. WHEN the Sync_Service receives a policy update, THE Sync_Service SHALL compute the difference between the previous policy state and the new policy state and apply only the incremental changes (new grants, revoked permissions) to Lake_Formation.
-4. IF the Sync_Service encounters a ConcurrentModificationException from the Lake Formation API during a permission update, THEN THE Sync_Service SHALL retry the operation with exponential backoff up to a configurable maximum number of retries.
-5. IF the Sync_Service encounters a Lake Formation API rate limit (throttling), THEN THE Sync_Service SHALL apply backoff and retry logic to stay within API rate limits.
-6. WHEN the Sync_Service applies permission changes to Lake_Formation, THE Sync_Service SHALL log each grant and revoke operation with the policy ID, resource, principal, and permission type for audit purposes.
-7. IF the Sync_Service loses connectivity to Ranger_Admin, THEN THE Sync_Service SHALL continue operating with the last known policy set and resume synchronization when connectivity is restored.
-8. WHEN the Sync_Service processes a policy containing Unsupported_Policy features, THE Sync_Service SHALL convert supported portions and add unsupported portions to the Policy_Gap_Report, consistent with Policy_Converter behavior.
+4. IF the Sync_Service encounters a ConcurrentModificationException from the Lake Formation API during a permission update, THEN THE Sync_Service SHALL retry the operation with exponential backoff up to a configurable maximum number of retries. Note: Throttling retries are handled internally by the AWS SDK v2 retry policy and do not require explicit implementation.
+5. WHEN the Sync_Service applies permission changes to Lake_Formation, THE Sync_Service SHALL log each grant and revoke operation with the policy ID, resource, principal, and permission type for audit purposes.
+6. IF the Sync_Service loses connectivity to Ranger_Admin, THEN THE Sync_Service SHALL continue operating with the last known policy set and resume synchronization when connectivity is restored.
+7. WHEN the Sync_Service processes a policy containing Unsupported_Policy features, THE Sync_Service SHALL convert supported portions and add unsupported portions to the Policy_Gap_Report, consistent with Policy_Converter behavior.
 
 ### Requirement 5: Custom Lake Formation Service Definition for Ranger Admin
 

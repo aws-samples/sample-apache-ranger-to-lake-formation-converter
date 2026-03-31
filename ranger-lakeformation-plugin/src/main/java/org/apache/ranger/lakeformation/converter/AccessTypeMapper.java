@@ -24,6 +24,8 @@ import java.util.Set;
  *   <li>read → {SELECT}</li>
  *   <li>write → {INSERT}</li>
  *   <li>all → {SELECT, INSERT, DELETE, ALTER, DROP, DESCRIBE}</li>
+ *   <li>datalocation → {DATA_LOCATION_ACCESS}</li>
+ *   <li>data_location_access → {DATA_LOCATION_ACCESS}</li>
  * </ul>
  */
 public final class AccessTypeMapper {
@@ -44,6 +46,8 @@ public final class AccessTypeMapper {
         m.put("all", Collections.unmodifiableSet(EnumSet.of(
                 LFPermission.SELECT, LFPermission.INSERT, LFPermission.DELETE,
                 LFPermission.ALTER, LFPermission.DROP, LFPermission.DESCRIBE)));
+        m.put("datalocation", Collections.unmodifiableSet(EnumSet.of(LFPermission.DATA_LOCATION_ACCESS)));
+        m.put("data_location_access", Collections.unmodifiableSet(EnumSet.of(LFPermission.DATA_LOCATION_ACCESS)));
         MAPPING = Collections.unmodifiableMap(m);
     }
 

@@ -105,6 +105,41 @@ public class PolicyConverter {
         List<String> databases = getResourceValues(resources, "database");
         List<String> tables = getResourceValues(resources, "table");
         List<String> columns = getResourceValues(resources, "column");
+        List<String> dataLocations = getResourceValues(resources, "datalocation");
+
+        // Handle data location resources (S3 paths)
+        if (!dataLocations.isEmpty()) {
+            List<RangerPolicyItem> allowItems = policy.getPolicyItems();
+            if (allowItems != null) {
+                for (RangerPolicyItem item : allowItems) {
+                    boolean delegateAdmin = item.getDelegateAdmin() != null && item.getDelegateAdmin();
+                    Set<LFPermission> permissions = extractPermissions(item);
+                    // For data location policies, only DATA_LOCATION_ACCESS is valid
+                    if (!permissions.contains(LFPermission.DATA_LOCATION_ACCESS)) {
+                        continue;
+                    }
+                    Set<LFPermission> dlPermissions = Collections.unmodifiableSet(
+                            EnumSet.of(LFPermission.DATA_LOCATION_ACCESS));
+
+                    List<String> principalArns = resolvePrincipals(item, principalMapper);
+                    for (String arn : principalArns) {
+                        for (String path : dataLocations) {
+                            LFResource resource = new LFResource(
+                                    catalogId, null, null, null, null, path);
+                            operations.add(new LFPermissionOperation(
+                                    OperationType.GRANT, policyId, arn, resource,
+                                    dlPermissions, delegateAdmin));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle database/table/column resources
+        if (databases.isEmpty()) {
+            // No database resources — return whatever data location operations we have
+            return operations;
+        }
 
         // Expand wildcards
         List<String> expandedDatabases = expandPatterns(databases, catalogResolver);
@@ -255,12 +290,12 @@ public class PolicyConverter {
         if (resources == null || resources.isEmpty()) {
             return false;
         }
-        // Must have at least a database resource
+        // Must have at least a database resource or a datalocation resource
         RangerPolicyResource dbResource = resources.get("database");
-        if (dbResource == null || dbResource.getValues() == null || dbResource.getValues().isEmpty()) {
-            return false;
-        }
-        return true;
+        boolean hasDatabase = dbResource != null && dbResource.getValues() != null && !dbResource.getValues().isEmpty();
+        RangerPolicyResource dlResource = resources.get("datalocation");
+        boolean hasDataLocation = dlResource != null && dlResource.getValues() != null && !dlResource.getValues().isEmpty();
+        return hasDatabase || hasDataLocation;
     }
 
     /**
@@ -524,10 +559,19 @@ public class PolicyConverter {
                         operations.add(new LFPermissionOperation(
                                 OperationType.GRANT, policyId, principalArn, resource, permissions, delegateAdmin));
                     } else {
-                        // Column-level permission
+                        // Column-level permission — DESCRIBE is not valid at column level in LF
+                        Set<LFPermission> columnPermissions = EnumSet.copyOf(permissions);
+                        columnPermissions.remove(LFPermission.DESCRIBE);
+                        if (columnPermissions.isEmpty()) {
+                            LOG.warn("PolicyConverter: skipping column-level operation for policy {} "
+                                    + "on {}.{} — no valid permissions remain after removing DESCRIBE",
+                                    policyId, db, table);
+                            continue;
+                        }
                         LFResource resource = new LFResource(catalogId, db, table, expandedColumns, null);
                         operations.add(new LFPermissionOperation(
-                                OperationType.GRANT, policyId, principalArn, resource, permissions, delegateAdmin));
+                                OperationType.GRANT, policyId, principalArn, resource,
+                                Collections.unmodifiableSet(columnPermissions), delegateAdmin));
                     }
                 }
             }

@@ -125,114 +125,113 @@ This plan implements a Java 8 utility that bridges Apache Ranger policies to AWS
 - [x] 5. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 6. Implement LakeFormationClient with retry and atomic batch application
+- [x] 6. Implement LakeFormationClient with retry and atomic batch application
   - [x] 6.1 Implement LakeFormationClient grant/revoke operations
     - Wrap AWS Lake Formation SDK `grantPermissions` and `revokePermissions` calls
-    - Implement retry with exponential backoff for ConcurrentModificationException and throttling
-    - _Requirements: 4.4, 4.5_
+    - Implement retry with exponential backoff for ConcurrentModificationException (throttling is handled by the AWS SDK internally)
+    - _Requirements: 4.4_
 
-  - [ ] 6.2 Implement atomic per-policy batch application with rollback
+  - [x] 6.2 Implement atomic per-policy batch application with rollback
     - Group operations by source policy ID
     - Apply sequentially; on failure after retries, reverse previously applied operations for that policy
     - Write failed operations to dead-letter log (JSON lines format)
     - _Requirements: 8.3, 8.4_
 
-  - [ ] 6.3 Write property tests for LakeFormationClient
+  - [x] 6.3 Write property tests for LakeFormationClient
     - **Property 18: Atomic per-policy application** — *For any* batch grouped by policy, if any operation for a policy fails, all operations for that policy are rolled back while other policies are unaffected
     - **Validates: Requirements 8.3**
     - **Property 19: Dead-letter log completeness** — *For any* operation that fails after exhausting retries, the dead-letter log contains an entry with policy ID, operation details, and error message
     - **Validates: Requirements 8.4**
 
-  - [ ] 6.4 Write unit tests for LakeFormationClient retry behavior
+  - [x] 6.4 Write unit tests for LakeFormationClient retry behavior
     - Test ConcurrentModificationException triggers retry with backoff
-    - Test throttling triggers backoff and retry
     - Test successful rollback on partial batch failure
-    - _Requirements: 4.4, 4.5, 8.3_
+    - _Requirements: 4.4, 8.3_
 
 
-- [ ] 7. Checkpoint — Ensure all tests pass
+- [x] 7. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 8. Implement SyncService (RangerPlugin-based real-time sync)
-  - [ ] 8.1 Implement LakeFormationPlugin extending RangerBasePlugin
+- [x] 8. Implement SyncService (RangerPlugin-based real-time sync)
+  - [x] 8.1 Implement LakeFormationPlugin extending RangerBasePlugin
     - Register with Ranger Admin using the custom "lakeformation" service definition
     - Override `setPolicies` to receive policy updates
     - _Requirements: 4.1_
 
-  - [ ] 8.2 Implement policy diff computation in SyncService
+  - [x] 8.2 Implement policy diff computation in SyncService
     - Maintain previous policy snapshot (empty on first startup for implicit bulk sync)
     - Compute delta: new grants, revoked permissions, unchanged (no-op)
     - Pass delta through PolicyConverter and apply via LakeFormationClient
     - _Requirements: 4.2, 4.3_
 
-  - [ ] 8.3 Implement SyncService resilience and audit logging
+  - [x] 8.3 Implement SyncService resilience and audit logging
     - Log each grant/revoke operation with policy ID, resource, principal, permission type
     - Continue with last known policy set on Ranger Admin connectivity loss; resume on reconnect
     - Route unsupported features through GapReporter consistent with PolicyConverter
     - _Requirements: 4.6, 4.7, 4.8_
 
-  - [ ] 8.4 Write property tests for SyncService diff logic
-    - **Property 13: Policy diff correctness** — *For any* two policy snapshots, the diff produces GRANT for new permissions, REVOKE for removed permissions, and no-op for unchanged
+  - [x] 8.4 Write property tests for SyncService diff logic
+    - [x] **Property 13: Policy diff correctness** — *For any* two policy snapshots, the diff produces GRANT for new permissions, REVOKE for removed permissions, and no-op for unchanged
     - **Validates: Requirements 4.3**
-    - **Property 14: Audit log completeness** — *For any* set of applied LF operations, the audit log contains one entry per operation with policy ID, resource, principal, and permission type
+    - [x] **Property 14: Audit log completeness** — *For any* set of applied LF operations, the audit log contains one entry per operation with policy ID, resource, principal, and permission type
     - **Validates: Requirements 4.6**
 
-  - [ ] 8.5 Write unit tests for SyncService
+  - [x] 8.5 Write unit tests for SyncService
     - Test plugin registration with Ranger Admin
     - Test connectivity loss handling (continues with last known policies)
     - Test unsupported features in sync mode are routed to GapReporter
     - _Requirements: 4.1, 4.7, 4.8_
 
-- [ ] 9. Implement Service Definition and Resource Lookup
-  - [ ] 9.1 Create the Lake Formation service definition JSON file
+- [x] 9. Implement Service Definition and Resource Lookup
+  - [x] 9.1 Create the Lake Formation service definition JSON file
     - Define "lakeformation" service type with database, table, column resource hierarchy
     - Define access types matching LF permissions (SELECT, INSERT, DELETE, DESCRIBE, ALTER, DROP, CREATE_DATABASE, CREATE_TABLE, DATA_LOCATION_ACCESS)
     - Define configuration properties for AWS region, catalog ID, credentials
     - _Requirements: 5.1, 5.2, 5.3_
 
-  - [ ] 9.2 Implement ServiceDefinitionInstaller
+  - [x] 9.2 Implement ServiceDefinitionInstaller
     - REST-based installation via POST to `/service/plugins/definitions`
     - File-based installation by copying to `ranger-admin/ews/webapp/WEB-INF/classes/ranger-plugins/lakeformation/`
     - _Requirements: 5.4, 5.5_
 
-  - [ ] 9.3 Implement LakeFormationResourceLookupService extending RangerBaseService
+  - [x] 9.3 Implement LakeFormationResourceLookupService extending RangerBaseService
     - Implement `validateConfig` to verify AWS credentials
     - Implement `lookupResource` to query Glue Data Catalog for databases, tables, columns
     - Use AWS credentials from service definition configuration properties
     - _Requirements: 5.6, 5.7_
 
-  - [ ] 9.4 Write property test for resource lookup
+  - [x] 9.4 Write property test for resource lookup
     - **Property 24: Resource lookup returns matching catalog entries** — *For any* catalog state and lookup context, the service returns exactly the matching entries
     - **Validates: Requirements 5.6**
 
-  - [ ] 9.5 Write unit tests for service definition and installer
+  - [x] 9.5 Write unit tests for service definition and installer
     - Validate service definition JSON structure (correct resource types, access types, configs)
     - Test REST-based installation call
     - Test file-based installation writes to correct directory
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
 
-- [ ] 10. Implement structured error logging across all components
-  - [ ] 10.1 Implement consistent error logging format
+- [x] 10. Implement structured error logging across all components
+  - [x] 10.1 Implement consistent error logging format
     - Every error log entry includes timestamp, component name, severity level, and context (policy ID, resource path, principal)
     - _Requirements: 8.5_
 
-  - [ ] 10.2 Write property test for error log structure
+  - [x] 10.2 Write property test for error log structure
     - **Property 20: Error log structure** — *For any* error logged by any component, the entry contains timestamp, component name, severity, and applicable context fields
     - **Validates: Requirements 8.5**
 
-- [ ] 11. Wire components together and create entry points
-  - [ ] 11.1 Create main entry point for sync service mode
+- [x] 11. Wire components together and create entry points
+  - [x] 11.1 Create main entry point for sync service mode
     - Load configuration, instantiate SyncService with all dependencies
     - Start plugin and begin receiving policy updates
     - On first startup with empty previous snapshot, effectively performs a bulk sync
     - _Requirements: 4.1, 4.2, 7.4_
 
-  - [ ] 11.2 Create main entry point for service definition installation
+  - [x] 11.2 Create main entry point for service definition installation
     - Load configuration, instantiate ServiceDefinitionInstaller
     - Support both REST and file-based installation via CLI flag
     - _Requirements: 5.4, 5.5, 7.4_
 
-- [ ] 12. Final checkpoint — Ensure all tests pass
+- [x] 12. Final checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

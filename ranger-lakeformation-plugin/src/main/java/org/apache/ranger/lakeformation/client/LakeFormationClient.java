@@ -15,9 +15,13 @@ import software.amazon.awssdk.services.lakeformation.model.Resource;
 import software.amazon.awssdk.services.lakeformation.model.DatabaseResource;
 import software.amazon.awssdk.services.lakeformation.model.TableResource;
 import software.amazon.awssdk.services.lakeformation.model.TableWithColumnsResource;
+import software.amazon.awssdk.services.lakeformation.model.DataLocationResource;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -128,6 +132,139 @@ public class LakeFormationClient {
     }
 
     /**
+     * Apply a batch of operations atomically per policy.
+     * Operations are grouped by source policy ID and applied sequentially.
+     * If any operation for a policy fails after retries, all previously applied
+     * operations for that policy are rolled back. Failed operations are written
+     * to the dead-letter log.
+     *
+     * @param operations  the list of LF permission operations to apply
+     * @param deadLetterLogger logger for failed operations (may be null to skip dead-letter logging)
+     * @return BatchResult summarizing successes and failures
+     */
+    public BatchResult applyBatch(List<LFPermissionOperation> operations, DeadLetterLogger deadLetterLogger) {
+        // Group operations by source policy ID, preserving insertion order
+        Map<String, List<LFPermissionOperation>> byPolicy = new LinkedHashMap<>();
+        for (LFPermissionOperation op : operations) {
+            String policyId = op.getSourcePolicyId() != null ? op.getSourcePolicyId() : "__unknown__";
+            if (!byPolicy.containsKey(policyId)) {
+                byPolicy.put(policyId, new ArrayList<LFPermissionOperation>());
+            }
+            byPolicy.get(policyId).add(op);
+        }
+
+        List<String> succeededPolicies = new ArrayList<>();
+        List<String> failedPolicies = new ArrayList<>();
+        int totalOps = operations.size();
+        int appliedOps = 0;
+        int rolledBackOps = 0;
+
+        for (Map.Entry<String, List<LFPermissionOperation>> entry : byPolicy.entrySet()) {
+            String policyId = entry.getKey();
+            List<LFPermissionOperation> policyOps = entry.getValue();
+            List<LFPermissionOperation> appliedForPolicy = new ArrayList<>();
+            boolean policyFailed = false;
+            String failureError = null;
+
+            for (LFPermissionOperation op : policyOps) {
+                try {
+                    applyOperation(op);
+                    appliedForPolicy.add(op);
+                } catch (LakeFormationClientException e) {
+                    policyFailed = true;
+                    failureError = e.getMessage();
+                    LOG.error("Operation failed for policyId={}, triggering rollback of {} applied operations: {}",
+                            policyId, appliedForPolicy.size(), e.getMessage());
+
+                    // Write the failed operation to dead-letter log
+                    if (deadLetterLogger != null) {
+                        deadLetterLogger.logFailedOperation(op, e.getMessage(), retryConfig.getMaxRetries());
+                    }
+                    break;
+                }
+            }
+
+            if (policyFailed) {
+                // Rollback all previously applied operations for this policy
+                int rolledBack = rollbackOperations(appliedForPolicy, policyId);
+                rolledBackOps += rolledBack;
+                failedPolicies.add(policyId);
+
+                // Also log remaining unapplied operations to dead-letter if they exist
+                if (deadLetterLogger != null) {
+                    int failedIdx = appliedForPolicy.size() + 1; // +1 for the one that failed
+                    for (int i = failedIdx; i < policyOps.size(); i++) {
+                        deadLetterLogger.logFailedOperation(policyOps.get(i),
+                                "Skipped due to earlier failure in policy batch: " + failureError, 0);
+                    }
+                }
+            } else {
+                appliedOps += appliedForPolicy.size();
+                succeededPolicies.add(policyId);
+            }
+        }
+
+        BatchResult result = new BatchResult(succeededPolicies, failedPolicies, totalOps, appliedOps, rolledBackOps);
+        LOG.info("Batch application complete: {}", result);
+        return result;
+    }
+
+    /**
+     * Apply a single operation (grant or revoke) using the appropriate method.
+     */
+    private void applyOperation(LFPermissionOperation op) throws LakeFormationClientException {
+        if (op.getOperationType() == LFPermissionOperation.OperationType.GRANT) {
+            grantPermission(op);
+        } else {
+            revokePermission(op);
+        }
+    }
+
+    /**
+     * Rollback previously applied operations by reversing them.
+     * Grants are reversed with revokes, and revokes are reversed with grants.
+     * Rollback failures are logged but do not propagate.
+     *
+     * @return the number of operations successfully rolled back
+     */
+    private int rollbackOperations(List<LFPermissionOperation> appliedOps, String policyId) {
+        int rolledBack = 0;
+        // Reverse in opposite order of application
+        for (int i = appliedOps.size() - 1; i >= 0; i--) {
+            LFPermissionOperation original = appliedOps.get(i);
+            try {
+                if (original.getOperationType() == LFPermissionOperation.OperationType.GRANT) {
+                    // Reverse a grant by revoking
+                    LFPermissionOperation reversal = new LFPermissionOperation(
+                            LFPermissionOperation.OperationType.REVOKE,
+                            original.getSourcePolicyId(),
+                            original.getPrincipalArn(),
+                            original.getResource(),
+                            original.getPermissions(),
+                            original.isGrantable());
+                    revokePermission(reversal);
+                } else {
+                    // Reverse a revoke by granting
+                    LFPermissionOperation reversal = new LFPermissionOperation(
+                            LFPermissionOperation.OperationType.GRANT,
+                            original.getSourcePolicyId(),
+                            original.getPrincipalArn(),
+                            original.getResource(),
+                            original.getPermissions(),
+                            original.isGrantable());
+                    grantPermission(reversal);
+                }
+                rolledBack++;
+            } catch (LakeFormationClientException e) {
+                LOG.error("Rollback failed for policyId={}, operation={}: {}",
+                        policyId, original, e.getMessage());
+            }
+        }
+        LOG.info("Rolled back {}/{} operations for policyId={}", rolledBack, appliedOps.size(), policyId);
+        return rolledBack;
+    }
+
+    /**
      * Execute an operation with retry logic for ConcurrentModificationException.
      * Throttling is handled by the AWS SDK's built-in retry policy.
      */
@@ -170,7 +307,13 @@ public class LakeFormationClient {
     Resource buildResource(LFResource lfResource) {
         Resource.Builder builder = Resource.builder();
 
-        if (lfResource.getTableName() == null) {
+        if (lfResource.getDataLocationPath() != null) {
+            // Data location resource (S3 path)
+            builder.dataLocation(DataLocationResource.builder()
+                    .catalogId(lfResource.getCatalogId())
+                    .resourceArn(lfResource.getDataLocationPath())
+                    .build());
+        } else if (lfResource.getTableName() == null) {
             // Database-level resource
             builder.database(DatabaseResource.builder()
                     .catalogId(lfResource.getCatalogId())
