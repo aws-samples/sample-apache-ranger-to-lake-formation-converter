@@ -1,0 +1,52 @@
+version: "3.8"
+
+services:
+  ranger-db:
+    image: apache/ranger-db:${RANGER_VERSION:-2.4.0}
+    environment:
+      POSTGRES_PASSWORD: "rangerR0cks!"
+      RANGER_DB_USER: rangeradmin
+      RANGER_DB_PASSWORD: "rangerR0cks!"
+    networks:
+      - rangernw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rangeradmin"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  ranger-solr:
+    image: apache/ranger-solr:${RANGER_VERSION:-2.4.0}
+    ports:
+      - "8983:8983"
+    networks:
+      - rangernw
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8983/solr/admin/cores?action=STATUS || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  ranger-admin:
+    image: apache/ranger:${RANGER_VERSION:-2.4.0}
+    ports:
+      - "6080:6080"
+    depends_on:
+      ranger-db:
+        condition: service_healthy
+      ranger-solr:
+        condition: service_healthy
+    networks:
+      - rangernw
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6080/login.jsp || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+networks:
+  rangernw:
+    driver: bridge

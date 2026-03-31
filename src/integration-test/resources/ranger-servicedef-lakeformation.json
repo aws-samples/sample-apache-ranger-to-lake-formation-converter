@@ -1,0 +1,74 @@
+{
+    "name": "lakeformation",
+    "displayName": "AWS Lake Formation",
+    "implClass": "org.apache.ranger.lakeformation.service.LakeFormationResourceLookupService",
+    "label": "Lake Formation",
+    "description": "AWS Lake Formation Permission Management",
+    "resources": [
+        {
+            "itemId": 1,
+            "name": "database",
+            "type": "string",
+            "level": 10,
+            "mandatory": true,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "label": "Database",
+            "description": "Glue Database"
+        },
+        {
+            "itemId": 2,
+            "name": "table",
+            "type": "string",
+            "level": 20,
+            "mandatory": false,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "parent": "database",
+            "label": "Table",
+            "description": "Table within a database"
+        },
+        {
+            "itemId": 3,
+            "name": "column",
+            "type": "string",
+            "level": 30,
+            "mandatory": false,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "parent": "table",
+            "label": "Column",
+            "description": "Column within a table."
+        },
+        {
+            "itemId": 4,
+            "name": "datalocation",
+            "type": "string",
+            "level": 10,
+            "mandatory": false,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "label": "Data Location",
+            "parent": "",
+            "description": "Permissions to create database or table at a particular S3 Location."
+        }
+    ],
+    "accessTypes": [
+        {"itemId": 1, "name": "select", "label": "Select"},
+        {"itemId": 2, "name": "insert", "label": "Insert"},
+        {"itemId": 3, "name": "delete", "label": "Delete"},
+        {"itemId": 4, "name": "describe", "label": "Describe"},
+        {"itemId": 5, "name": "alter", "label": "Alter"},
+        {"itemId": 6, "name": "drop", "label": "Drop"},
+        {"itemId": 7, "name": "create_database", "label": "Create Database"},
+        {"itemId": 8, "name": "create_table", "label": "Create Table"},
+        {"itemId": 9, "name": "data_location_access", "label": "Data Location"}
+    ],
+    "configs": [
+        {"itemId": 1, "name": "aws.region", "type": "string", "mandatory": true, "label": "AWS Region"},
+        {"itemId": 2, "name": "aws.catalog.id", "type": "string", "mandatory": true, "label": "Glue Catalog ID"},
+        {"itemId": 3, "name": "aws.access.key", "type": "string", "mandatory": false, "label": "AWS Access Key"},
+        {"itemId": 4, "name": "aws.secret.key", "type": "password", "mandatory": false, "label": "AWS Secret Key"},
+        {"itemId": 5, "name": "aws.role.arn", "type": "string", "mandatory": false, "label": "IAM Role ARN"}
+    ]
+}
