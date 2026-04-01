@@ -2,7 +2,7 @@
 
 ## Overview
 
-This plan implements the integration test infrastructure for the Ranger Lake Formation Sync Plugin. It creates Docker Compose definitions, lifecycle scripts, Maven integration-test profile, Java integration tests, CI workflow, EKS/EC2 deployment options, and documentation. Each task builds incrementally so that the Ranger stack can be validated at each step.
+This plan implements the integration test infrastructure for the Ranger Lake Formation Sync Plugin. It creates Docker Compose definitions, lifecycle scripts, Maven integration-test profile, Java integration tests, service definition installation, and documentation. CI/CD, EKS Fargate, and EC2 deployment are deferred to future phases. Each task builds incrementally so that the Ranger stack can be validated at each step.
 
 ## Tasks
 
@@ -87,43 +87,15 @@ This plan implements the integration test infrastructure for the Ranger Lake For
 - [x] 7. Checkpoint - Verify integration tests compile
   - Ensure integration test classes compile under the `integration-test` profile and unit/property tests pass. Ask the user if questions arise.
 
-- [x] 8. Create CI pipeline workflow
-  - [x] 8.1 Create GitHub Actions workflow file
-    - Create `.github/workflows/integration-tests.yml`
-    - Job `integration-test` on `ubuntu-latest`
-    - Steps: checkout, setup-java (temurin 8), `mvn clean package -DskipTests`, run `start-ranger.sh`, `mvn verify -Pintegration-test`, run `stop-ranger.sh` with `if: always()`
-    - Add Docker availability check — skip integration tests with warning if Docker is not available
-    - _Requirements: 7.1, 7.2, 7.3, 7.4_
+- [x] 8. Install Lake Formation service definition into Ranger
+  - [x] 8.1 Add service definition installation to the integration test lifecycle
+    - Update `run-integration-tests.sh` to install the Lake Formation service definition into Ranger Admin after the stack is healthy and before running integration tests
+    - Use `curl` to POST `conf/ranger-servicedef-lakeformation.json` to `http://localhost:6080/service/public/v2/api/servicedef` with Basic auth (`admin`/`rangerR0cks!`)
+    - Handle the case where the servicedef already exists (HTTP 409) by performing a PUT update instead
+    - Log success/failure of the installation
+    - _Requirements: 6.2, 6.3, 6.4_
 
-- [x] 9. Create EKS Fargate deployment manifests
-  - [x] 9.1 Create Kubernetes manifests
-    - Create `integration-test/k8s/namespace.yml` for `ranger-integration` namespace
-    - Create `integration-test/k8s/configmap.yml` with shared config (DB credentials, version tag)
-    - Create `integration-test/k8s/ranger-db.yml` with Deployment + Service for PostgreSQL
-    - Create `integration-test/k8s/ranger-solr.yml` with Deployment + Service for Solr
-    - Create `integration-test/k8s/ranger-admin.yml` with Deployment + Service (LoadBalancer, port 6080), liveness/readiness probes
-    - Use configurable image tag matching `RANGER_VERSION`
-    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.6_
-
-  - [x] 9.2 Create EKS Fargate README
-    - Create `integration-test/k8s/README.md` documenting prerequisites (EKS cluster, Fargate profile, kubectl) and deployment commands
-    - _Requirements: 8.5_
-
-- [x] 10. Create EC2 deployment scripts and documentation
-  - [x] 10.1 Create EC2 setup script
-    - Create `integration-test/ec2/setup-ec2.sh` to install Docker and Docker Compose on Amazon Linux 2 / Ubuntu
-    - _Requirements: 9.1_
-
-  - [x] 10.2 Create EC2 deploy script
-    - Create `integration-test/ec2/deploy-to-ec2.sh` to SCP compose file and scripts, SSH to start the stack
-    - Reuse the same `docker-compose.yml` from `integration-test/docker/`
-    - _Requirements: 9.2, 9.3_
-
-  - [x] 10.3 Create EC2 README
-    - Create `integration-test/ec2/README.md` documenting instance type (t3.medium minimum), security group rules (6080, 8983), IAM permissions, and data persistence caveats
-    - _Requirements: 9.4, 9.5_
-
-- [x] 11. Create documentation
+- [x] 9. Create documentation
   - [x] 11.1 Create deployment strategy comparison matrix
     - Create `integration-test/DEPLOYMENT-STRATEGIES.md` with comparison matrix covering: Docker Compose, EKS Fargate, EC2, Testcontainers
     - Assess dimensions: setup complexity, CI/CD compatibility, cost, startup time, teardown reliability, local dev experience

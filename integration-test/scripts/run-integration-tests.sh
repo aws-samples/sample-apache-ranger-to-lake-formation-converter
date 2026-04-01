@@ -66,6 +66,11 @@ trap cleanup EXIT
 echo "=== Provisioning Ranger stack ==="
 "${SCRIPT_DIR}/start-ranger.sh"
 
+# ── Install Lake Formation service definition ──────────────────────────────
+echo ""
+echo "=== Installing Lake Formation service definition ==="
+"${SCRIPT_DIR}/install-servicedef.sh"
+
 # ── Run integration tests ──────────────────────────────────────────────────
 echo ""
 echo "=== Running integration tests ==="
