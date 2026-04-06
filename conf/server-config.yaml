@@ -1,0 +1,106 @@
+# =============================================================================
+# Ranger-to-Lake Formation Conversion Server Configuration
+# =============================================================================
+#
+# This file configures the conversion server that continuously syncs
+# Apache Ranger policies to AWS Lake Formation permissions.
+#
+# All fields shown below with their defaults. Required fields are marked.
+#
+# Environment variable overrides are supported for the server section
+# using the SERVER_ prefix (e.g., SERVER_LOG_LEVEL=DEBUG).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Ranger Admin Connection (required)
+# -----------------------------------------------------------------------------
+rangerConfig:
+  # URL of the Ranger Admin REST API (required)
+  rangerAdminUrl: "http://ranger-admin:6080"
+
+  # Basic auth credentials for Ranger Admin
+  username: "admin"
+  password: "admin_password"
+
+  # Kerberos authentication (optional, alternative to username/password)
+  # kerberosKeytab: "/etc/security/keytabs/ranger.keytab"
+  # kerberosPrincipal: "ranger/host@EXAMPLE.COM"
+
+  # Retry settings for Ranger Admin API calls
+  # maxRetries: 3          # default: 3
+  # retryBackoffMs: 1000   # default: 1000
+
+# -----------------------------------------------------------------------------
+# AWS Configuration (required)
+# -----------------------------------------------------------------------------
+awsConfig:
+  # AWS region for Lake Formation and Glue Data Catalog (required)
+  region: "us-east-1"
+
+  # AWS account ID / Glue Data Catalog ID (required)
+  catalogId: "123456789012"
+
+  # IAM role ARN to assume for Lake Formation operations (recommended)
+  roleArn: "arn:aws:iam::123456789012:role/RangerLFSyncRole"
+
+  # Static credentials (optional, not recommended for production)
+  # Prefer IAM role assumption via roleArn or instance/pod credentials.
+  # accessKey: "AKIAIOSFODNN7EXAMPLE"
+  # secretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+# -----------------------------------------------------------------------------
+# Principal Mapping
+# Maps Ranger users, groups, and roles to AWS IAM principal ARNs.
+# At least one mapping should be configured for policies to be applied.
+# -----------------------------------------------------------------------------
+principalMapping:
+  # Map Ranger users to IAM user/role ARNs
+  userMappings:
+    "ranger_user1": "arn:aws:iam::123456789012:user/lf-user1"
+    "ranger_user2": "arn:aws:iam::123456789012:role/lf-role-user2"
+
+  # Map Ranger groups to IAM role ARNs
+  groupMappings:
+    "data_engineers": "arn:aws:iam::123456789012:role/DataEngineersRole"
+    "data_analysts": "arn:aws:iam::123456789012:role/DataAnalystsRole"
+
+  # Map Ranger roles to IAM role ARNs
+  roleMappings:
+    "admin_role": "arn:aws:iam::123456789012:role/LFAdminRole"
+
+# -----------------------------------------------------------------------------
+# Sync Settings
+# Controls the sync loop behavior and Lake Formation retry logic.
+# -----------------------------------------------------------------------------
+
+# Interval between sync cycles in milliseconds (default: 30000 = 30 seconds)
+policyRefreshIntervalMs: 30000
+
+# Maximum number of retries for Lake Formation API calls (default: 5)
+maxLfRetries: 5
+
+# Backoff between Lake Formation retries in milliseconds (default: 2000)
+lfRetryBackoffMs: 2000
+
+# Path for dead-letter log file (failed operations are logged here)
+deadLetterLogPath: "/var/log/ranger/lakeformation/dead-letter.jsonl"
+
+# -----------------------------------------------------------------------------
+# Server Settings
+# Process-level configuration for the conversion server container.
+# All fields support environment variable overrides with SERVER_ prefix.
+# -----------------------------------------------------------------------------
+server:
+  # Maximum seconds to wait for the current sync cycle to finish
+  # during graceful shutdown (SIGTERM). If exceeded, the process
+  # exits with code 1.
+  # Env override: SERVER_SHUTDOWN_TIMEOUT_SECONDS
+  shutdownTimeoutSeconds: 30    # default: 30
+
+  # Application log level. One of: TRACE, DEBUG, INFO, WARN, ERROR.
+  # Env override: SERVER_LOG_LEVEL
+  logLevel: INFO                # default: INFO
+
+  # CloudWatch namespace for published metrics.
+  # Env override: SERVER_METRICS_NAMESPACE
+  metricsNamespace: RangerLFSync  # default: RangerLFSync

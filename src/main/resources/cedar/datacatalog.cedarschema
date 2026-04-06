@@ -1,0 +1,45 @@
+namespace DataCatalog {
+    entity Principal;
+
+    entity Catalog {
+        // Top-level resource — represents a Glue Data Catalog (account-level or named catalog)
+    };
+
+    entity Database in [Catalog];
+
+    entity Table in [Database];
+
+    entity Column in [Table];
+
+    entity DataLocation;
+
+    action "SELECT"
+        appliesTo { principal: [Principal], resource: [Table, Column] };
+
+    action "INSERT"
+        appliesTo { principal: [Principal], resource: [Table] };
+
+    action "UPDATE"
+        appliesTo { principal: [Principal], resource: [Table] };
+
+    action "DELETE"
+        appliesTo { principal: [Principal], resource: [Table] };
+
+    action "DESCRIBE"
+        appliesTo { principal: [Principal], resource: [Catalog, Database, Table] };
+
+    action "ALTER"
+        appliesTo { principal: [Principal], resource: [Database, Table] };
+
+    action "DROP"
+        appliesTo { principal: [Principal], resource: [Database, Table] };
+
+    action "CREATE_DATABASE"
+        appliesTo { principal: [Principal], resource: [Catalog] };
+
+    action "CREATE_TABLE"
+        appliesTo { principal: [Principal], resource: [Database] };
+
+    action "DATA_LOCATION_ACCESS"
+        appliesTo { principal: [Principal], resource: [DataLocation] };
+}

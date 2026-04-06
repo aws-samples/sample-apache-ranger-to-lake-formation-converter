@@ -1,3 +1,6 @@
+
+> This is a work in progress and has a lot of work left. Please contact hocanint@amazon.com if you wish to contribute.
+
 # Ranger Lake Formation Sync Plugin
 
 A Java utility that bridges Apache Ranger access control policies to AWS Lake Formation permissions. It converts Ranger's policy model (allow/deny rules on users, groups, roles) into Lake Formation's grant/revoke permission model, enabling organizations to manage Lake Formation permissions through Ranger Admin.
@@ -16,7 +19,7 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 
 ## Requirements
 
-- Java 8 (JDK 1.8+)
+- Java 17 (JDK 17+)
 - Apache Maven 3.6+
 - Apache Ranger 2.4+ (compatible with 2.4, 2.6, 2.7, 2.8)
 - AWS account with Lake Formation and Glue Data Catalog access
@@ -35,12 +38,40 @@ This produces:
 
 ## Running Tests
 
+### Unit Tests
+
 ```bash
-cd ranger-lakeformation-plugin
 mvn test
 ```
 
 Tests include JUnit 5 unit tests and jqwik property-based tests (minimum 100 iterations per property).
+
+### Integration Tests
+
+Integration tests run the full Ranger → Cedar → Lake Formation pipeline against a live Docker Ranger Admin instance using a dry-run client that writes LF operations to JSON files instead of calling AWS APIs.
+
+```bash
+# Full lifecycle: start Ranger, run tests, tear down
+./integration-test/scripts/run-integration-tests.sh
+
+# Or manually:
+./integration-test/scripts/start-ranger.sh
+mvn verify -Pintegration-test
+./integration-test/scripts/stop-ranger.sh
+```
+
+Integration tests produce human-readable JSON audit logs in `logs/it-audit-<TestClass>.json` showing each Ranger input action and the resulting Lake Formation API calls. See [DESIGN.md](DESIGN.md) for details.
+
+### Dry-Run Mode
+
+The sync service supports a dry-run mode that serializes LF operations to JSON files instead of calling AWS APIs. Enable via environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DRY_RUN_ENABLED` | Set to `true` to enable dry-run mode | disabled |
+| `DRY_RUN_OUTPUT_DIR` | Directory for JSON output files | `./dry-run-output` |
+
+Each sync cycle writes a `dry-run-NNN.json` file containing the timestamp, sequence number, and the list of LF permission operations that would have been applied.
 
 ## Installation
 
