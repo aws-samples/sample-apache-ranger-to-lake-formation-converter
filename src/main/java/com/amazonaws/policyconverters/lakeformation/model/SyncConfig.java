@@ -25,6 +25,22 @@ public class SyncConfig {
     private final int maxLfRetries;
     private final long lfRetryBackoffMs;
     private final String deadLetterLogPath;
+    private final String checkpointPath;
+
+    /**
+     * Backward-compatible constructor without checkpointPath.
+     */
+    public SyncConfig(
+            RangerConnectionConfig rangerConfig,
+            AwsConfig awsConfig,
+            PrincipalMappingConfig principalMapping,
+            Long policyRefreshIntervalMs,
+            Integer maxLfRetries,
+            Long lfRetryBackoffMs,
+            String deadLetterLogPath) {
+        this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
+                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, null);
+    }
 
     @JsonCreator
     public SyncConfig(
@@ -34,7 +50,8 @@ public class SyncConfig {
             @JsonProperty("policyRefreshIntervalMs") Long policyRefreshIntervalMs,
             @JsonProperty("maxLfRetries") Integer maxLfRetries,
             @JsonProperty("lfRetryBackoffMs") Long lfRetryBackoffMs,
-            @JsonProperty("deadLetterLogPath") String deadLetterLogPath) {
+            @JsonProperty("deadLetterLogPath") String deadLetterLogPath,
+            @JsonProperty("checkpointPath") String checkpointPath) {
         this.rangerConfig = rangerConfig;
         this.awsConfig = awsConfig;
         this.principalMapping = principalMapping;
@@ -45,6 +62,7 @@ public class SyncConfig {
         this.lfRetryBackoffMs = lfRetryBackoffMs != null
                 ? lfRetryBackoffMs : DEFAULT_LF_RETRY_BACKOFF_MS;
         this.deadLetterLogPath = deadLetterLogPath;
+        this.checkpointPath = checkpointPath;
     }
 
     public RangerConnectionConfig getRangerConfig() {
@@ -75,6 +93,10 @@ public class SyncConfig {
         return deadLetterLogPath;
     }
 
+    public String getCheckpointPath() {
+        return checkpointPath;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -86,13 +108,15 @@ public class SyncConfig {
                 && Objects.equals(rangerConfig, that.rangerConfig)
                 && Objects.equals(awsConfig, that.awsConfig)
                 && Objects.equals(principalMapping, that.principalMapping)
-                && Objects.equals(deadLetterLogPath, that.deadLetterLogPath);
+                && Objects.equals(deadLetterLogPath, that.deadLetterLogPath)
+                && Objects.equals(checkpointPath, that.checkpointPath);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(rangerConfig, awsConfig, principalMapping,
-                policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs, deadLetterLogPath);
+                policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs,
+                deadLetterLogPath, checkpointPath);
     }
 
     @Override
@@ -105,6 +129,7 @@ public class SyncConfig {
                 ", maxLfRetries=" + maxLfRetries +
                 ", lfRetryBackoffMs=" + lfRetryBackoffMs +
                 ", deadLetterLogPath='" + deadLetterLogPath + '\'' +
+                ", checkpointPath='" + checkpointPath + '\'' +
                 '}';
     }
 }

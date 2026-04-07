@@ -85,6 +85,9 @@ lfRetryBackoffMs: 2000
 # Path for dead-letter log file (failed operations are logged here)
 deadLetterLogPath: "/var/log/ranger/lakeformation/dead-letter.jsonl"
 
+# Path for sync checkpoint file (persists Cedar policy state across restarts)
+checkpointPath: "/var/lib/ranger/lakeformation/sync-checkpoint.json"
+
 # -----------------------------------------------------------------------------
 # Server Settings
 # Process-level configuration for the conversion server container.

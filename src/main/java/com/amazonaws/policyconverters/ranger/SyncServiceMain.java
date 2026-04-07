@@ -17,6 +17,7 @@ import com.amazonaws.policyconverters.lakeformation.model.AwsConfig;
 import com.amazonaws.policyconverters.lakeformation.model.RetryConfig;
 import com.amazonaws.policyconverters.lakeformation.model.SyncConfig;
 import com.amazonaws.policyconverters.lakeformation.reporter.GapReporter;
+import com.amazonaws.policyconverters.ranger.sync.CheckpointStore;
 import com.amazonaws.policyconverters.ranger.sync.LakeFormationPlugin;
 import com.amazonaws.policyconverters.ranger.sync.SyncService;
 import org.slf4j.Logger;
@@ -184,9 +185,14 @@ public class SyncServiceMain {
 
         // Create plugin and sync service
         LakeFormationPlugin plugin = new LakeFormationPlugin();
+        String checkpointPath = config.getCheckpointPath() != null
+                ? config.getCheckpointPath()
+                : "./checkpoint/sync-checkpoint.json";
+        CheckpointStore checkpointStore = new CheckpointStore(
+                Path.of(checkpointPath), new ObjectMapper());
         SyncService syncService = new SyncService(
                 plugin, rangerToCedarConverter, cedarToLFConverter,
-                lakeFormationClient, gapReporter, deadLetterLogger);
+                lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore);
 
         // Register shutdown hook for graceful termination
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

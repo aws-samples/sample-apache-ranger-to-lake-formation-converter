@@ -46,6 +46,7 @@ public class ConfigLoader {
     static final String ENV_MAX_LF_RETRIES = "MAX_LF_RETRIES";
     static final String ENV_LF_RETRY_BACKOFF_MS = "LF_RETRY_BACKOFF_MS";
     static final String ENV_DEAD_LETTER_LOG_PATH = "DEAD_LETTER_LOG_PATH";
+    static final String ENV_CHECKPOINT_PATH = "CHECKPOINT_PATH";
 
     private final EnvironmentProvider environmentProvider;
 
@@ -269,10 +270,12 @@ public class ConfigLoader {
         Integer maxLfRetries = envOrDefaultInt(ENV_MAX_LF_RETRIES, config.getMaxLfRetries());
         Long lfRetryBackoffMs = envOrDefaultLong(ENV_LF_RETRY_BACKOFF_MS, config.getLfRetryBackoffMs());
         String deadLetterLogPath = envOrDefault(ENV_DEAD_LETTER_LOG_PATH, config.getDeadLetterLogPath());
+        String checkpointPath = envOrDefault(ENV_CHECKPOINT_PATH, config.getCheckpointPath());
 
         return new SyncConfig(
                 newRangerConfig, newAwsConfig, config.getPrincipalMapping(),
-                policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs, deadLetterLogPath
+                policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs, deadLetterLogPath,
+                checkpointPath
         );
     }
 

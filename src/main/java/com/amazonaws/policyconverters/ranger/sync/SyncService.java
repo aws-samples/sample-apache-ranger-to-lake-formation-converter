@@ -56,12 +56,24 @@ public class SyncService implements LakeFormationPlugin.PolicyUpdateListener {
     private final LakeFormationClient lakeFormationClient;
     private final GapReporter gapReporter;
     private final DeadLetterLogger deadLetterLogger;
+    private final CheckpointStore checkpointStore;
 
     /**
      * The previous set of LF permission operations derived from the last
-     * policy snapshot. Empty on first startup for implicit bulk sync.
+     * Cedar policy snapshot. Empty on first startup for implicit bulk sync.
+     * On restart, re-derived from the persisted Cedar checkpoint.
      */
     private volatile List<LFPermissionOperation> previousOperations = Collections.emptyList();
+
+    /**
+     * The last known Cedar policy text, persisted as the source of truth.
+     */
+    private volatile String lastCedarPolicyText = "";
+
+    /**
+     * The last known Ranger policy version, used for checkpoint persistence.
+     */
+    private volatile long lastPolicyVersion = -1L;
 
     /**
      * The last known set of Ranger policies received from Ranger Admin.
@@ -79,12 +91,25 @@ public class SyncService implements LakeFormationPlugin.PolicyUpdateListener {
             LakeFormationClient lakeFormationClient,
             GapReporter gapReporter,
             DeadLetterLogger deadLetterLogger) {
+        this(plugin, rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger, null);
+    }
+
+    public SyncService(
+            LakeFormationPlugin plugin,
+            RangerToCedarConverter rangerToCedarConverter,
+            CedarToLFConverter cedarToLFConverter,
+            LakeFormationClient lakeFormationClient,
+            GapReporter gapReporter,
+            DeadLetterLogger deadLetterLogger,
+            CheckpointStore checkpointStore) {
         this.plugin = plugin;
         this.rangerToCedarConverter = rangerToCedarConverter;
         this.cedarToLFConverter = cedarToLFConverter;
         this.lakeFormationClient = lakeFormationClient;
         this.gapReporter = gapReporter;
         this.deadLetterLogger = deadLetterLogger;
+        this.checkpointStore = checkpointStore;
     }
 
     /**
@@ -100,6 +125,34 @@ public class SyncService implements LakeFormationPlugin.PolicyUpdateListener {
         }
         LOG.info("Starting SyncService with config: policyRefreshIntervalMs={}, maxLfRetries={}",
                 config.getPolicyRefreshIntervalMs(), config.getMaxLfRetries());
+
+        // Restore previous state from checkpoint if available
+        if (checkpointStore != null) {
+            checkpointStore.load().ifPresent(checkpoint -> {
+                String cedarText = checkpoint.getCedarPolicyText();
+                if (cedarText != null && !cedarText.trim().isEmpty()) {
+                    try {
+                        CedarPolicySet restoredPolicySet = CedarPolicySet.fromCedarString(cedarText);
+                        previousOperations = cedarToLFConverter.convert(restoredPolicySet);
+                        lastCedarPolicyText = cedarText;
+                        lastPolicyVersion = checkpoint.getPolicyVersion();
+                        LOG.info("Restored checkpoint: policyVersion={}, cedarPolicies={} permit(s)/{} forbid(s), "
+                                + "derived {} LF operations",
+                                checkpoint.getPolicyVersion(),
+                                restoredPolicySet.getPermitCount(),
+                                restoredPolicySet.getForbidCount(),
+                                previousOperations.size());
+                    } catch (Exception e) {
+                        LOG.warn("Failed to restore Cedar policies from checkpoint, "
+                                + "starting from empty state: {}", e.getMessage());
+                    }
+                } else {
+                    lastPolicyVersion = checkpoint.getPolicyVersion();
+                    LOG.info("Restored checkpoint with empty Cedar policies, policyVersion={}",
+                            checkpoint.getPolicyVersion());
+                }
+            });
+        }
 
         plugin.setPolicyUpdateListener(this);
         running = true;
@@ -205,6 +258,13 @@ public class SyncService implements LakeFormationPlugin.PolicyUpdateListener {
 
         // Update the previous snapshot to the current state
         previousOperations = currentOperations;
+        lastCedarPolicyText = cedarPolicySet.toCedarString();
+        lastPolicyVersion = policyVersion;
+
+        // Persist Cedar policy checkpoint for restart resilience
+        if (checkpointStore != null) {
+            checkpointStore.save(policyVersion, lastCedarPolicyText);
+        }
     }
 
     /**
