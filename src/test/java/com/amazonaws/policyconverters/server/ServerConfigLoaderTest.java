@@ -1,5 +1,6 @@
 package com.amazonaws.policyconverters.server;
 
+import com.amazonaws.policyconverters.lakeformation.model.ReverseSyncConfig;
 import com.amazonaws.policyconverters.lakeformation.model.SyncConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -262,6 +263,181 @@ class ServerConfigLoaderTest {
 
         assertEquals("ERROR", result.getServerConfig().getLogLevel());
         assertEquals("us-west-2", result.getSyncConfig().getAwsConfig().getRegion());
+    }
+
+    // --- Reverse-sync configuration loading tests (Task 10.4) ---
+
+    @Test
+    void load_reverseSyncSection_deserializedIntoReverseSyncConfig() throws IOException {
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n" +
+                "  catalogId: '123456789012'\n" +
+                "reverseSync:\n" +
+                "  enabled: true\n" +
+                "  reportOnly: true\n" +
+                "  dryRun: false\n" +
+                "  periodicIntervalMs: 60000\n" +
+                "  catalogId: '999888777666'\n" +
+                "  exclusionFilter:\n" +
+                "    excludedPrincipals:\n" +
+                "      - 'arn:aws:iam::123456789012:role/LFAdmin'\n" +
+                "    excludedResourcePatterns:\n" +
+                "      - 'system_db/*'\n";
+
+        File yamlFile = writeYaml("config.yaml", yaml);
+
+        ServerConfigLoader.CompositeConfig result = loader.load(yamlFile.getAbsolutePath());
+
+        ReverseSyncConfig rsConfig = result.getReverseSyncConfig();
+        assertNotNull(rsConfig, "ReverseSyncConfig should not be null");
+        assertTrue(rsConfig.isEnabled());
+        assertTrue(rsConfig.isReportOnly());
+        assertFalse(rsConfig.isDryRun());
+        assertEquals(60000L, rsConfig.getPeriodicIntervalMs());
+        assertEquals("999888777666", rsConfig.getCatalogId());
+        assertNotNull(rsConfig.getFilter());
+        assertTrue(rsConfig.getFilter().getExcludedPrincipals().contains(
+                "arn:aws:iam::123456789012:role/LFAdmin"));
+        assertTrue(rsConfig.getFilter().getExcludedResourcePatterns().contains("system_db/*"));
+    }
+
+    @Test
+    void load_reverseSyncAbsent_returnsNullReverseSyncConfig() throws IOException {
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n" +
+                "  catalogId: '123456789012'\n";
+
+        File yamlFile = writeYaml("config.yaml", yaml);
+
+        ServerConfigLoader.CompositeConfig result = loader.load(yamlFile.getAbsolutePath());
+
+        assertNull(result.getReverseSyncConfig(),
+                "ReverseSyncConfig should be null when section is absent");
+    }
+
+    @Test
+    void load_reverseSyncCatalogIdDefaultsToAwsConfigCatalogId() throws IOException {
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n" +
+                "  catalogId: '123456789012'\n" +
+                "reverseSync:\n" +
+                "  enabled: true\n";
+
+        File yamlFile = writeYaml("config.yaml", yaml);
+
+        ServerConfigLoader.CompositeConfig result = loader.load(yamlFile.getAbsolutePath());
+
+        ReverseSyncConfig rsConfig = result.getReverseSyncConfig();
+        assertNotNull(rsConfig);
+        assertEquals("123456789012", rsConfig.getCatalogId(),
+                "catalogId should default to awsConfig.catalogId");
+    }
+
+    @Test
+    void load_reverseSyncExplicitCatalogIdNotOverridden() throws IOException {
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n" +
+                "  catalogId: '123456789012'\n" +
+                "reverseSync:\n" +
+                "  enabled: true\n" +
+                "  catalogId: '999888777666'\n";
+
+        File yamlFile = writeYaml("config.yaml", yaml);
+
+        ServerConfigLoader.CompositeConfig result = loader.load(yamlFile.getAbsolutePath());
+
+        ReverseSyncConfig rsConfig = result.getReverseSyncConfig();
+        assertNotNull(rsConfig);
+        assertEquals("999888777666", rsConfig.getCatalogId(),
+                "Explicit catalogId should not be overridden by awsConfig.catalogId");
+    }
+
+    @Test
+    void load_reverseSyncExclusionFilterMapsToPermissionFilter() throws IOException {
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n" +
+                "  catalogId: '123456789012'\n" +
+                "reverseSync:\n" +
+                "  enabled: true\n" +
+                "  exclusionFilter:\n" +
+                "    excludedPrincipals:\n" +
+                "      - 'arn:aws:iam::123456789012:role/Admin'\n" +
+                "      - 'arn:aws:iam::123456789012:role/Service'\n" +
+                "    excludedResourcePatterns:\n" +
+                "      - 'system_db/*'\n" +
+                "      - 'temp_*'\n";
+
+        File yamlFile = writeYaml("config.yaml", yaml);
+
+        ServerConfigLoader.CompositeConfig result = loader.load(yamlFile.getAbsolutePath());
+
+        ReverseSyncConfig rsConfig = result.getReverseSyncConfig();
+        assertNotNull(rsConfig);
+        assertNotNull(rsConfig.getFilter(), "Filter should be populated from exclusionFilter");
+        assertEquals(2, rsConfig.getFilter().getExcludedPrincipals().size());
+        assertTrue(rsConfig.getFilter().getExcludedPrincipals().contains(
+                "arn:aws:iam::123456789012:role/Admin"));
+        assertTrue(rsConfig.getFilter().getExcludedPrincipals().contains(
+                "arn:aws:iam::123456789012:role/Service"));
+        assertEquals(2, rsConfig.getFilter().getExcludedResourcePatterns().size());
+        assertTrue(rsConfig.getFilter().getExcludedResourcePatterns().contains("system_db/*"));
+        assertTrue(rsConfig.getFilter().getExcludedResourcePatterns().contains("temp_*"));
+    }
+
+    @Test
+    void load_reverseSyncDefaultValues_whenSectionPresentButEmpty() throws IOException {
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n" +
+                "  catalogId: '123456789012'\n" +
+                "reverseSync:\n" +
+                "  enabled: false\n";
+
+        File yamlFile = writeYaml("config.yaml", yaml);
+
+        ServerConfigLoader.CompositeConfig result = loader.load(yamlFile.getAbsolutePath());
+
+        ReverseSyncConfig rsConfig = result.getReverseSyncConfig();
+        assertNotNull(rsConfig);
+        assertFalse(rsConfig.isEnabled());
+        assertFalse(rsConfig.isReportOnly());
+        assertFalse(rsConfig.isDryRun());
+        assertEquals(0L, rsConfig.getPeriodicIntervalMs());
+        // catalogId defaults to awsConfig.catalogId
+        assertEquals("123456789012", rsConfig.getCatalogId());
+        assertNull(rsConfig.getFilter());
+    }
+
+    @Test
+    void load_reverseSyncPropertiesFile_returnsNullReverseSyncConfig() throws IOException {
+        String props =
+                "rangerConfig.rangerAdminUrl=http://ranger:6080\n" +
+                "awsConfig.region=us-east-1\n";
+
+        File propsFile = tempDir.resolve("config.properties").toFile();
+        writeFile(propsFile, props);
+
+        ServerConfigLoader.CompositeConfig result = loader.load(propsFile.getAbsolutePath());
+
+        assertNull(result.getReverseSyncConfig(),
+                "Properties files should not have reverse-sync config");
     }
 
     private File writeYaml(String filename, String content) throws IOException {

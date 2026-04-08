@@ -448,6 +448,23 @@ public class SyncService implements LakeFormationPlugin.PolicyUpdateListener {
     }
 
     /**
+     * Returns the last known Cedar policy set, reconstructed from the persisted Cedar text.
+     * Returns null if no Cedar policies have been processed yet.
+     */
+    public CedarPolicySet getLastCedarPolicySet() {
+        String cedarText = lastCedarPolicyText;
+        if (cedarText == null || cedarText.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return CedarPolicySet.fromCedarString(cedarText);
+        } catch (Exception e) {
+            LOG.warn("Failed to reconstruct CedarPolicySet from last known text: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Returns the last known Ranger policies (for testing connectivity resilience).
      */
     List<RangerPolicy> getLastKnownPolicies() {

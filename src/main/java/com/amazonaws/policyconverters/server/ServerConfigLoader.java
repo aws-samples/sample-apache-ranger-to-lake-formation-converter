@@ -1,5 +1,6 @@
 package com.amazonaws.policyconverters.server;
 
+import com.amazonaws.policyconverters.lakeformation.model.ReverseSyncConfig;
 import com.amazonaws.policyconverters.lakeformation.model.SyncConfig;
 import com.amazonaws.policyconverters.ranger.config.ConfigLoader;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -78,15 +79,30 @@ public class ServerConfigLoader {
             // Extract and remove the server node before delegating to ConfigLoader
             serverConfig = extractServerConfig(root);
 
-            // Write a sanitized YAML (without server section) to a temp file for ConfigLoader
+            // Extract and remove the reverseSync node before delegating to ConfigLoader
+            ReverseSyncConfig reverseSyncConfig = extractReverseSyncConfig(root);
+
+            // Write a sanitized YAML (without server/reverseSync sections) to a temp file for ConfigLoader
             File sanitizedFile = writeSanitizedYaml(root, filePath);
             try {
                 syncConfig = configLoader.load(sanitizedFile.getAbsolutePath());
             } finally {
                 sanitizedFile.delete();
             }
+
+            // Default catalogId to awsConfig.catalogId if not explicitly set
+            if (reverseSyncConfig != null && syncConfig.getAwsConfig() != null) {
+                reverseSyncConfig = defaultCatalogId(reverseSyncConfig, syncConfig.getAwsConfig().getCatalogId());
+            }
+
+            // Apply SERVER_* environment variable overrides
+            serverConfig = applyServerEnvironmentOverrides(serverConfig);
+
+            LOG.debug("Loaded server config: {}", serverConfig);
+            LOG.debug("Loaded reverse-sync config: {}", reverseSyncConfig);
+            return new CompositeConfig(syncConfig, serverConfig, reverseSyncConfig);
         } else {
-            // Properties files don't have a server section
+            // Properties files don't have a server or reverseSync section
             syncConfig = configLoader.load(filePath);
             serverConfig = new ServerConfig(null, null, null);
         }
@@ -95,7 +111,7 @@ public class ServerConfigLoader {
         serverConfig = applyServerEnvironmentOverrides(serverConfig);
 
         LOG.debug("Loaded server config: {}", serverConfig);
-        return new CompositeConfig(syncConfig, serverConfig);
+        return new CompositeConfig(syncConfig, serverConfig, null);
     }
 
     private boolean isYamlFile(String filePath) {
@@ -118,12 +134,51 @@ public class ServerConfigLoader {
     }
 
     /**
-     * Writes a YAML file without the "server" key so ConfigLoader can parse it
-     * without encountering an unknown property.
+     * Extracts the {@code reverseSync} section from the YAML root node.
+     * Returns null if the section is absent.
+     */
+    ReverseSyncConfig extractReverseSyncConfig(JsonNode root) {
+        JsonNode reverseSyncNode = root.get("reverseSync");
+        if (reverseSyncNode == null || reverseSyncNode.isMissingNode() || reverseSyncNode.isNull()) {
+            LOG.debug("No 'reverseSync' section found in config file; reverse-sync disabled");
+            return null;
+        }
+        try {
+            return yamlMapper.treeToValue(reverseSyncNode, ReverseSyncConfig.class);
+        } catch (Exception e) {
+            LOG.warn("Failed to parse 'reverseSync' section; reverse-sync disabled: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * If the ReverseSyncConfig has no catalogId set, default it to the given awsCatalogId.
+     */
+    static ReverseSyncConfig defaultCatalogId(ReverseSyncConfig config, String awsCatalogId) {
+        if (config == null) {
+            return null;
+        }
+        if (config.getCatalogId() != null && !config.getCatalogId().isEmpty()) {
+            return config;
+        }
+        return new ReverseSyncConfig(
+                config.isEnabled(),
+                awsCatalogId,
+                config.isReportOnly(),
+                config.isDryRun(),
+                config.getFilter(),
+                null,
+                config.getPeriodicIntervalMs());
+    }
+
+    /**
+     * Writes a YAML file without the "server" and "reverseSync" keys so ConfigLoader
+     * can parse it without encountering an unknown property.
      */
     private File writeSanitizedYaml(JsonNode root, String originalPath) throws IOException {
         if (root.isObject()) {
             ((ObjectNode) root).remove("server");
+            ((ObjectNode) root).remove("reverseSync");
         }
         String suffix = originalPath.toLowerCase().endsWith(".yml") ? ".yml" : ".yaml";
         File tempFile = Files.createTempFile("server-config-loader-", suffix).toFile();
@@ -163,15 +218,23 @@ public class ServerConfigLoader {
     }
 
     /**
-     * Composite configuration holding both the sync pipeline config and server process config.
+     * Composite configuration holding both the sync pipeline config, server process config,
+     * and optional reverse-sync config.
      */
     public static final class CompositeConfig {
         private final SyncConfig syncConfig;
         private final ServerConfig serverConfig;
+        private final ReverseSyncConfig reverseSyncConfig;
 
         public CompositeConfig(SyncConfig syncConfig, ServerConfig serverConfig) {
+            this(syncConfig, serverConfig, null);
+        }
+
+        public CompositeConfig(SyncConfig syncConfig, ServerConfig serverConfig,
+                               ReverseSyncConfig reverseSyncConfig) {
             this.syncConfig = Objects.requireNonNull(syncConfig, "syncConfig must not be null");
             this.serverConfig = Objects.requireNonNull(serverConfig, "serverConfig must not be null");
+            this.reverseSyncConfig = reverseSyncConfig;
         }
 
         public SyncConfig getSyncConfig() {
@@ -182,23 +245,30 @@ public class ServerConfigLoader {
             return serverConfig;
         }
 
+        public ReverseSyncConfig getReverseSyncConfig() {
+            return reverseSyncConfig;
+        }
+
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
             CompositeConfig that = (CompositeConfig) o;
             return Objects.equals(syncConfig, that.syncConfig)
-                    && Objects.equals(serverConfig, that.serverConfig);
+                    && Objects.equals(serverConfig, that.serverConfig)
+                    && Objects.equals(reverseSyncConfig, that.reverseSyncConfig);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(syncConfig, serverConfig);
+            return Objects.hash(syncConfig, serverConfig, reverseSyncConfig);
         }
 
         @Override
         public String toString() {
-            return "CompositeConfig{syncConfig=" + syncConfig + ", serverConfig=" + serverConfig + '}';
+            return "CompositeConfig{syncConfig=" + syncConfig
+                    + ", serverConfig=" + serverConfig
+                    + ", reverseSyncConfig=" + reverseSyncConfig + '}';
         }
     }
 }

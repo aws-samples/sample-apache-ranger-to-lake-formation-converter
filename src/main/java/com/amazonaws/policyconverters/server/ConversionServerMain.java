@@ -7,11 +7,15 @@ import com.amazonaws.policyconverters.lakeformation.cedar.AwsContext;
 import com.amazonaws.policyconverters.lakeformation.cedar.CedarToLFConverter;
 import com.amazonaws.policyconverters.lakeformation.client.DeadLetterLogger;
 import com.amazonaws.policyconverters.lakeformation.client.DryRunLakeFormationClient;
+import com.amazonaws.policyconverters.lakeformation.client.LFPermissionFetcher;
 import com.amazonaws.policyconverters.lakeformation.client.LakeFormationClient;
 import com.amazonaws.policyconverters.lakeformation.model.AwsConfig;
 import com.amazonaws.policyconverters.lakeformation.model.RetryConfig;
+import com.amazonaws.policyconverters.lakeformation.model.ReverseSyncConfig;
 import com.amazonaws.policyconverters.lakeformation.model.SyncConfig;
 import com.amazonaws.policyconverters.lakeformation.reporter.GapReporter;
+import com.amazonaws.policyconverters.lakeformation.sync.DriftDetector;
+import com.amazonaws.policyconverters.lakeformation.sync.ReverseSyncService;
 import com.amazonaws.policyconverters.ranger.catalog.CatalogResolver;
 import com.amazonaws.policyconverters.ranger.cedar.RangerLFServiceAdapter;
 import com.amazonaws.policyconverters.ranger.cedar.RangerToCedarConverter;
@@ -83,6 +87,7 @@ public class ConversionServerMain {
 
         SyncConfig syncConfig = compositeConfig.getSyncConfig();
         ServerConfig serverConfig = compositeConfig.getServerConfig();
+        ReverseSyncConfig reverseSyncConfig = compositeConfig.getReverseSyncConfig();
 
         // Validate sync configuration
         List<String> errors = validateConfig(syncConfig);
@@ -100,7 +105,7 @@ public class ConversionServerMain {
                 VERSION, syncConfig.getPolicyRefreshIntervalMs(), serverConfig.getLogLevel());
 
         try {
-            return startServer(syncConfig, serverConfig);
+            return startServer(syncConfig, serverConfig, reverseSyncConfig);
         } catch (Exception e) {
             LOG.error("Fatal error starting Conversion Server: {}", e.getMessage(), e);
             System.err.println("Fatal error: " + e.getMessage());
@@ -137,7 +142,8 @@ public class ConversionServerMain {
      * Wires all components and starts the server lifecycle.
      * Returns exit code 0 on graceful shutdown, 1 on timeout.
      */
-    static int startServer(SyncConfig syncConfig, ServerConfig serverConfig) throws IOException {
+    static int startServer(SyncConfig syncConfig, ServerConfig serverConfig,
+                           ReverseSyncConfig reverseSyncConfig) throws IOException {
         AwsConfig awsConfig = syncConfig.getAwsConfig();
         Region region = Region.of(awsConfig.getRegion());
         AwsCredentialsProvider credentialsProvider = buildCredentialsProvider(awsConfig);
@@ -213,7 +219,38 @@ public class ConversionServerMain {
                 lakeFormationClient, gapReporter, deadLetterLogger);
 
         // Create the SyncCycleExecutor that wraps the pipeline
-        SyncCycleExecutor executor = createSyncCycleExecutor(plugin, syncService);
+        // Optionally wire reverse-sync if enabled
+        ReverseSyncService reverseSyncService = null;
+        if (reverseSyncConfig != null && reverseSyncConfig.isEnabled()) {
+            LOG.info("Reverse-sync enabled: reportOnly={}, dryRun={}, periodicIntervalMs={}",
+                    reverseSyncConfig.isReportOnly(), reverseSyncConfig.isDryRun(),
+                    reverseSyncConfig.getPeriodicIntervalMs());
+
+            LFPermissionFetcher lfPermissionFetcher = new LFPermissionFetcher(
+                    lfSdkClient);
+            DriftDetector driftDetector = new DriftDetector();
+
+            LakeFormationClient reverseSyncLfClient;
+            if (reverseSyncConfig.isDryRun()) {
+                String outputDir = System.getenv("DRY_RUN_OUTPUT_DIR");
+                if (outputDir == null || outputDir.isBlank()) {
+                    outputDir = "./dry-run-output";
+                }
+                reverseSyncLfClient = new DryRunLakeFormationClient(
+                        Path.of(outputDir), new ObjectMapper());
+            } else {
+                reverseSyncLfClient = lakeFormationClient;
+            }
+
+            reverseSyncService = new ReverseSyncService(
+                    lfPermissionFetcher, driftDetector, reverseSyncLfClient,
+                    cedarToLFConverter, deadLetterLogger);
+        }
+
+        final ReverseSyncService finalReverseSyncService = reverseSyncService;
+        final ReverseSyncConfig finalReverseSyncConfig = reverseSyncConfig;
+        SyncCycleExecutor executor = createSyncCycleExecutor(plugin, syncService,
+                finalReverseSyncService, finalReverseSyncConfig);
 
         // Create MetricsEmitter and ServerLifecycle
         MetricsEmitter metricsEmitter = new MetricsEmitter(cloudWatchClient, serverConfig);
@@ -252,10 +289,13 @@ public class ConversionServerMain {
     }
 
     /**
-     * Creates a SyncCycleExecutor that fetches policies from the plugin
-     * and feeds them through the SyncService pipeline.
+     * Creates a SyncCycleExecutor that fetches policies from the plugin,
+     * feeds them through the SyncService pipeline, and optionally triggers
+     * reverse-sync after each forward-sync cycle.
      */
-    static SyncCycleExecutor createSyncCycleExecutor(LakeFormationPlugin plugin, SyncService syncService) {
+    static SyncCycleExecutor createSyncCycleExecutor(LakeFormationPlugin plugin, SyncService syncService,
+                                                      ReverseSyncService reverseSyncService,
+                                                      ReverseSyncConfig reverseSyncConfig) {
         return () -> {
             long startMs = System.currentTimeMillis();
             try {
@@ -269,6 +309,24 @@ public class ConversionServerMain {
                 } else {
                     LOG.warn("No policies available from Ranger Admin plugin");
                 }
+
+                // Trigger reverse-sync after forward-sync if enabled
+                if (reverseSyncService != null && reverseSyncConfig != null
+                        && reverseSyncConfig.isEnabled()) {
+                    try {
+                        // Get the current Cedar policy set from the sync service's last conversion
+                        com.amazonaws.policyconverters.cedar.CedarPolicySet cedarPolicySet =
+                                syncService.getLastCedarPolicySet();
+                        if (cedarPolicySet != null) {
+                            reverseSyncService.execute(reverseSyncConfig, cedarPolicySet);
+                        } else {
+                            LOG.debug("No Cedar policy set available for reverse-sync");
+                        }
+                    } catch (Exception e) {
+                        LOG.error("Reverse-sync cycle failed: {}", e.getMessage(), e);
+                    }
+                }
+
                 long durationMs = System.currentTimeMillis() - startMs;
                 return SyncCycleResult.success(durationMs, policyCount, 0, 0, 0);
             } catch (Exception e) {

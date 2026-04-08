@@ -107,3 +107,31 @@ server:
   # CloudWatch namespace for published metrics.
   # Env override: SERVER_METRICS_NAMESPACE
   metricsNamespace: RangerLFSync  # default: RangerLFSync
+
+# -----------------------------------------------------------------------------
+# Reverse Sync Settings
+# Retrieves actual LakeFormation permissions and reconciles them against
+# the Cedar-authoritative desired state to correct drift.
+# -----------------------------------------------------------------------------
+reverseSync:
+  # Enable the reverse-sync feature (default: false)
+  enabled: false
+
+  # Compute drift report without applying corrections (default: false)
+  reportOnly: false
+
+  # Serialize corrections to JSON instead of applying (default: false)
+  dryRun: false
+
+  # Periodic interval in milliseconds (0 = after each forward-sync cycle only)
+  periodicIntervalMs: 0
+
+  # Glue Data Catalog ID for ListPermissions (defaults to awsConfig.catalogId if not set)
+  # catalogId: "123456789012"
+
+  # Exclusion filter for principals/resources managed outside Cedar
+  exclusionFilter:
+    excludedPrincipals: []
+    #  - "arn:aws:iam::123456789012:role/LFAdmin"
+    excludedResourcePatterns: []
+    #  - "system_db/*"
