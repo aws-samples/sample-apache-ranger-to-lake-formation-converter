@@ -1,0 +1,29 @@
+version: "3.8"
+services:
+  conversion-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DRY_RUN_ENABLED: "false"
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+    volumes:
+      - ./server-config-deploy.yaml:/app/config-deploy.yaml:ro
+    networks:
+      - rangernw
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'java.*app.jar' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    entrypoint: ["java", "-cp", "/app/app.jar:/app",
+      "com.amazonaws.policyconverters.server.ConversionServerMain",
+      "/app/config-deploy.yaml"]
+
+networks:
+  rangernw:
+    external: true

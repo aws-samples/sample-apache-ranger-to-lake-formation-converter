@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  Integration test override of ranger-lakeformation-security.xml.
+  Key difference: pollIntervalMs is 5000 (5s) instead of 30000 (30s)
+  so the Ranger SDK PolicyRefresher picks up policy changes quickly.
+-->
+<configuration xmlns:xi="http://www.w3.org/2001/XInclude">
+
+    <property>
+        <name>ranger.plugin.lakeformation.service.name</name>
+        <value>lakeformation</value>
+    </property>
+
+    <property>
+        <name>ranger.plugin.lakeformation.policy.rest.url</name>
+        <value>http://ranger-admin:6080</value>
+    </property>
+
+    <property>
+        <name>ranger.plugin.lakeformation.policy.rest.ssl.config.file</name>
+        <value>/app/ranger-lakeformation-policymgr-ssl.xml</value>
+    </property>
+
+    <property>
+        <name>ranger.plugin.lakeformation.policy.source.impl</name>
+        <value>org.apache.ranger.admin.client.RangerAdminRESTClient</value>
+    </property>
+
+    <!-- 5 seconds instead of 30 — the critical difference for IT speed -->
+    <property>
+        <name>ranger.plugin.lakeformation.policy.pollIntervalMs</name>
+        <value>5000</value>
+    </property>
+
+    <property>
+        <name>ranger.plugin.lakeformation.policy.cache.dir</name>
+        <value>/tmp/ranger-lf-policycache</value>
+    </property>
+
+    <property>
+        <name>ranger.plugin.lakeformation.policy.rest.client.connection.timeoutMs</name>
+        <value>120000</value>
+    </property>
+
+    <property>
+        <name>ranger.plugin.lakeformation.policy.rest.client.read.timeoutMs</name>
+        <value>30000</value>
+    </property>
+
+</configuration>

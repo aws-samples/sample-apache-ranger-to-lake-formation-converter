@@ -52,13 +52,21 @@ public class ServiceDefInstallIT {
             writeBody(conn, serviceDefJson);
 
             int statusCode = conn.getResponseCode();
+            String responseBody = readResponseBody(conn, statusCode);
 
             if (statusCode == 409) {
-                // Already exists — not a failure, update test will handle it
+                // Already exists (correct HTTP semantics) — not a failure
                 return;
             }
 
-            String responseBody = readResponseBody(conn, statusCode);
+            if (statusCode == 400 && responseBody.contains("already exists")) {
+                // Ranger Admin returns 400 instead of 409 for duplicate service defs.
+                // Treat as success. If Ranger ever fixes this to return 409, the 409
+                // branch above will handle it and this branch becomes dead code — at
+                // which point this test should be updated to fail on 400 again.
+                return;
+            }
+
             assertEquals(200, statusCode,
                     "Expected HTTP 200 from POST " + endpoint + ", got " + statusCode + ": " + responseBody);
             assertTrue(responseBody.contains("lakeformation"),

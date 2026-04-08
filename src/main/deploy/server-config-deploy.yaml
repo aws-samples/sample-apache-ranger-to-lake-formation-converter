@@ -1,0 +1,25 @@
+rangerConfig:
+  rangerAdminUrl: "${ranger.admin.url}"
+  username: "admin"
+  password: "${ranger.admin.password}"
+
+awsConfig:
+  region: "${aws.region}"
+  catalogId: "${aws.account.id}"
+  roleArn: "${aws.role.arn}"
+
+principalMapping:
+  userMappings:
+${principal.user.mappings.yaml}
+  groupMappings:
+${principal.group.mappings.yaml}
+  roleMappings:
+${principal.role.mappings.yaml}
+
+policyRefreshIntervalMs: ${sync.interval.ms}
+maxLfRetries: ${lf.max.retries}
+lfRetryBackoffMs: ${lf.retry.backoff.ms}
+
+server:
+  logLevel: ${server.log.level}
+  shutdownTimeoutSeconds: ${server.shutdown.timeout}

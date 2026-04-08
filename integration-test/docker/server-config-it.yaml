@@ -1,0 +1,32 @@
+# =============================================================================
+# Integration Test Configuration for Containerized Conversion Server
+# =============================================================================
+# Minimal config for the conversion-server Docker container.
+# Uses Docker network hostname for Ranger Admin and fast refresh for testing.
+# No roleArn needed — dry-run mode does not call AWS APIs.
+# =============================================================================
+
+rangerConfig:
+  rangerAdminUrl: "http://ranger-admin:6080"
+  username: "admin"
+  password: "rangerR0cks!"
+
+awsConfig:
+  region: "us-east-1"
+  catalogId: "123456789012"
+  roleArn: "arn:aws:iam::123456789012:role/DryRunPlaceholder"
+
+principalMapping:
+  userMappings:
+    analyst: "arn:aws:iam::123456789012:role/analyst"
+    etl_user: "arn:aws:iam::123456789012:role/etl_user"
+    data_admin: "arn:aws:iam::123456789012:role/data_admin"
+    viewer: "arn:aws:iam::123456789012:role/viewer"
+  groupMappings:
+    data_engineers: "arn:aws:iam::123456789012:role/DataEngineersRole"
+  roleMappings:
+    admin_role: "arn:aws:iam::123456789012:role/LFAdminRole"
+
+policyRefreshIntervalMs: 5000
+maxLfRetries: 3
+lfRetryBackoffMs: 500

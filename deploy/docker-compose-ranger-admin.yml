@@ -1,5 +1,4 @@
 version: "3.8"
-
 services:
   ranger-db:
     image: apache/ranger-db:${RANGER_VERSION:-2.4.0}
@@ -47,30 +46,6 @@ services:
       retries: 30
       start_period: 30s
 
-  conversion-server:
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-    depends_on:
-      ranger-admin:
-        condition: service_healthy
-    environment:
-      DRY_RUN_ENABLED: "true"
-      DRY_RUN_OUTPUT_DIR: /app/dry-run-output
-    volumes:
-      - ./dry-run-output:/app/dry-run-output
-      - ./server-config-it.yaml:/app/config-it.yaml:ro
-      - ./ranger-lakeformation-security-it.xml:/app/ranger-lakeformation-security.xml:ro
-    networks:
-      - rangernw
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'java.*app.jar' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 15s
-    entrypoint: ["java", "-cp", "/app/app.jar:/app", "com.amazonaws.policyconverters.server.ConversionServerMain", "/app/config-it.yaml"]
-
 networks:
   rangernw:
-    driver: bridge
+    external: true

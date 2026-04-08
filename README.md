@@ -135,6 +135,45 @@ java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
 
 On first startup with an empty previous snapshot, the first policy refresh performs a bulk sync (all current policies are treated as new grants).
 
+## Deployment (Docker Compose via Maven)
+
+Two Maven profiles automate Docker Compose deployment. Maven generates `server-config-deploy.yaml` and `.env` from `-D` command-line properties — no manual file editing required.
+
+### Deploy the Conversion Server
+
+Requires an existing Ranger Admin instance (or use the local stack below). Run from the project root:
+
+```bash
+# Start
+mvn generate-resources exec:exec@ensure-network exec:exec@docker-compose-up \
+  -Pdeploy-server \
+  -Daws.account.id=123456789012 \
+  -Daws.role.arn=arn:aws:iam::123456789012:role/LakeFormationRole \
+  -Daws.access.key.id=AKIAIOSFODNN7EXAMPLE \
+  -Daws.secret.access.key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+
+# Stop
+mvn exec:exec@docker-compose-down -Pdeploy-server
+```
+
+Optional properties: `-Daws.region=us-east-1`, `-Dranger.admin.url=http://ranger-admin:6080`, `-Dranger.admin.password=rangerR0cks!`, `-Dprincipal.user.mappings=alice=arn:aws:iam::123:user/Alice,bob=arn:aws:iam::123:user/Bob`. See [`deploy/README.md`](deploy/README.md) for the full property reference.
+
+### Deploy a Local Ranger Admin Stack
+
+If you don't have a running Ranger Admin, start one locally:
+
+```bash
+# Start (ranger-db, ranger-solr, ranger-admin)
+mvn exec:exec@ensure-network exec:exec@docker-compose-up-ranger -Pdeploy-ranger-admin
+
+# Stop
+mvn exec:exec@docker-compose-down -Pdeploy-ranger-admin
+```
+
+When both profiles are running, the conversion-server reaches `ranger-admin` via Docker DNS on the shared `rangernw` network (the default `ranger.admin.url`).
+
+For full details on Maven properties, principal mapping format, troubleshooting, and combined usage, see [`deploy/README.md`](deploy/README.md).
+
 ## Configuration
 
 ### YAML Configuration File
