@@ -2,19 +2,19 @@ package com.amazonaws.policyconverters.ranger.it;
 
 import com.amazonaws.policyconverters.cedar.CedarSchemaProvider;
 import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
-import com.amazonaws.policyconverters.lakeformation.cedar.AwsContext;
-import com.amazonaws.policyconverters.lakeformation.cedar.CedarToLFConverter;
-import com.amazonaws.policyconverters.lakeformation.client.DryRunLakeFormationClient;
-import com.amazonaws.policyconverters.lakeformation.client.DryRunOutput;
-import com.amazonaws.policyconverters.lakeformation.model.PrincipalMappingConfig;
-import com.amazonaws.policyconverters.lakeformation.model.SyncConfig;
-import com.amazonaws.policyconverters.lakeformation.reporter.GapReporter;
-import com.amazonaws.policyconverters.ranger.catalog.CatalogResolver;
-import com.amazonaws.policyconverters.ranger.cedar.RangerLFServiceAdapter;
-import com.amazonaws.policyconverters.ranger.cedar.RangerToCedarConverter;
-import com.amazonaws.policyconverters.ranger.mapper.PrincipalMapper;
-import com.amazonaws.policyconverters.ranger.sync.LakeFormationPlugin;
-import com.amazonaws.policyconverters.ranger.sync.SyncService;
+import com.amazonaws.policyconverters.lakeformation.AwsContext;
+import com.amazonaws.policyconverters.cedar.CedarToLFConverter;
+import com.amazonaws.policyconverters.lakeformation.DryRunLakeFormationClient;
+import com.amazonaws.policyconverters.model.DryRunOutput;
+import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
+import com.amazonaws.policyconverters.config.SyncConfig;
+import com.amazonaws.policyconverters.reporting.GapReporter;
+import com.amazonaws.policyconverters.ranger.CatalogResolver;
+import com.amazonaws.policyconverters.ranger.RangerServiceAdapter;
+import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
+import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.ranger.RangerPlugin;
+import com.amazonaws.policyconverters.sync.SyncService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -82,9 +82,9 @@ public abstract class DryRunPipelineIT {
 
         // If the service def uses a custom implClass that isn't available in the Docker
         // container, update it to a built-in Ranger class so service instance creation works
-        if (serviceDefBody.contains("LakeFormationResourceLookupService")) {
+        if (serviceDefBody.contains("ResourceLookupService")) {
             String updatedDef = serviceDefBody.replaceAll(
-                    "com\\.amazonaws\\.policyconverters\\.ranger\\.service\\.LakeFormationResourceLookupService",
+                    "com\\.amazonaws\\.policyconverters\\.ranger\\.service\\.ResourceLookupService",
                     "org.apache.ranger.services.tag.RangerServiceTag");
             // Extract the service def ID
             int idIdx = updatedDef.indexOf("\"id\":");
@@ -158,7 +158,7 @@ public abstract class DryRunPipelineIT {
         dryRunClient = new DryRunLakeFormationClient(outputDirectory, objectMapper);
 
         AwsContext awsContext = new AwsContext(TEST_REGION, TEST_ACCOUNT_ID, TEST_ACCOUNT_ID);
-        RangerLFServiceAdapter lfAdapter = new RangerLFServiceAdapter(awsContext);
+        RangerServiceAdapter lfAdapter = new RangerServiceAdapter(awsContext);
         Map<String, SourcePolicyAdapter> adapterRegistry = new HashMap<>();
         adapterRegistry.put("lakeformation", lfAdapter);
 
@@ -198,7 +198,7 @@ public abstract class DryRunPipelineIT {
         CedarToLFConverter cedarToLFConverter = new CedarToLFConverter(
                 cedarSchemaProvider, gapReporter, null);
 
-        LakeFormationPlugin plugin = new LakeFormationPlugin();
+        RangerPlugin plugin = new RangerPlugin();
         syncService = new SyncService(
                 plugin, rangerToCedarConverter, cedarToLFConverter,
                 dryRunClient, gapReporter, null);

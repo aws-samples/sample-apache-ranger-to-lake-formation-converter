@@ -83,7 +83,7 @@ The service definition tells Ranger Admin about the "lakeformation" service type
 
 ```bash
 java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
-  org.apache.ranger.lakeformation.ServiceDefInstallerMain \
+  com.amazonaws.policyconverters.ranger.ServiceDefInstallerMain \
   --mode rest \
   --config /path/to/sync-config.yaml
 ```
@@ -92,7 +92,7 @@ java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
 
 ```bash
 java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
-  org.apache.ranger.lakeformation.ServiceDefInstallerMain \
+  com.amazonaws.policyconverters.ranger.ServiceDefInstallerMain \
   --mode file \
   --ranger-admin-home /opt/ranger-admin
 ```
@@ -129,7 +129,7 @@ Copy the configuration files to the plugin's configuration directory:
 
 ```bash
 java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
-  org.apache.ranger.lakeformation.SyncServiceMain \
+  com.amazonaws.policyconverters.ranger.SyncServiceMain \
   /path/to/sync-config.yaml
 ```
 
@@ -316,12 +316,12 @@ Failed operations are written in JSON-lines format:
 │                     │ policy  │                                  │
 │  Service Definition ├────────►│  LakeFormationPlugin             │
 │  (lakeformation)    │ refresh │    └─► SyncService               │
-│                     │         │          ├─► PolicyConverter      │
-│  Policies           │         │          ├─► PrincipalMapper      │
-│                     │         │          ├─► CatalogResolver      │
-└─────────────────────┘         │          ├─► LakeFormationClient  │
-                                │          ├─► GapReporter          │
-                                │          └─► DeadLetterLogger     │
+│                     │         │          ├─► PolicyConverter     │
+│  Policies           │         │          ├─► PrincipalMapper     │
+│                     │         │          ├─► CatalogResolver     │
+└─────────────────────┘         │          ├─► LakeFormationClient │
+                                │          ├─► GapReporter         │
+                                │          └─► DeadLetterLogger    │
                                 └──────────┬───────────────────────┘
                                            │ grant/revoke
                                            ▼

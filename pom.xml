@@ -163,6 +163,9 @@
                 <directory>conf</directory>
                 <includes>
                     <include>ranger-servicedef-lakeformation.json</include>
+                    <include>ranger-lakeformation-security.xml</include>
+                    <include>ranger-lakeformation-audit.xml</include>
+                    <include>ranger-lakeformation-policymgr-ssl.xml</include>
                 </includes>
             </resource>
         </resources>
@@ -200,7 +203,7 @@
                     <archive>
                         <manifest>
                             <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
-                            <mainClass>com.amazonaws.policyconverters.server.ConversionServerMain</mainClass>
+                            <mainClass>com.amazonaws.policyconverters.app.ConversionServerMain</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
@@ -212,7 +215,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.amazonaws.policyconverters.server.ConversionServerMain</mainClass>
+                            <mainClass>com.amazonaws.policyconverters.app.ConversionServerMain</mainClass>
                         </manifest>
                     </archive>
                     <descriptorRefs>
@@ -323,6 +326,8 @@
                 <principal.user.mappings></principal.user.mappings>
                 <principal.group.mappings></principal.group.mappings>
                 <principal.role.mappings></principal.role.mappings>
+                <aws.access.key.id></aws.access.key.id>
+                <aws.secret.access.key></aws.secret.access.key>
             </properties>
             <build>
                 <plugins>
@@ -341,18 +346,6 @@
                                             <property>aws.account.id</property>
                                             <message>-Daws.account.id is required</message>
                                         </requireProperty>
-                                        <requireProperty>
-                                            <property>aws.role.arn</property>
-                                            <message>-Daws.role.arn is required</message>
-                                        </requireProperty>
-                                        <requireProperty>
-                                            <property>aws.access.key.id</property>
-                                            <message>-Daws.access.key.id is required</message>
-                                        </requireProperty>
-                                        <requireProperty>
-                                            <property>aws.secret.access.key</property>
-                                            <message>-Daws.secret.access.key is required</message>
-                                        </requireProperty>
                                     </rules>
                                 </configuration>
                             </execution>
@@ -361,7 +354,7 @@
                     <plugin>
                         <groupId>org.codehaus.gmavenplus</groupId>
                         <artifactId>gmavenplus-plugin</artifactId>
-                        <version>3.0.2</version>
+                        <version>4.3.1</version>
                         <executions>
                             <execution>
                                 <id>parse-principal-mappings</id>
@@ -393,7 +386,7 @@ project.properties['principal.role.mappings.yaml'] =
                             <dependency>
                                 <groupId>org.apache.groovy</groupId>
                                 <artifactId>groovy</artifactId>
-                                <version>4.0.15</version>
+                                <version>5.0.4</version>
                             </dependency>
                         </dependencies>
                     </plugin>

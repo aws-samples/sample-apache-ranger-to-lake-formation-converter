@@ -1,6 +1,6 @@
 package com.amazonaws.policyconverters.cedar;
 
-import com.amazonaws.policyconverters.lakeformation.cedar.AwsContext;
+import com.amazonaws.policyconverters.lakeformation.AwsContext;
 import org.apache.ranger.plugin.model.RangerPolicy;
 
 import java.util.Optional;
@@ -11,7 +11,7 @@ import java.util.Set;
  * into Cedar actions and DataCatalog:: entity types.
  *
  * <p>Each implementation handles a single service type (e.g., "lakeformation", "trino").
- * The {@link com.amazonaws.policyconverters.ranger.cedar.RangerToCedarConverter} delegates
+ * The {@link com.amazonaws.policyconverters.ranger.RangerToCedarConverter} delegates
  * service-type-specific mapping to the adapter registered for the incoming policy's service type.
  */
 public interface SourcePolicyAdapter {

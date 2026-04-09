@@ -3,17 +3,17 @@ package com.amazonaws.policyconverters;
 import com.amazonaws.policyconverters.cedar.CedarPolicySet;
 import com.amazonaws.policyconverters.cedar.CedarSchemaProvider;
 import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
-import com.amazonaws.policyconverters.lakeformation.cedar.AwsContext;
-import com.amazonaws.policyconverters.lakeformation.cedar.CedarToLFConverter;
-import com.amazonaws.policyconverters.lakeformation.model.GapEntry;
-import com.amazonaws.policyconverters.lakeformation.model.GapEntry.GapType;
-import com.amazonaws.policyconverters.lakeformation.model.LFPermissionOperation;
-import com.amazonaws.policyconverters.lakeformation.model.PrincipalMappingConfig;
-import com.amazonaws.policyconverters.lakeformation.reporter.GapReporter;
-import com.amazonaws.policyconverters.ranger.catalog.CatalogResolver;
-import com.amazonaws.policyconverters.ranger.cedar.RangerLFServiceAdapter;
-import com.amazonaws.policyconverters.ranger.cedar.RangerToCedarConverter;
-import com.amazonaws.policyconverters.ranger.mapper.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.AwsContext;
+import com.amazonaws.policyconverters.cedar.CedarToLFConverter;
+import com.amazonaws.policyconverters.model.GapEntry;
+import com.amazonaws.policyconverters.model.GapEntry.GapType;
+import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
+import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
+import com.amazonaws.policyconverters.reporting.GapReporter;
+import com.amazonaws.policyconverters.ranger.CatalogResolver;
+import com.amazonaws.policyconverters.ranger.RangerServiceAdapter;
+import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
+import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
 import net.jqwik.api.*;
 import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItem;
@@ -74,7 +74,7 @@ class PipelineGapAggregationPropertyTest {
 
         // --- Stage 1: RangerToCedarConverter ---
         AwsContext awsContext = new AwsContext(REGION, ACCOUNT_ID, ACCOUNT_ID);
-        RangerLFServiceAdapter adapter = new RangerLFServiceAdapter(awsContext);
+        RangerServiceAdapter adapter = new RangerServiceAdapter(awsContext);
         Map<String, SourcePolicyAdapter> registry = new HashMap<>();
         registry.put("lakeformation", adapter);
 

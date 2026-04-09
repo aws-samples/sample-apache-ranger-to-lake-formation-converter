@@ -1,6 +1,6 @@
 package com.amazonaws.policyconverters.ranger.service;
 
-import com.amazonaws.policyconverters.lakeformation.model.RangerConnectionConfig;
+import com.amazonaws.policyconverters.config.RangerConnectionConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

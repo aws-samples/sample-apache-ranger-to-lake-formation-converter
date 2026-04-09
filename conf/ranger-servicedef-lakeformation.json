@@ -1,7 +1,7 @@
 {
     "name": "lakeformation",
     "displayName": "AWS Lake Formation",
-    "implClass": "com.amazonaws.policyconverters.ranger.service.LakeFormationResourceLookupService",
+    "implClass": "com.amazonaws.policyconverters.ranger.service.ResourceLookupService",
     "label": "Lake Formation",
     "description": "AWS Lake Formation Permission Management",
     "options": {

@@ -1,6 +1,6 @@
 package com.amazonaws.policyconverters.ranger.it;
 
-import com.amazonaws.policyconverters.lakeformation.client.DryRunOutput;
+import com.amazonaws.policyconverters.model.DryRunOutput;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;

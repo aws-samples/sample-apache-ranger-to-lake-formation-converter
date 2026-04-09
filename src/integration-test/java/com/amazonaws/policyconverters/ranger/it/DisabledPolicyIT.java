@@ -1,8 +1,8 @@
 package com.amazonaws.policyconverters.ranger.it;
 
-import com.amazonaws.policyconverters.lakeformation.client.DryRunOutput;
-import com.amazonaws.policyconverters.lakeformation.model.LFPermissionOperation;
-import com.amazonaws.policyconverters.lakeformation.model.LFPermissionOperation.OperationType;
+import com.amazonaws.policyconverters.model.DryRunOutput;
+import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
+import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation.OperationType;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
