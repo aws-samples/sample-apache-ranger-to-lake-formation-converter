@@ -83,7 +83,7 @@ The service definition tells Ranger Admin about the "lakeformation" service type
 
 ```bash
 java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
-  com.amazonaws.policyconverters.ranger.ServiceDefInstallerMain \
+  com.amazonaws.policyconverters.app.ServiceDefInstallerMain \
   --mode rest \
   --config /path/to/sync-config.yaml
 ```
@@ -92,7 +92,7 @@ java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
 
 ```bash
 java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
-  com.amazonaws.policyconverters.ranger.ServiceDefInstallerMain \
+  com.amazonaws.policyconverters.app.ServiceDefInstallerMain \
   --mode file \
   --ranger-admin-home /opt/ranger-admin
 ```
@@ -129,9 +129,11 @@ Copy the configuration files to the plugin's configuration directory:
 
 ```bash
 java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
-  com.amazonaws.policyconverters.ranger.SyncServiceMain \
+  com.amazonaws.policyconverters.app.SyncServiceMain \
   /path/to/sync-config.yaml
 ```
+
+The process blocks on the main thread until a shutdown signal (SIGTERM/SIGINT) is received, at which point it gracefully stops the sync service and releases resources.
 
 On first startup with an empty previous snapshot, the first policy refresh performs a bulk sync (all current policies are treated as new grants).
 
@@ -310,13 +312,27 @@ Failed operations are written in JSON-lines format:
 
 ## Architecture
 
+The codebase is organized by responsibility:
+
+| Package | Purpose |
+|---------|---------|
+| `app` | Entry points (`SyncServiceMain`, `ConversionServerMain`, `ServiceDefInstallerMain`) and process lifecycle |
+| `config` | All configuration classes, loaders, and validators |
+| `cedar` | Cedar policy language bridge layer (`CedarPolicySet`, `CedarToLFConverter`, `SourcePolicyAdapter`) |
+| `ranger` | Ranger-specific logic: plugin, policy-to-Cedar conversion, catalog resolution, service definition |
+| `lakeformation` | Lake Formation API client, IAM principal mapping, LF-specific models |
+| `sync` | Forward and reverse sync orchestration, checkpointing, dead-letter logging, drift detection |
+| `model` | Shared domain models (gap reports, drift reports, dry-run output) |
+| `reporting` | Gap reporting, CloudWatch metrics, structured error logging |
+| `deploy` | Deploy template utilities |
+
 ```
 ┌─────────────────────┐         ┌──────────────────────────────────┐
 │   Ranger Admin      │         │  Ranger-LF Sync Plugin           │
 │                     │ policy  │                                  │
-│  Service Definition ├────────►│  LakeFormationPlugin             │
+│  Service Definition ├────────►│  RangerPlugin                    │
 │  (lakeformation)    │ refresh │    └─► SyncService               │
-│                     │         │          ├─► PolicyConverter     │
+│                     │         │          ├─► PolicyConverter      │
 │  Policies           │         │          ├─► PrincipalMapper     │
 │                     │         │          ├─► CatalogResolver     │
 └─────────────────────┘         │          ├─► LakeFormationClient │

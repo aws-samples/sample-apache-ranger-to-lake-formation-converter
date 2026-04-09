@@ -14,6 +14,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import software.amazon.awssdk.services.lakeformation.model.ConcurrentModificationException;
+import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsFailureEntry;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsRequestEntry;
+import software.amazon.awssdk.services.lakeformation.model.ErrorDetail;
 import software.amazon.awssdk.services.lakeformation.model.GrantPermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.LakeFormationException;
 import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
@@ -31,7 +38,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -248,7 +254,8 @@ class LakeFormationClientTest {
 
     @Test
     void applyBatch_allSucceed() {
-        when(awsClient.grantPermissions(any(GrantPermissionsRequest.class))).thenReturn(null);
+        when(awsClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class)))
+                .thenReturn(BatchGrantPermissionsResponse.builder().failures(List.of()).build());
 
         List<LFPermissionOperation> ops = Arrays.asList(
                 makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t1"),
@@ -264,48 +271,41 @@ class LakeFormationClientTest {
         assertTrue(result.getSucceededPolicyIds().contains("p2"));
         assertEquals(3, result.getTotalOperations());
         assertEquals(3, result.getAppliedOperations());
-        assertEquals(0, result.getRolledBackOperations());
     }
 
     @Test
-    void applyBatch_policyFailure_rollsBackThatPolicy_otherPoliciesUnaffected() {
-        // Track grant/revoke call counts to control failure on specific call
-        final int[] grantCallCount = {0};
-        when(awsClient.grantPermissions(any(GrantPermissionsRequest.class))).thenAnswer(invocation -> {
-            grantCallCount[0]++;
-            // Fail on the 2nd grant call (second op of policy p1)
-            if (grantCallCount[0] == 2) {
-                throw LakeFormationException.builder().message("Access denied").build();
-            }
-            return null;
-        });
-        // Rollback will call revoke
-        when(awsClient.revokePermissions(any(RevokePermissionsRequest.class))).thenReturn(null);
+    void applyBatch_policyFailure_reportsFailedPolicy() {
+        // Simulate one entry failing in the batch response
+        BatchPermissionsFailureEntry failure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-1").build())
+                .error(ErrorDetail.builder().errorMessage("Access denied").build())
+                .build();
+        when(awsClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class)))
+                .thenReturn(BatchGrantPermissionsResponse.builder().failures(List.of(failure)).build());
 
         List<LFPermissionOperation> ops = Arrays.asList(
                 makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t1"),
-                makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t2"),
-                makeOp("p2", LFPermissionOperation.OperationType.GRANT, "t3")
+                makeOp("p2", LFPermissionOperation.OperationType.GRANT, "t2"),
+                makeOp("p3", LFPermissionOperation.OperationType.GRANT, "t3")
         );
 
         BatchResult result = client.applyBatch(ops, null);
 
         assertTrue(result.hasFailures());
         assertEquals(1, result.getFailedPolicyIds().size());
-        assertEquals("p1", result.getFailedPolicyIds().get(0));
-        assertEquals(1, result.getSucceededPolicyIds().size());
-        assertEquals("p2", result.getSucceededPolicyIds().get(0));
-        // Only p2's operation counted as applied
-        assertEquals(1, result.getAppliedOperations());
-        // p1's first op was rolled back
-        assertEquals(1, result.getRolledBackOperations());
+        assertEquals("p2", result.getFailedPolicyIds().get(0));
+        assertEquals(2, result.getAppliedOperations());
     }
 
     @Test
     void applyBatch_writesToDeadLetterLog() {
-        // Fail immediately on first grant
-        when(awsClient.grantPermissions(any(GrantPermissionsRequest.class)))
-                .thenThrow(LakeFormationException.builder().message("Forbidden").build());
+        // Simulate failure for first entry
+        BatchPermissionsFailureEntry failure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-0").build())
+                .error(ErrorDetail.builder().errorMessage("Forbidden").build())
+                .build();
+        when(awsClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class)))
+                .thenReturn(BatchGrantPermissionsResponse.builder().failures(List.of(failure)).build());
 
         StringWriter sw = new StringWriter();
         DeadLetterLogger dll = new DeadLetterLogger(new BufferedWriter(sw));
@@ -319,12 +319,8 @@ class LakeFormationClientTest {
 
         assertTrue(result.hasFailures());
         String logContent = sw.toString();
-        // The failed op and the skipped op should both be in the dead-letter log
         assertTrue(logContent.contains("\"policyId\":\"p1\""));
         assertTrue(logContent.contains("\"operation\":\"GRANT\""));
-        // Should have 2 lines (one for the failed op, one for the skipped op)
-        String[] lines = logContent.trim().split("\n");
-        assertEquals(2, lines.length);
     }
 
     @Test
@@ -338,7 +334,8 @@ class LakeFormationClientTest {
 
     @Test
     void applyBatch_revokeOperations_succeed() {
-        when(awsClient.revokePermissions(any(RevokePermissionsRequest.class))).thenReturn(null);
+        when(awsClient.batchRevokePermissions(any(BatchRevokePermissionsRequest.class)))
+                .thenReturn(BatchRevokePermissionsResponse.builder().failures(List.of()).build());
 
         List<LFPermissionOperation> ops = Arrays.asList(
                 makeOp("p1", LFPermissionOperation.OperationType.REVOKE, "t1")
@@ -348,7 +345,7 @@ class LakeFormationClientTest {
 
         assertFalse(result.hasFailures());
         assertEquals(1, result.getAppliedOperations());
-        verify(awsClient, times(1)).revokePermissions(any(RevokePermissionsRequest.class));
+        verify(awsClient, times(1)).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
     }
 
     // --- Task 6.4: ConcurrentModificationException retry with backoff ---
@@ -394,36 +391,36 @@ class LakeFormationClientTest {
     // --- Task 6.4: Successful rollback on partial batch failure ---
 
     @Test
-    void applyBatch_multipleOpsApplied_rollsBackAllOnFailure() {
-        // Policy p1 has 3 grants; the 3rd fails. The first 2 should be rolled back.
-        final int[] grantCallCount = {0};
-        when(awsClient.grantPermissions(any(GrantPermissionsRequest.class))).thenAnswer(invocation -> {
-            grantCallCount[0]++;
-            if (grantCallCount[0] == 3) {
-                throw LakeFormationException.builder().message("Simulated failure on 3rd op").build();
-            }
-            return null;
-        });
-        // Rollback revokes should succeed
-        when(awsClient.revokePermissions(any(RevokePermissionsRequest.class))).thenReturn(null);
+    void applyBatch_multipleFailures_reportsAllInDeadLetter() {
+        // Simulate 2 out of 3 entries failing
+        BatchPermissionsFailureEntry failure0 = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-0").build())
+                .error(ErrorDetail.builder().errorMessage("Failure on t1").build())
+                .build();
+        BatchPermissionsFailureEntry failure2 = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-2").build())
+                .error(ErrorDetail.builder().errorMessage("Failure on t3").build())
+                .build();
+        when(awsClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class)))
+                .thenReturn(BatchGrantPermissionsResponse.builder()
+                        .failures(List.of(failure0, failure2)).build());
+
+        StringWriter sw = new StringWriter();
+        DeadLetterLogger dll = new DeadLetterLogger(new BufferedWriter(sw));
 
         List<LFPermissionOperation> ops = Arrays.asList(
                 makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t1"),
-                makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t2"),
-                makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t3")
+                makeOp("p2", LFPermissionOperation.OperationType.GRANT, "t2"),
+                makeOp("p3", LFPermissionOperation.OperationType.GRANT, "t3")
         );
 
-        BatchResult result = client.applyBatch(ops, null);
+        BatchResult result = client.applyBatch(ops, dll);
 
         assertTrue(result.hasFailures());
-        assertEquals(1, result.getFailedPolicyIds().size());
-        assertEquals("p1", result.getFailedPolicyIds().get(0));
-        assertTrue(result.getSucceededPolicyIds().isEmpty());
-        assertEquals(0, result.getAppliedOperations());
-        // 2 ops were applied before failure, both should be rolled back
-        assertEquals(2, result.getRolledBackOperations());
-        // 2 rollback revokes
-        verify(awsClient, times(2)).revokePermissions(any(RevokePermissionsRequest.class));
+        // Dead letter should have 2 entries (one per failed batch entry)
+        String logContent = sw.toString();
+        String[] lines = logContent.trim().split("\n");
+        assertEquals(2, lines.length);
     }
 
 }

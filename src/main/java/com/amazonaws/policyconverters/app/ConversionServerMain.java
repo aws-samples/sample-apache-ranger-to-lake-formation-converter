@@ -20,6 +20,7 @@ import com.amazonaws.policyconverters.config.SyncConfig;
 import com.amazonaws.policyconverters.reporting.GapReporter;
 import com.amazonaws.policyconverters.sync.DriftDetector;
 import com.amazonaws.policyconverters.sync.ReverseSyncService;
+import com.amazonaws.policyconverters.ranger.AccessTypeMapper;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.ranger.RangerServiceAdapter;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
@@ -258,6 +259,11 @@ public class ConversionServerMain {
 
         // Create MetricsEmitter and ServerLifecycle
         MetricsEmitter metricsEmitter = new MetricsEmitter(cloudWatchClient, serverConfig);
+
+        // Wire MetricsEmitter into access type mappers for unmapped type alerting
+        lfAdapter.setMetricsEmitter(metricsEmitter);
+        AccessTypeMapper.setMetricsEmitter(metricsEmitter);
+
         ServerLifecycle serverLifecycle = new ServerLifecycle(
                 executor, metricsEmitter, serverConfig, syncConfig.getPolicyRefreshIntervalMs());
 

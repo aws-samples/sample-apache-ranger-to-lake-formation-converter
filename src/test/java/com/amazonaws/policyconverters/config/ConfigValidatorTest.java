@@ -162,25 +162,27 @@ class ConfigValidatorTest {
     }
 
     @Test
-    void missingBothAwsCredentialMethods_reportsError() {
+    void missingBothAwsCredentialMethods_usesDefaultProvider() {
         SyncConfig config = buildConfig(
                 "https://ranger:6080", "admin", "pass", null, null,
                 "us-east-1", "123", null, null, null);
 
         List<String> errors = validator.validate(config);
 
-        assertTrue(errors.stream().anyMatch(e -> e.contains("accessKey+secretKey or roleArn")));
+        // No error — falls through to default credential provider
+        assertTrue(errors.isEmpty(), "Expected no errors but got: " + errors);
     }
 
     @Test
-    void partialStaticCreds_accessKeyOnly_reportsError() {
+    void partialStaticCreds_accessKeyOnly_usesDefaultProvider() {
         SyncConfig config = buildConfig(
                 "https://ranger:6080", "admin", "pass", null, null,
                 "us-east-1", "123", "AK", null, null);
 
         List<String> errors = validator.validate(config);
 
-        assertTrue(errors.stream().anyMatch(e -> e.contains("accessKey+secretKey or roleArn")));
+        // No error — partial static creds are ignored, falls through to default provider
+        assertTrue(errors.isEmpty(), "Expected no errors but got: " + errors);
     }
 
     @Test
@@ -192,8 +194,8 @@ class ConfigValidatorTest {
 
         List<String> errors = validator.validate(config);
 
-        // Should report: rangerAdminUrl missing, no auth method, region missing, catalogId missing, no aws creds
-        assertEquals(5, errors.size());
+        // Should report: rangerAdminUrl missing, no auth method, region missing, catalogId missing
+        assertEquals(4, errors.size());
     }
 
     @Test

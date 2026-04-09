@@ -41,6 +41,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 
 /**
  * Main entry point for the Ranger-LakeFormation sync service.
@@ -58,6 +59,7 @@ public class SyncServiceMain {
 
     private static final Logger LOG = LoggerFactory.getLogger(SyncServiceMain.class);
     private static final String DEFAULT_DEAD_LETTER_PATH = "dead-letter.log";
+    private static final CountDownLatch KEEP_ALIVE_LATCH = new CountDownLatch(1);
 
     public static void main(String[] args) {
         if (args.length < 1) {
@@ -115,7 +117,7 @@ public class SyncServiceMain {
      * @param config the validated sync configuration
      * @throws IOException if the dead-letter log file cannot be opened
      */
-    static void startSyncService(SyncConfig config) throws IOException {
+    static void startSyncService(SyncConfig config) throws IOException, InterruptedException {
         // Fail-fast: verify cedar-java native library can load before wiring anything
         verifyCedarNativeLibrary();
 
@@ -205,6 +207,7 @@ public class SyncServiceMain {
             }
             glueClient.close();
             lfSdkClient.close();
+            KEEP_ALIVE_LATCH.countDown();
             LOG.info("Sync Service shutdown complete");
         }));
 
@@ -218,6 +221,9 @@ public class SyncServiceMain {
 
         LOG.info("Ranger-LakeFormation Sync Service is running. "
                 + "First policy refresh will perform bulk sync from empty snapshot.");
+
+        // Block the main thread until shutdown signal is received
+        KEEP_ALIVE_LATCH.await();
     }
 
     /**

@@ -3,6 +3,7 @@ package com.amazonaws.policyconverters.ranger;
 import com.amazonaws.policyconverters.cedar.CedarEntityRef;
 import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
+import com.amazonaws.policyconverters.reporting.MetricsEmitter;
 import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyResource;
 import org.slf4j.Logger;
@@ -35,10 +36,17 @@ public class RangerServiceAdapter implements SourcePolicyAdapter {
     static {
         Map<String, Set<String>> m = new HashMap<>();
         m.put("select", Collections.singleton("SELECT"));
+        m.put("insert", Collections.singleton("INSERT"));
+        m.put("delete", Collections.singleton("DELETE"));
+        m.put("describe", Collections.singleton("DESCRIBE"));
+        m.put("alter", Collections.singleton("ALTER"));
+        m.put("drop", Collections.singleton("DROP"));
+        m.put("create_database", Collections.singleton("CREATE_DATABASE"));
+        m.put("create_table", Collections.singleton("CREATE_TABLE"));
+
+        // Legacy aliases from older Ranger service definitions
         m.put("update", Collections.singleton("INSERT"));
         m.put("create", Collections.singleton("CREATE_TABLE"));
-        m.put("drop", Collections.singleton("DROP"));
-        m.put("alter", Collections.singleton("ALTER"));
         m.put("read", Collections.singleton("SELECT"));
         m.put("write", Collections.singleton("INSERT"));
 
@@ -57,9 +65,24 @@ public class RangerServiceAdapter implements SourcePolicyAdapter {
     }
 
     private final AwsContext awsContext;
+    private volatile MetricsEmitter metricsEmitter;
 
     public RangerServiceAdapter(AwsContext awsContext) {
+        this(awsContext, null);
+    }
+
+    public RangerServiceAdapter(AwsContext awsContext, MetricsEmitter metricsEmitter) {
         this.awsContext = awsContext;
+        this.metricsEmitter = metricsEmitter;
+    }
+
+    /**
+     * Set the MetricsEmitter for publishing unmapped access type metrics to CloudWatch.
+     *
+     * @param metricsEmitter the MetricsEmitter instance
+     */
+    public void setMetricsEmitter(MetricsEmitter metricsEmitter) {
+        this.metricsEmitter = metricsEmitter;
     }
 
     @Override
@@ -70,13 +93,17 @@ public class RangerServiceAdapter implements SourcePolicyAdapter {
     @Override
     public Set<String> mapAccessTypeToCedarActions(String sourceAccessType) {
         if (sourceAccessType == null || sourceAccessType.trim().isEmpty()) {
-            LOG.warn("Null or empty access type provided");
+            LOG.error("Null or empty access type provided");
             return Collections.emptySet();
         }
         String normalized = sourceAccessType.trim().toLowerCase();
         Set<String> result = ACTION_MAPPING.get(normalized);
         if (result == null) {
-            LOG.warn("Unknown Ranger access type: '{}'", sourceAccessType);
+            LOG.error("Unknown Ranger access type: '{}' — this access type will be skipped, "
+                    + "affected policy items may lose permissions", sourceAccessType);
+            if (metricsEmitter != null) {
+                metricsEmitter.recordUnmappedAccessType(sourceAccessType);
+            }
             return Collections.emptySet();
         }
         return result;

@@ -158,10 +158,8 @@ class ConfigPropertyTest {
                 Arbitraries.of(true, false), // hasBasicAuth
                 Arbitraries.of(true, false), // hasKerberosAuth
                 Arbitraries.of(true, false), // hasRegion
-                Arbitraries.of(true, false), // hasCatalogId
-                Arbitraries.of(true, false), // hasStaticCreds
-                Arbitraries.of(true, false)  // hasRoleArn
-        ).as((hasUrl, hasBasicAuth, hasKerberosAuth, hasRegion, hasCatalogId, hasStaticCreds, hasRoleArn) -> {
+                Arbitraries.of(true, false)  // hasCatalogId
+        ).as((hasUrl, hasBasicAuth, hasKerberosAuth, hasRegion, hasCatalogId) -> {
             int expectedErrors = 0;
 
             String url = hasUrl ? "https://ranger.example.com" : null;
@@ -183,12 +181,7 @@ class ConfigPropertyTest {
             String catalogId = hasCatalogId ? "123456789012" : null;
             if (!hasCatalogId) expectedErrors++;
 
-            String accessKey = hasStaticCreds ? "AKIAIOSFODNN7EXAMPLE" : null;
-            String secretKey = hasStaticCreds ? "wJalrXUtnFEMI/K7MDENG" : null;
-            String roleArn = hasRoleArn ? "arn:aws:iam::123456789012:role/test" : null;
-            if (!hasStaticCreds && !hasRoleArn) expectedErrors++;
-
-            AwsConfig awsConfig = new AwsConfig(region, catalogId, accessKey, secretKey, roleArn);
+            AwsConfig awsConfig = new AwsConfig(region, catalogId, null, null, null);
 
             SyncConfig config = new SyncConfig(
                     rangerConfig, awsConfig, null, null, null, null, null

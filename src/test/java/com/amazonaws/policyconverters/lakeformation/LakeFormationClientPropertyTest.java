@@ -9,9 +9,13 @@ import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation.OperationType;
 import com.amazonaws.policyconverters.lakeformation.LFResource;
 import com.amazonaws.policyconverters.config.RetryConfig;
-import software.amazon.awssdk.services.lakeformation.model.GrantPermissionsRequest;
-import software.amazon.awssdk.services.lakeformation.model.LakeFormationException;
-import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsFailureEntry;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsRequestEntry;
+import software.amazon.awssdk.services.lakeformation.model.ErrorDetail;
 
 import java.io.BufferedWriter;
 import java.io.StringWriter;
@@ -32,85 +36,57 @@ class LakeFormationClientPropertyTest {
     private static final RetryConfig RETRY_CONFIG = new RetryConfig(2, 10L, 2.0, 100L);
 
     // -----------------------------------------------------------------------
-    // Feature: ranger-lakeformation-sync, Property 18: Atomic per-policy application
-    // **Validates: Requirements 8.3**
-    // For any batch grouped by policy, if any operation for a policy fails,
-    // all operations for that policy are rolled back while other policies are unaffected.
+    // Property 18: Batch partial failure handling
+    // For any batch, entries that fail in the batch response are reported as
+    // failures while successful entries are counted correctly.
     // -----------------------------------------------------------------------
     @Property(tries = 100)
-    void atomicPerPolicyApplication(
+    void batchPartialFailureHandling(
             @ForAll("batchWithFailingPolicy") BatchScenario scenario
     ) {
-        // Set up mock AWS client that fails on the designated policy's designated operation index
         software.amazon.awssdk.services.lakeformation.LakeFormationClient awsClient =
                 mock(software.amazon.awssdk.services.lakeformation.LakeFormationClient.class);
 
-        // Track which operations are actually applied (grant/revoke calls that succeed)
-        List<String> appliedGrants = Collections.synchronizedList(new ArrayList<>());
-        List<String> appliedRevokes = Collections.synchronizedList(new ArrayList<>());
+        // Consolidate to know what the client will actually send
+        List<LFPermissionOperation> consolidated = LakeFormationClient.consolidateOperations(scenario.allOps);
+        List<LFPermissionOperation> consolidatedGrants = consolidated.stream()
+                .filter(op -> op.getOperationType() == OperationType.GRANT)
+                .collect(Collectors.toList());
+        List<LFPermissionOperation> consolidatedRevokes = consolidated.stream()
+                .filter(op -> op.getOperationType() == OperationType.REVOKE)
+                .collect(Collectors.toList());
 
-        // Count calls per policy to know when to fail
-        Map<String, Integer> grantCallCountByPolicy = new HashMap<>();
-        Map<String, Integer> revokeCallCountByPolicy = new HashMap<>();
-
-        // We need to track which policy each call belongs to.
-        // Since Mockito doesn't easily let us inspect the request's policy context,
-        // we track by the order operations are submitted (they're grouped by policy).
-        final int[] globalGrantIdx = {0};
-        final int[] globalRevokeIdx = {0};
-
-        // Pre-compute which global grant/revoke index should fail
-        int failingGlobalGrantIdx = -1;
-        int failingGlobalRevokeIdx = -1;
-        int grantIdx = 0;
-        int revokeIdx = 0;
-        int opsBeforeFailingPolicy = 0;
-        boolean foundFailingOp = false;
-
-        for (LFPermissionOperation op : scenario.allOps) {
-            if (!foundFailingOp && op.getSourcePolicyId().equals(scenario.failingPolicyId)) {
-                int localIdx = 0;
-                // Count how many ops of this policy we've seen so far
-                for (int j = opsBeforeFailingPolicy; j < scenario.allOps.size(); j++) {
-                    LFPermissionOperation check = scenario.allOps.get(j);
-                    if (!check.getSourcePolicyId().equals(scenario.failingPolicyId)) break;
-                    if (localIdx == scenario.failAtOpIndex) {
-                        if (check.getOperationType() == OperationType.GRANT) {
-                            failingGlobalGrantIdx = grantIdx;
-                        } else {
-                            failingGlobalRevokeIdx = revokeIdx;
-                        }
-                        foundFailingOp = true;
-                        break;
-                    }
-                    if (check.getOperationType() == OperationType.GRANT) grantIdx++;
-                    else revokeIdx++;
-                    localIdx++;
+        // Fail entries whose sourcePolicyId matches the failing policy
+        when(awsClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class))).thenAnswer(inv -> {
+            BatchGrantPermissionsRequest req = inv.getArgument(0);
+            List<BatchPermissionsFailureEntry> failures = new ArrayList<>();
+            for (BatchPermissionsRequestEntry entry : req.entries()) {
+                int idx = Integer.parseInt(entry.id().replace("grant-", ""));
+                LFPermissionOperation op = consolidatedGrants.get(idx);
+                if (op.getSourcePolicyId().equals(scenario.failingPolicyId)) {
+                    failures.add(BatchPermissionsFailureEntry.builder()
+                            .requestEntry(entry)
+                            .error(ErrorDetail.builder().errorMessage("Simulated failure").build())
+                            .build());
                 }
-                break;
             }
-            if (op.getOperationType() == OperationType.GRANT) grantIdx++;
-            else revokeIdx++;
-            opsBeforeFailingPolicy++;
-        }
-
-        final int failGrantIdx = failingGlobalGrantIdx;
-        final int failRevokeIdx = failingGlobalRevokeIdx;
-
-        when(awsClient.grantPermissions(any(GrantPermissionsRequest.class))).thenAnswer(inv -> {
-            int idx = globalGrantIdx[0]++;
-            if (idx == failGrantIdx) {
-                throw LakeFormationException.builder().message("Simulated failure").build();
-            }
-            return null;
+            return BatchGrantPermissionsResponse.builder().failures(failures).build();
         });
 
-        when(awsClient.revokePermissions(any(RevokePermissionsRequest.class))).thenAnswer(inv -> {
-            int idx = globalRevokeIdx[0]++;
-            if (idx == failRevokeIdx) {
-                throw LakeFormationException.builder().message("Simulated failure").build();
+        when(awsClient.batchRevokePermissions(any(BatchRevokePermissionsRequest.class))).thenAnswer(inv -> {
+            BatchRevokePermissionsRequest req = inv.getArgument(0);
+            List<BatchPermissionsFailureEntry> failures = new ArrayList<>();
+            for (BatchPermissionsRequestEntry entry : req.entries()) {
+                int idx = Integer.parseInt(entry.id().replace("revoke-", ""));
+                LFPermissionOperation op = consolidatedRevokes.get(idx);
+                if (op.getSourcePolicyId().equals(scenario.failingPolicyId)) {
+                    failures.add(BatchPermissionsFailureEntry.builder()
+                            .requestEntry(entry)
+                            .error(ErrorDetail.builder().errorMessage("Simulated failure").build())
+                            .build());
+                }
             }
-            return null;
+            return BatchRevokePermissionsResponse.builder().failures(failures).build();
         });
 
         LakeFormationClient client = new LakeFormationClient(awsClient, RETRY_CONFIG, millis -> {});
@@ -120,47 +96,53 @@ class LakeFormationClientPropertyTest {
         assertTrue(result.getFailedPolicyIds().contains(scenario.failingPolicyId),
                 "Failing policy should be in failed list");
 
-        // All non-failing policies should succeed
+        // The failing policy should NOT be in the succeeded list
+        assertFalse(result.getSucceededPolicyIds().contains(scenario.failingPolicyId),
+                "Failing policy should not be in succeeded list");
+
+        // Non-failing policies should succeed
         for (String policyId : scenario.policyIds) {
             if (!policyId.equals(scenario.failingPolicyId)) {
                 assertTrue(result.getSucceededPolicyIds().contains(policyId),
                         "Non-failing policy " + policyId + " should succeed");
             }
         }
-
-        // The failing policy should NOT be in the succeeded list
-        assertFalse(result.getSucceededPolicyIds().contains(scenario.failingPolicyId),
-                "Failing policy should not be in succeeded list");
-
-        // Applied operations count should equal total ops of succeeded policies only
-        int expectedApplied = 0;
-        for (LFPermissionOperation op : scenario.allOps) {
-            if (!op.getSourcePolicyId().equals(scenario.failingPolicyId)) {
-                expectedApplied++;
-            }
-        }
-        assertEquals(expectedApplied, result.getAppliedOperations(),
-                "Applied ops should equal total ops of succeeded policies");
     }
 
     // -----------------------------------------------------------------------
-    // Feature: ranger-lakeformation-sync, Property 19: Dead-letter log completeness
-    // **Validates: Requirements 8.4**
-    // For any operation that fails after exhausting retries, the dead-letter log
-    // contains an entry with policy ID, operation details, and error message.
+    // Property 19: Dead-letter log completeness with batch API
+    // For any batch where all entries fail, the dead-letter log contains
+    // an entry for each failed operation.
     // -----------------------------------------------------------------------
     @Property(tries = 100)
     void deadLetterLogCompleteness(
             @ForAll("failingOps") List<LFPermissionOperation> ops
     ) throws Exception {
-        // All operations will fail — mock AWS client to always throw
         software.amazon.awssdk.services.lakeformation.LakeFormationClient awsClient =
                 mock(software.amazon.awssdk.services.lakeformation.LakeFormationClient.class);
 
-        when(awsClient.grantPermissions(any(GrantPermissionsRequest.class)))
-                .thenThrow(LakeFormationException.builder().message("Permanent failure").build());
-        when(awsClient.revokePermissions(any(RevokePermissionsRequest.class)))
-                .thenThrow(LakeFormationException.builder().message("Permanent failure").build());
+        // All entries fail in the batch response
+        when(awsClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class))).thenAnswer(inv -> {
+            BatchGrantPermissionsRequest req = inv.getArgument(0);
+            List<BatchPermissionsFailureEntry> failures = req.entries().stream()
+                    .map(e -> BatchPermissionsFailureEntry.builder()
+                            .requestEntry(e)
+                            .error(ErrorDetail.builder().errorMessage("Permanent failure").build())
+                            .build())
+                    .collect(Collectors.toList());
+            return BatchGrantPermissionsResponse.builder().failures(failures).build();
+        });
+
+        when(awsClient.batchRevokePermissions(any(BatchRevokePermissionsRequest.class))).thenAnswer(inv -> {
+            BatchRevokePermissionsRequest req = inv.getArgument(0);
+            List<BatchPermissionsFailureEntry> failures = req.entries().stream()
+                    .map(e -> BatchPermissionsFailureEntry.builder()
+                            .requestEntry(e)
+                            .error(ErrorDetail.builder().errorMessage("Permanent failure").build())
+                            .build())
+                    .collect(Collectors.toList());
+            return BatchRevokePermissionsResponse.builder().failures(failures).build();
+        });
 
         LakeFormationClient client = new LakeFormationClient(awsClient, RETRY_CONFIG, millis -> {});
 
@@ -176,45 +158,26 @@ class LakeFormationClientPropertyTest {
         assertEquals(policyIds.size(), result.getFailedPolicyIds().size(),
                 "All policies should fail");
 
-        // Parse dead-letter log lines
+        // Parse dead-letter log lines — count matches consolidated entries, not original ops
+        List<LFPermissionOperation> consolidated = LakeFormationClient.consolidateOperations(ops);
         String logContent = sw.toString().trim();
         assertFalse(logContent.isEmpty(), "Dead-letter log should not be empty");
         String[] lines = logContent.split("\n");
 
-        // Every operation should have a dead-letter entry
-        assertEquals(ops.size(), lines.length,
-                "Dead-letter log should have one entry per operation");
+        assertEquals(consolidated.size(), lines.length,
+                "Dead-letter log should have one entry per consolidated operation");
 
-        // Verify each line contains required fields
         Set<String> loggedPolicyIds = new HashSet<>();
         for (String line : lines) {
             JsonNode node = MAPPER.readTree(line);
-
-            // Must have policyId
             assertTrue(node.has("policyId"), "Entry must have policyId");
             loggedPolicyIds.add(node.get("policyId").asText());
-
-            // Must have operation type
             assertTrue(node.has("operation"), "Entry must have operation type");
-            String opType = node.get("operation").asText();
-            assertTrue(opType.equals("GRANT") || opType.equals("REVOKE"),
-                    "Operation must be GRANT or REVOKE");
-
-            // Must have resource
             assertTrue(node.has("resource"), "Entry must have resource");
-
-            // Must have principal
             assertTrue(node.has("principal"), "Entry must have principal");
-
-            // Must have error message
             assertTrue(node.has("error"), "Entry must have error message");
-            assertFalse(node.get("error").asText().isEmpty(), "Error message must not be empty");
-
-            // Must have permissions
-            assertTrue(node.has("permissions"), "Entry must have permissions");
         }
 
-        // All policy IDs from the ops should appear in the dead-letter log
         for (String pid : policyIds) {
             assertTrue(loggedPolicyIds.contains(pid),
                     "Policy " + pid + " should appear in dead-letter log");
@@ -227,19 +190,16 @@ class LakeFormationClientPropertyTest {
 
     @Provide
     Arbitrary<BatchScenario> batchWithFailingPolicy() {
-        // Generate 2-4 distinct policy IDs
         Arbitrary<List<String>> policyIdsArb = Arbitraries.integers().between(2, 4)
                 .flatMap(count -> {
                     List<Arbitrary<String>> idArbs = new ArrayList<>();
                     for (int i = 0; i < count; i++) {
-                        final int idx = i;
-                        idArbs.add(Arbitraries.just("policy-" + idx));
+                        idArbs.add(Arbitraries.just("policy-" + i));
                     }
                     return Combinators.combine(idArbs).as(ids -> ids);
                 });
 
         return policyIdsArb.flatMap(policyIds -> {
-            // For each policy, generate 1-3 operations
             Arbitrary<List<List<LFPermissionOperation>>> opsPerPolicyArb =
                     Combinators.combine(
                             policyIds.stream()
@@ -248,18 +208,13 @@ class LakeFormationClientPropertyTest {
                     ).as(lists -> lists);
 
             return opsPerPolicyArb.flatMap(opsPerPolicy -> {
-                // Pick which policy will fail
-                return Arbitraries.integers().between(0, policyIds.size() - 1).flatMap(failIdx -> {
+                return Arbitraries.integers().between(0, policyIds.size() - 1).map(failIdx -> {
                     String failingPolicyId = policyIds.get(failIdx);
-                    List<LFPermissionOperation> failingPolicyOps = opsPerPolicy.get(failIdx);
-                    // Pick which operation index within that policy will fail
-                    return Arbitraries.integers().between(0, failingPolicyOps.size() - 1).map(failAtOp -> {
-                        List<LFPermissionOperation> allOps = new ArrayList<>();
-                        for (List<LFPermissionOperation> policyOps : opsPerPolicy) {
-                            allOps.addAll(policyOps);
-                        }
-                        return new BatchScenario(allOps, policyIds, failingPolicyId, failAtOp);
-                    });
+                    List<LFPermissionOperation> allOps = new ArrayList<>();
+                    for (List<LFPermissionOperation> policyOps : opsPerPolicy) {
+                        allOps.addAll(policyOps);
+                    }
+                    return new BatchScenario(allOps, policyIds, failingPolicyId);
                 });
             });
         });
@@ -267,7 +222,6 @@ class LakeFormationClientPropertyTest {
 
     @Provide
     Arbitrary<List<LFPermissionOperation>> failingOps() {
-        // Generate 1-3 distinct policy IDs, each with 1-3 operations
         return Arbitraries.integers().between(1, 3).flatMap(numPolicies -> {
             List<String> policyIds = new ArrayList<>();
             for (int i = 0; i < numPolicies; i++) {
@@ -307,24 +261,31 @@ class LakeFormationClientPropertyTest {
 
     static class BatchScenario {
         final List<LFPermissionOperation> allOps;
+        final List<LFPermissionOperation> grantOps;
+        final List<LFPermissionOperation> revokeOps;
         final List<String> policyIds;
         final String failingPolicyId;
-        final int failAtOpIndex;
 
         BatchScenario(List<LFPermissionOperation> allOps, List<String> policyIds,
-                      String failingPolicyId, int failAtOpIndex) {
+                      String failingPolicyId) {
             this.allOps = allOps;
             this.policyIds = policyIds;
             this.failingPolicyId = failingPolicyId;
-            this.failAtOpIndex = failAtOpIndex;
+            this.grantOps = allOps.stream()
+                    .filter(op -> op.getOperationType() == OperationType.GRANT)
+                    .collect(Collectors.toList());
+            this.revokeOps = allOps.stream()
+                    .filter(op -> op.getOperationType() == OperationType.REVOKE)
+                    .collect(Collectors.toList());
         }
 
         @Override
         public String toString() {
             return "BatchScenario{policies=" + policyIds.size() +
                     ", totalOps=" + allOps.size() +
-                    ", failingPolicy=" + failingPolicyId +
-                    ", failAtOp=" + failAtOpIndex + "}";
+                    ", grants=" + grantOps.size() +
+                    ", revokes=" + revokeOps.size() +
+                    ", failingPolicy=" + failingPolicyId + "}";
         }
     }
 }

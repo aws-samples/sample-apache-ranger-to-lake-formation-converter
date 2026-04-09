@@ -8,6 +8,13 @@ import com.amazonaws.policyconverters.sync.DeadLetterLogger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.lakeformation.model.ConcurrentModificationException;
+import software.amazon.awssdk.services.lakeformation.model.InvalidInputException;
+import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsRequestEntry;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsFailureEntry;
 import software.amazon.awssdk.services.lakeformation.model.GrantPermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.DataLakePrincipal;
@@ -20,9 +27,12 @@ import software.amazon.awssdk.services.lakeformation.model.DataLocationResource;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -127,142 +137,329 @@ public class LakeFormationClient {
         RevokePermissionsRequest request = requestBuilder.build();
 
         executeWithRetry("REVOKE", op, () -> {
-            lfClient.revokePermissions(request);
+            try {
+                lfClient.revokePermissions(request);
+            } catch (InvalidInputException e) {
+                if (e.getMessage() != null && e.getMessage().contains("No permissions revoked")) {
+                    LOG.info("Revoke is a no-op for policyId={}: grantee has no permissions on resource",
+                            op.getSourcePolicyId());
+                } else {
+                    throw e;
+                }
+            }
             return null;
         });
     }
 
+    /** Maximum entries per BatchGrant/BatchRevoke API call. */
+    private static final int MAX_BATCH_SIZE = 20;
+
     /**
-     * Apply a batch of operations atomically per policy.
-     * Operations are grouped by source policy ID and applied sequentially.
-     * If any operation for a policy fails after retries, all previously applied
-     * operations for that policy are rolled back. Failed operations are written
-     * to the dead-letter log.
+     * Apply a batch of operations using BatchGrantPermissions and BatchRevokePermissions.
+     * Operations are first consolidated (merging columns and permissions for the same
+     * principal/resource), then split into grants and revokes, chunked into groups of
+     * up to 20 (the LF API limit), and sent as batch calls. Partial failures from the
+     * batch response are logged to the dead-letter log.
      *
-     * @param operations  the list of LF permission operations to apply
+     * @param operations     the list of LF permission operations to apply
      * @param deadLetterLogger logger for failed operations (may be null to skip dead-letter logging)
      * @return BatchResult summarizing successes and failures
      */
     public BatchResult applyBatch(List<LFPermissionOperation> operations, DeadLetterLogger deadLetterLogger) {
-        // Group operations by source policy ID, preserving insertion order
-        Map<String, List<LFPermissionOperation>> byPolicy = new LinkedHashMap<>();
-        for (LFPermissionOperation op : operations) {
-            String policyId = op.getSourcePolicyId() != null ? op.getSourcePolicyId() : "__unknown__";
-            if (!byPolicy.containsKey(policyId)) {
-                byPolicy.put(policyId, new ArrayList<LFPermissionOperation>());
+        // Consolidate operations before batching
+        List<LFPermissionOperation> consolidated = consolidateOperations(operations);
+        LOG.info("Consolidated {} operations into {} entries", operations.size(), consolidated.size());
+
+        List<LFPermissionOperation> grants = new ArrayList<>();
+        List<LFPermissionOperation> revokes = new ArrayList<>();
+        for (LFPermissionOperation op : consolidated) {
+            if (op.getOperationType() == LFPermissionOperation.OperationType.GRANT) {
+                grants.add(op);
+            } else {
+                revokes.add(op);
             }
-            byPolicy.get(policyId).add(op);
         }
 
         List<String> succeededPolicies = new ArrayList<>();
         List<String> failedPolicies = new ArrayList<>();
-        int totalOps = operations.size();
         int appliedOps = 0;
-        int rolledBackOps = 0;
+        int failedOps = 0;
 
-        for (Map.Entry<String, List<LFPermissionOperation>> entry : byPolicy.entrySet()) {
-            String policyId = entry.getKey();
-            List<LFPermissionOperation> policyOps = entry.getValue();
-            List<LFPermissionOperation> appliedForPolicy = new ArrayList<>();
-            boolean policyFailed = false;
-            String failureError = null;
-
-            for (LFPermissionOperation op : policyOps) {
-                try {
-                    applyOperation(op);
-                    appliedForPolicy.add(op);
-                } catch (LakeFormationClientException e) {
-                    policyFailed = true;
-                    failureError = e.getMessage();
-                    LOG.error("Operation failed for policyId={}, triggering rollback of {} applied operations: {}",
-                            policyId, appliedForPolicy.size(), e.getMessage());
-
-                    // Write the failed operation to dead-letter log
-                    if (deadLetterLogger != null) {
-                        deadLetterLogger.logFailedOperation(op, e.getMessage(), retryConfig.getMaxRetries());
-                    }
-                    break;
-                }
-            }
-
-            if (policyFailed) {
-                // Rollback all previously applied operations for this policy
-                int rolledBack = rollbackOperations(appliedForPolicy, policyId);
-                rolledBackOps += rolledBack;
-                failedPolicies.add(policyId);
-
-                // Also log remaining unapplied operations to dead-letter if they exist
-                if (deadLetterLogger != null) {
-                    int failedIdx = appliedForPolicy.size() + 1; // +1 for the one that failed
-                    for (int i = failedIdx; i < policyOps.size(); i++) {
-                        deadLetterLogger.logFailedOperation(policyOps.get(i),
-                                "Skipped due to earlier failure in policy batch: " + failureError, 0);
-                    }
-                }
-            } else {
-                appliedOps += appliedForPolicy.size();
-                succeededPolicies.add(policyId);
-            }
+        // Process grants in chunks of MAX_BATCH_SIZE
+        for (int i = 0; i < grants.size(); i += MAX_BATCH_SIZE) {
+            List<LFPermissionOperation> chunk = grants.subList(i, Math.min(i + MAX_BATCH_SIZE, grants.size()));
+            int[] result = executeBatchGrant(chunk, deadLetterLogger, succeededPolicies, failedPolicies);
+            appliedOps += result[0];
+            failedOps += result[1];
         }
 
-        BatchResult result = new BatchResult(succeededPolicies, failedPolicies, totalOps, appliedOps, rolledBackOps);
-        LOG.info("Batch application complete: {}", result);
+        // Process revokes in chunks of MAX_BATCH_SIZE
+        for (int i = 0; i < revokes.size(); i += MAX_BATCH_SIZE) {
+            List<LFPermissionOperation> chunk = revokes.subList(i, Math.min(i + MAX_BATCH_SIZE, revokes.size()));
+            int[] result = executeBatchRevoke(chunk, deadLetterLogger, succeededPolicies, failedPolicies);
+            appliedOps += result[0];
+            failedOps += result[1];
+        }
+
+        BatchResult batchResult = new BatchResult(
+                succeededPolicies, failedPolicies, operations.size(), appliedOps, 0);
+        LOG.info("Batch application complete: {}", batchResult);
+        return batchResult;
+    }
+
+    /**
+     * Consolidate operations that share the same principal, resource base (catalog, database,
+     * table, data location, row filter), operation type, and grantable flag. Merges:
+     * <ul>
+     *   <li>Columns: multiple single-column ops become one multi-column op</li>
+     *   <li>Permissions: multiple single-permission ops become one multi-permission op</li>
+     * </ul>
+     * This reduces the number of batch entries sent to the LF API.
+     */
+    static List<LFPermissionOperation> consolidateOperations(List<LFPermissionOperation> operations) {
+        // Key: everything except columns and permissions
+        Map<ConsolidationKey, MergedOp> merged = new LinkedHashMap<>();
+
+        for (LFPermissionOperation op : operations) {
+            ConsolidationKey key = new ConsolidationKey(op);
+            merged.computeIfAbsent(key, k -> new MergedOp(op)).merge(op);
+        }
+
+        List<LFPermissionOperation> result = new ArrayList<>(merged.size());
+        for (MergedOp m : merged.values()) {
+            result.add(m.toOperation());
+        }
         return result;
     }
 
     /**
-     * Apply a single operation (grant or revoke) using the appropriate method.
+     * Key for consolidation: groups operations by everything except columns and permissions.
      */
-    private void applyOperation(LFPermissionOperation op) throws LakeFormationClientException {
-        if (op.getOperationType() == LFPermissionOperation.OperationType.GRANT) {
-            grantPermission(op);
-        } else {
-            revokePermission(op);
+    private static final class ConsolidationKey {
+        private final LFPermissionOperation.OperationType opType;
+        private final String sourcePolicyId;
+        private final String principalArn;
+        private final String catalogId;
+        private final String databaseName;
+        private final String tableName;
+        private final String dataLocationPath;
+        private final String rowFilterExpression;
+        private final boolean grantable;
+
+        ConsolidationKey(LFPermissionOperation op) {
+            this.opType = op.getOperationType();
+            this.sourcePolicyId = op.getSourcePolicyId();
+            this.principalArn = op.getPrincipalArn();
+            LFResource r = op.getResource();
+            this.catalogId = r.getCatalogId();
+            this.databaseName = r.getDatabaseName();
+            this.tableName = r.getTableName();
+            this.dataLocationPath = r.getDataLocationPath();
+            this.rowFilterExpression = r.getRowFilterExpression();
+            this.grantable = op.isGrantable();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            ConsolidationKey that = (ConsolidationKey) o;
+            return grantable == that.grantable
+                    && opType == that.opType
+                    && Objects.equals(sourcePolicyId, that.sourcePolicyId)
+                    && Objects.equals(principalArn, that.principalArn)
+                    && Objects.equals(catalogId, that.catalogId)
+                    && Objects.equals(databaseName, that.databaseName)
+                    && Objects.equals(tableName, that.tableName)
+                    && Objects.equals(dataLocationPath, that.dataLocationPath)
+                    && Objects.equals(rowFilterExpression, that.rowFilterExpression);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(opType, sourcePolicyId, principalArn, catalogId, databaseName,
+                    tableName, dataLocationPath, rowFilterExpression, grantable);
         }
     }
 
     /**
-     * Rollback previously applied operations by reversing them.
-     * Grants are reversed with revokes, and revokes are reversed with grants.
-     * Rollback failures are logged but do not propagate.
-     *
-     * @return the number of operations successfully rolled back
+     * Accumulator for merging columns and permissions across operations with the same key.
      */
-    private int rollbackOperations(List<LFPermissionOperation> appliedOps, String policyId) {
-        int rolledBack = 0;
-        // Reverse in opposite order of application
-        for (int i = appliedOps.size() - 1; i >= 0; i--) {
-            LFPermissionOperation original = appliedOps.get(i);
-            try {
-                if (original.getOperationType() == LFPermissionOperation.OperationType.GRANT) {
-                    // Reverse a grant by revoking
-                    LFPermissionOperation reversal = new LFPermissionOperation(
-                            LFPermissionOperation.OperationType.REVOKE,
-                            original.getSourcePolicyId(),
-                            original.getPrincipalArn(),
-                            original.getResource(),
-                            original.getPermissions(),
-                            original.isGrantable());
-                    revokePermission(reversal);
-                } else {
-                    // Reverse a revoke by granting
-                    LFPermissionOperation reversal = new LFPermissionOperation(
-                            LFPermissionOperation.OperationType.GRANT,
-                            original.getSourcePolicyId(),
-                            original.getPrincipalArn(),
-                            original.getResource(),
-                            original.getPermissions(),
-                            original.isGrantable());
-                    grantPermission(reversal);
-                }
-                rolledBack++;
-            } catch (LakeFormationClientException e) {
-                LOG.error("Rollback failed for policyId={}, operation={}: {}",
-                        policyId, original, e.getMessage());
+    private static final class MergedOp {
+        private final LFPermissionOperation.OperationType opType;
+        private final String sourcePolicyId;
+        private final String principalArn;
+        private final String catalogId;
+        private final String databaseName;
+        private final String tableName;
+        private final String dataLocationPath;
+        private final String rowFilterExpression;
+        private final boolean grantable;
+        private final Set<String> columns = new HashSet<>();
+        private final EnumSet<LFPermission> permissions = EnumSet.noneOf(LFPermission.class);
+
+        MergedOp(LFPermissionOperation op) {
+            this.opType = op.getOperationType();
+            this.sourcePolicyId = op.getSourcePolicyId();
+            this.principalArn = op.getPrincipalArn();
+            LFResource r = op.getResource();
+            this.catalogId = r.getCatalogId();
+            this.databaseName = r.getDatabaseName();
+            this.tableName = r.getTableName();
+            this.dataLocationPath = r.getDataLocationPath();
+            this.rowFilterExpression = r.getRowFilterExpression();
+            this.grantable = op.isGrantable();
+        }
+
+        void merge(LFPermissionOperation op) {
+            permissions.addAll(op.getPermissions());
+            if (op.getResource().getColumnNames() != null) {
+                columns.addAll(op.getResource().getColumnNames());
             }
         }
-        LOG.info("Rolled back {}/{} operations for policyId={}", rolledBack, appliedOps.size(), policyId);
-        return rolledBack;
+
+        LFPermissionOperation toOperation() {
+            Set<String> cols = columns.isEmpty() ? null : columns;
+            LFResource resource = new LFResource(
+                    catalogId, databaseName, tableName, cols,
+                    rowFilterExpression, dataLocationPath);
+            return new LFPermissionOperation(
+                    opType, sourcePolicyId, principalArn, resource, permissions, grantable);
+        }
+    }
+
+    /**
+     * Execute a BatchGrantPermissions call for a chunk of up to 20 operations.
+     * Returns [appliedCount, failedCount].
+     */
+    private int[] executeBatchGrant(List<LFPermissionOperation> ops, DeadLetterLogger deadLetterLogger,
+                                    List<String> succeededPolicies, List<String> failedPolicies) {
+        List<BatchPermissionsRequestEntry> entries = new ArrayList<>();
+        Map<String, LFPermissionOperation> entryIdToOp = new LinkedHashMap<>();
+
+        for (int i = 0; i < ops.size(); i++) {
+            LFPermissionOperation op = ops.get(i);
+            String entryId = "grant-" + i;
+            entries.add(toBatchEntry(entryId, op));
+            entryIdToOp.put(entryId, op);
+        }
+
+        BatchGrantPermissionsRequest request = BatchGrantPermissionsRequest.builder()
+                .entries(entries)
+                .build();
+
+        LOG.info("Sending BatchGrantPermissions with {} entries", entries.size());
+        BatchGrantPermissionsResponse response = lfClient.batchGrantPermissions(request);
+
+        return processBatchFailures(response.failures(), entryIdToOp,
+                "GRANT", deadLetterLogger, succeededPolicies, failedPolicies);
+    }
+
+    /**
+     * Execute a BatchRevokePermissions call for a chunk of up to 20 operations.
+     * Returns [appliedCount, failedCount].
+     */
+    private int[] executeBatchRevoke(List<LFPermissionOperation> ops, DeadLetterLogger deadLetterLogger,
+                                     List<String> succeededPolicies, List<String> failedPolicies) {
+        List<BatchPermissionsRequestEntry> entries = new ArrayList<>();
+        Map<String, LFPermissionOperation> entryIdToOp = new LinkedHashMap<>();
+
+        for (int i = 0; i < ops.size(); i++) {
+            LFPermissionOperation op = ops.get(i);
+            String entryId = "revoke-" + i;
+            entries.add(toBatchEntry(entryId, op));
+            entryIdToOp.put(entryId, op);
+        }
+
+        BatchRevokePermissionsRequest request = BatchRevokePermissionsRequest.builder()
+                .entries(entries)
+                .build();
+
+        LOG.info("Sending BatchRevokePermissions with {} entries", entries.size());
+        BatchRevokePermissionsResponse response = lfClient.batchRevokePermissions(request);
+
+        return processBatchFailures(response.failures(), entryIdToOp,
+                "REVOKE", deadLetterLogger, succeededPolicies, failedPolicies);
+    }
+
+    /**
+     * Process batch response failures. Returns [appliedCount, failedCount].
+     * Entries not in the failures list are considered successful.
+     */
+    private int[] processBatchFailures(List<BatchPermissionsFailureEntry> failures,
+                                       Map<String, LFPermissionOperation> entryIdToOp,
+                                       String operationType, DeadLetterLogger deadLetterLogger,
+                                       List<String> succeededPolicies, List<String> failedPolicies) {
+        // Collect failed entry IDs
+        Set<String> failedEntryIds = new java.util.HashSet<>();
+        if (failures != null) {
+            for (BatchPermissionsFailureEntry failure : failures) {
+                String entryId = failure.requestEntry().id();
+                String errorMsg = failure.error() != null ? failure.error().errorMessage() : "Unknown error";
+
+                // Treat "No permissions revoked" as a no-op success
+                if ("REVOKE".equals(operationType) && errorMsg != null
+                        && errorMsg.contains("No permissions revoked")) {
+                    LFPermissionOperation op = entryIdToOp.get(entryId);
+                    LOG.info("Revoke is a no-op for policyId={}: grantee has no permissions on resource",
+                            op != null ? op.getSourcePolicyId() : entryId);
+                    continue;
+                }
+
+                failedEntryIds.add(entryId);
+                LFPermissionOperation op = entryIdToOp.get(entryId);
+                LOG.error("Batch {} failed for entryId={}, policyId={}: {}",
+                        operationType, entryId,
+                        op != null ? op.getSourcePolicyId() : "unknown", errorMsg);
+
+                if (deadLetterLogger != null && op != null) {
+                    deadLetterLogger.logFailedOperation(op, errorMsg, 0);
+                }
+            }
+        }
+
+        int failedCount = failedEntryIds.size();
+        int appliedCount = entryIdToOp.size() - failedCount;
+
+        // Track succeeded/failed policy IDs
+        for (Map.Entry<String, LFPermissionOperation> entry : entryIdToOp.entrySet()) {
+            String policyId = entry.getValue().getSourcePolicyId() != null
+                    ? entry.getValue().getSourcePolicyId() : "__unknown__";
+            if (failedEntryIds.contains(entry.getKey())) {
+                if (!failedPolicies.contains(policyId)) {
+                    failedPolicies.add(policyId);
+                }
+            } else {
+                if (!succeededPolicies.contains(policyId) && !failedPolicies.contains(policyId)) {
+                    succeededPolicies.add(policyId);
+                }
+            }
+        }
+
+        return new int[]{appliedCount, failedCount};
+    }
+
+    /**
+     * Convert an LFPermissionOperation to a BatchPermissionsRequestEntry.
+     */
+    private BatchPermissionsRequestEntry toBatchEntry(String entryId, LFPermissionOperation op) {
+        Resource resource = buildResource(op.getResource());
+        DataLakePrincipal principal = DataLakePrincipal.builder()
+                .dataLakePrincipalIdentifier(op.getPrincipalArn())
+                .build();
+        Collection<Permission> permissions = toLfPermissions(op.getPermissions());
+
+        BatchPermissionsRequestEntry.Builder builder = BatchPermissionsRequestEntry.builder()
+                .id(entryId)
+                .principal(principal)
+                .resource(resource)
+                .permissions(permissions);
+
+        if (op.isGrantable()) {
+            builder.permissionsWithGrantOption(permissions);
+        }
+
+        return builder.build();
     }
 
     /**

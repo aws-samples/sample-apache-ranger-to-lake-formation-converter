@@ -4,6 +4,8 @@ import com.amazonaws.policyconverters.config.AwsConfig;
 import com.amazonaws.policyconverters.config.RangerConnectionConfig;
 import com.amazonaws.policyconverters.config.SyncConfig;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -14,6 +16,7 @@ import java.util.List;
  */
 public class ConfigValidator {
 
+    private static final Logger logger = LoggerFactory.getLogger(ConfigValidator.class);
     /**
      * Validate the given configuration and return a list of descriptive error messages.
      * An empty list means the configuration is valid.
@@ -72,12 +75,12 @@ public class ConfigValidator {
             errors.add("Missing required parameter: awsConfig.catalogId");
         }
 
-        boolean hasStaticCreds = !isBlank(awsConfig.getAccessKey()) && !isBlank(awsConfig.getSecretKey());
-        boolean hasRoleArn = !isBlank(awsConfig.getRoleArn());
-
-        if (!hasStaticCreds && !hasRoleArn) {
-            errors.add("Missing required parameter: awsConfig must have either "
-                    + "accessKey+secretKey or roleArn");
+        if (!isBlank(awsConfig.getAccessKey()) && !isBlank(awsConfig.getSecretKey())){
+            logger.info("Using Static AWS credentials for AWS access");
+        } else if (!isBlank(awsConfig.getRoleArn())) {
+            logger.info("Using IAM role : " + awsConfig.getRoleArn() + " for AWS access");
+        } else {
+            logger.info("Using default credentials provider for AWS access. ");
         }
     }
 

@@ -85,6 +85,30 @@ public class MetricsEmitter {
         );
     }
 
+    /**
+     * Records a metric when a Ranger access type cannot be mapped.
+     * Publishes UnmappedAccessType count with an AccessType dimension
+     * so alarms can be configured in CloudWatch.
+     *
+     * @param accessType the unmapped Ranger access type
+     */
+    public void recordUnmappedAccessType(String accessType) {
+        Dimension serviceDimension = serviceDimension();
+        Dimension accessTypeDimension = Dimension.builder()
+                .name("AccessType")
+                .value(accessType != null ? accessType : "null")
+                .build();
+        List<MetricDatum> metrics = List.of(
+                MetricDatum.builder()
+                        .metricName("UnmappedAccessType")
+                        .value(1.0)
+                        .unit(StandardUnit.COUNT)
+                        .dimensions(serviceDimension, accessTypeDimension)
+                        .build()
+        );
+        publish(metrics);
+    }
+
     private static MetricDatum datum(String name, double value, StandardUnit unit, Dimension... dimensions) {
         return MetricDatum.builder()
                 .metricName(name)
