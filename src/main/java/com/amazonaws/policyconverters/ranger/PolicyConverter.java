@@ -531,6 +531,8 @@ public class PolicyConverter {
         return arns;
     }
 
+    private static final String ALL_WILDCARD = "*";
+
     /**
      * Build LF permission operations for all expanded resource combinations.
      */
@@ -541,37 +543,50 @@ public class PolicyConverter {
 
         List<LFPermissionOperation> operations = new ArrayList<>();
 
+        // Detect if the table resource is exactly "*" (all tables wildcard).
+        // This maps to Lake Formation's TableWildcard, which covers all current
+        // and future tables — no need to expand against the Glue catalog.
+        boolean isAllTablesWildcard = tablePatterns != null
+                && tablePatterns.size() == 1
+                && ALL_WILDCARD.equals(tablePatterns.get(0).trim());
+
         for (String db : databases) {
-            List<String> expandedTables = expandTablePatterns(tablePatterns, db, catalogResolver);
+            if (isAllTablesWildcard) {
+                LFResource resource = LFResource.allTablesResource(catalogId, db);
+                operations.add(new LFPermissionOperation(
+                        OperationType.GRANT, policyId, principalArn, resource, permissions, delegateAdmin));
+            } else {
+                List<String> expandedTables = expandTablePatterns(tablePatterns, db, catalogResolver);
 
-            for (String table : expandedTables) {
-                if (table == null) {
-                    // Database-level permission
-                    LFResource resource = new LFResource(catalogId, db, null, null, null);
-                    operations.add(new LFPermissionOperation(
-                            OperationType.GRANT, policyId, principalArn, resource, permissions, delegateAdmin));
-                } else {
-                    Set<String> expandedColumns = expandColumnPatterns(columnPatterns, db, table, catalogResolver);
-
-                    if (expandedColumns.isEmpty()) {
-                        // Table-level permission (no columns specified)
-                        LFResource resource = new LFResource(catalogId, db, table, null, null);
+                for (String table : expandedTables) {
+                    if (table == null) {
+                        // Database-level permission
+                        LFResource resource = new LFResource(catalogId, db, null, null, null);
                         operations.add(new LFPermissionOperation(
                                 OperationType.GRANT, policyId, principalArn, resource, permissions, delegateAdmin));
                     } else {
-                        // Column-level permission — DESCRIBE is not valid at column level in LF
-                        Set<LFPermission> columnPermissions = EnumSet.copyOf(permissions);
-                        columnPermissions.remove(LFPermission.DESCRIBE);
-                        if (columnPermissions.isEmpty()) {
-                            LOG.warn("PolicyConverter: skipping column-level operation for policy {} "
-                                    + "on {}.{} — no valid permissions remain after removing DESCRIBE",
-                                    policyId, db, table);
-                            continue;
+                        Set<String> expandedColumns = expandColumnPatterns(columnPatterns, db, table, catalogResolver);
+
+                        if (expandedColumns.isEmpty()) {
+                            // Table-level permission (no columns specified)
+                            LFResource resource = new LFResource(catalogId, db, table, null, null);
+                            operations.add(new LFPermissionOperation(
+                                    OperationType.GRANT, policyId, principalArn, resource, permissions, delegateAdmin));
+                        } else {
+                            // Column-level permission — DESCRIBE is not valid at column level in LF
+                            Set<LFPermission> columnPermissions = EnumSet.copyOf(permissions);
+                            columnPermissions.remove(LFPermission.DESCRIBE);
+                            if (columnPermissions.isEmpty()) {
+                                LOG.warn("PolicyConverter: skipping column-level operation for policy {} "
+                                        + "on {}.{} — no valid permissions remain after removing DESCRIBE",
+                                        policyId, db, table);
+                                continue;
+                            }
+                            LFResource resource = new LFResource(catalogId, db, table, expandedColumns, null);
+                            operations.add(new LFPermissionOperation(
+                                    OperationType.GRANT, policyId, principalArn, resource,
+                                    Collections.unmodifiableSet(columnPermissions), delegateAdmin));
                         }
-                        LFResource resource = new LFResource(catalogId, db, table, expandedColumns, null);
-                        operations.add(new LFPermissionOperation(
-                                OperationType.GRANT, policyId, principalArn, resource,
-                                Collections.unmodifiableSet(columnPermissions), delegateAdmin));
                     }
                 }
             }

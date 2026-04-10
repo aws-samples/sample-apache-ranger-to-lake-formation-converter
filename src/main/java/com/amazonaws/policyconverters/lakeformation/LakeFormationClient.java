@@ -22,6 +22,7 @@ import software.amazon.awssdk.services.lakeformation.model.Permission;
 import software.amazon.awssdk.services.lakeformation.model.Resource;
 import software.amazon.awssdk.services.lakeformation.model.DatabaseResource;
 import software.amazon.awssdk.services.lakeformation.model.TableResource;
+import software.amazon.awssdk.services.lakeformation.model.TableWildcard;
 import software.amazon.awssdk.services.lakeformation.model.TableWithColumnsResource;
 import software.amazon.awssdk.services.lakeformation.model.DataLocationResource;
 
@@ -510,6 +511,13 @@ public class LakeFormationClient {
             builder.dataLocation(DataLocationResource.builder()
                     .catalogId(lfResource.getCatalogId())
                     .resourceArn(lfResource.getDataLocationPath())
+                    .build());
+        } else if (lfResource.isAllTables()) {
+            // All tables wildcard — applies to all current and future tables in the database
+            builder.table(TableResource.builder()
+                    .catalogId(lfResource.getCatalogId())
+                    .databaseName(lfResource.getDatabaseName())
+                    .tableWildcard(TableWildcard.builder().build())
                     .build());
         } else if (lfResource.getTableName() == null) {
             // Database-level resource

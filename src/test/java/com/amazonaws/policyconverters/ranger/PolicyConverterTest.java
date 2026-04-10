@@ -229,6 +229,27 @@ class PolicyConverterTest {
     // Helper methods (matching patterns from PolicyConverterPropertyTest)
     // -----------------------------------------------------------------------
 
+    // -----------------------------------------------------------------------
+    // Test 7: Policy with table = "*" produces allTables resource (TABLE_WILDCARD)
+    // -----------------------------------------------------------------------
+    @Test
+    @DisplayName("table wildcard '*' produces allTables LF resource instead of expanding")
+    void tableWildcardStarProducesAllTablesResource() {
+        RangerPolicy policy = buildPolicy(7L, "analytics", "*",
+                new HashSet<>(Arrays.asList("select")), "analyst");
+
+        List<LFPermissionOperation> ops = converter.convert(
+                policy, principalMapper, catalogResolver, gapReporter);
+
+        assertEquals(1, ops.size(), "Should produce exactly one operation for allTables");
+        LFPermissionOperation op = ops.get(0);
+        assertEquals(OperationType.GRANT, op.getOperationType());
+        assertTrue(op.getResource().isAllTables(), "Resource should be allTables");
+        assertEquals("analytics", op.getResource().getDatabaseName());
+        assertNull(op.getResource().getTableName(), "tableName should be null for allTables");
+        assertEquals(EnumSet.of(LFPermission.SELECT), op.getPermissions());
+    }
+
     private static RangerPolicy buildPolicy(Long id, String database, String table,
                                             Set<String> accessTypes, String userName) {
         RangerPolicy policy = new RangerPolicy();

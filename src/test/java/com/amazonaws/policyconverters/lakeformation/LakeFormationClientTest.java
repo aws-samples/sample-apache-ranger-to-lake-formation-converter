@@ -35,6 +35,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -223,6 +224,17 @@ class LakeFormationClientTest {
         assertEquals("mydb", result.tableWithColumns().databaseName());
         assertEquals("mytable", result.tableWithColumns().name());
         assertTrue(result.tableWithColumns().columnNames().containsAll(cols));
+    }
+
+    @Test
+    void buildResource_allTablesWildcard() {
+        LFResource allTablesResource = LFResource.allTablesResource("cat1", "mydb");
+        software.amazon.awssdk.services.lakeformation.model.Resource result = client.buildResource(allTablesResource);
+
+        assertNotNull(result.table(), "Should produce a table resource");
+        assertEquals("cat1", result.table().catalogId());
+        assertEquals("mydb", result.table().databaseName());
+        assertNotNull(result.table().tableWildcard(), "Should have tableWildcard set");
     }
 
     // --- Grantable flag test ---

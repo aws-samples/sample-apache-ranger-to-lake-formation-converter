@@ -22,6 +22,7 @@ public class LFResource {
     private final Set<String> columnNames;
     private final String rowFilterExpression;
     private final String dataLocationPath;
+    private final boolean allTables;
 
     @JsonCreator
     public LFResource(
@@ -30,12 +31,18 @@ public class LFResource {
             @JsonProperty("tableName") String tableName,
             @JsonProperty("columnNames") Set<String> columnNames,
             @JsonProperty("rowFilterExpression") String rowFilterExpression) {
-        this(catalogId, databaseName, tableName, columnNames, rowFilterExpression, null);
+        this(catalogId, databaseName, tableName, columnNames, rowFilterExpression, null, false);
     }
 
     public LFResource(String catalogId, String databaseName, String tableName,
                       Set<String> columnNames, String rowFilterExpression,
                       String dataLocationPath) {
+        this(catalogId, databaseName, tableName, columnNames, rowFilterExpression, dataLocationPath, false);
+    }
+
+    public LFResource(String catalogId, String databaseName, String tableName,
+                      Set<String> columnNames, String rowFilterExpression,
+                      String dataLocationPath, boolean allTables) {
         this.catalogId = catalogId;
         this.databaseName = databaseName;
         this.tableName = tableName;
@@ -44,6 +51,14 @@ public class LFResource {
                 : null;
         this.rowFilterExpression = rowFilterExpression;
         this.dataLocationPath = dataLocationPath;
+        this.allTables = allTables;
+    }
+
+    /**
+     * Create an LFResource representing all tables in a database (TABLE_WILDCARD).
+     */
+    public static LFResource allTablesResource(String catalogId, String databaseName) {
+        return new LFResource(catalogId, databaseName, null, null, null, null, true);
     }
 
     public String getCatalogId() {
@@ -70,6 +85,10 @@ public class LFResource {
         return dataLocationPath;
     }
 
+    public boolean isAllTables() {
+        return allTables;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -80,12 +99,13 @@ public class LFResource {
                 && Objects.equals(tableName, that.tableName)
                 && Objects.equals(columnNames, that.columnNames)
                 && Objects.equals(rowFilterExpression, that.rowFilterExpression)
-                && Objects.equals(dataLocationPath, that.dataLocationPath);
+                && Objects.equals(dataLocationPath, that.dataLocationPath)
+                && allTables == that.allTables;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(catalogId, databaseName, tableName, columnNames, rowFilterExpression, dataLocationPath);
+        return Objects.hash(catalogId, databaseName, tableName, columnNames, rowFilterExpression, dataLocationPath, allTables);
     }
 
     @Override
@@ -93,6 +113,9 @@ public class LFResource {
         StringBuilder sb = new StringBuilder("LFResource{");
         sb.append("catalogId='").append(catalogId).append('\'');
         sb.append(", databaseName='").append(databaseName).append('\'');
+        if (allTables) {
+            sb.append(", allTables=true");
+        }
         if (tableName != null) {
             sb.append(", tableName='").append(tableName).append('\'');
         }

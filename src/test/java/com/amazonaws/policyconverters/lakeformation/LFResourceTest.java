@@ -83,4 +83,26 @@ class LFResourceTest {
         assertTrue(str.contains("db"));
         assertTrue(str.contains("tbl"));
     }
+
+    @Test
+    void allTablesResourceFactory() {
+        LFResource resource = LFResource.allTablesResource("cat", "mydb");
+        assertEquals("cat", resource.getCatalogId());
+        assertEquals("mydb", resource.getDatabaseName());
+        assertNull(resource.getTableName());
+        assertTrue(resource.isAllTables());
+    }
+
+    @Test
+    void allTablesNotEqualToRegularDatabase() {
+        LFResource allTables = LFResource.allTablesResource("cat", "mydb");
+        LFResource dbOnly = new LFResource("cat", "mydb", null, null, null);
+        assertNotEquals(allTables, dbOnly, "allTables resource should not equal a database-level resource");
+    }
+
+    @Test
+    void regularResourceIsNotAllTables() {
+        LFResource resource = new LFResource("cat", "db", "tbl", null, null);
+        assertFalse(resource.isAllTables());
+    }
 }
