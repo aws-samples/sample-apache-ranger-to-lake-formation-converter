@@ -2,6 +2,7 @@ package com.amazonaws.policyconverters.reporting;
 
 import com.amazonaws.policyconverters.config.ServerConfig;
 import com.amazonaws.policyconverters.model.SyncCycleResult;
+import com.amazonaws.policyconverters.model.WildcardRefreshResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.cloudwatch.CloudWatchClient;
@@ -83,6 +84,29 @@ public class MetricsEmitter {
                 datum("GrantsApplied", result.getGrantsApplied(), StandardUnit.COUNT, serviceDimension),
                 datum("RevocationsApplied", result.getRevocationsApplied(), StandardUnit.COUNT, serviceDimension)
         );
+    }
+
+    /**
+     * Records metrics for a wildcard refresh cycle.
+     * Publishes WildcardRefreshSuccess or WildcardRefreshFailure (count=1),
+     * WildcardRefreshDuration (milliseconds), and WildcardRefreshDeltaOperations
+     * (count of newGrants + revocations) in a single PutMetricData call.
+     */
+    public void recordWildcardRefresh(WildcardRefreshResult result) {
+        Dimension serviceDimension = serviceDimension();
+        List<MetricDatum> metrics = new ArrayList<>();
+
+        if (result.isSuccess()) {
+            metrics.add(datum("WildcardRefreshSuccess", 1.0, StandardUnit.COUNT, serviceDimension));
+        } else {
+            metrics.add(datum("WildcardRefreshFailure", 1.0, StandardUnit.COUNT, serviceDimension));
+        }
+
+        metrics.add(datum("WildcardRefreshDuration", result.getDurationMs(), StandardUnit.MILLISECONDS, serviceDimension));
+        metrics.add(datum("WildcardRefreshDeltaOperations",
+                result.getNewGrants() + result.getRevocations(), StandardUnit.COUNT, serviceDimension));
+
+        publish(metrics);
     }
 
     /**

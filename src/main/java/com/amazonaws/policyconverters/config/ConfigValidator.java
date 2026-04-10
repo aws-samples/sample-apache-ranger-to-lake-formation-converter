@@ -35,6 +35,10 @@ public class ConfigValidator {
         validateRangerConfig(config.getRangerConfig(), errors);
         validateAwsConfig(config.getAwsConfig(), errors);
 
+        if (config.getWildcardRefreshIntervalSeconds() < 0) {
+            errors.add("Invalid parameter: wildcardRefreshIntervalSeconds must be >= 0");
+        }
+
         return errors;
     }
 

@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Owns the conversion server run-loop: continuously executes sync cycles
@@ -30,13 +31,14 @@ public class ServerLifecycle {
     private final MetricsEmitter metricsEmitter;
     private final int shutdownTimeoutSeconds;
     private final long sleepIntervalMs;
+    private final ReentrantLock cycleLock;
 
     private volatile boolean running = true;
     private volatile CountDownLatch cycleInProgress = new CountDownLatch(0);
     private final AtomicLong cycleCounter = new AtomicLong(0);
 
     /**
-     * Creates a new ServerLifecycle.
+     * Creates a new ServerLifecycle with an internally managed lock.
      *
      * @param executor              executes a single sync cycle
      * @param metricsEmitter        publishes CloudWatch metrics per cycle
@@ -47,10 +49,29 @@ public class ServerLifecycle {
                            MetricsEmitter metricsEmitter,
                            ServerConfig serverConfig,
                            long sleepIntervalMs) {
+        this(executor, metricsEmitter, serverConfig, sleepIntervalMs, new ReentrantLock());
+    }
+
+    /**
+     * Creates a new ServerLifecycle with a shared lock for coordination
+     * with {@link WildcardRefreshScheduler}.
+     *
+     * @param executor              executes a single sync cycle
+     * @param metricsEmitter        publishes CloudWatch metrics per cycle
+     * @param serverConfig          server-level configuration (shutdown timeout)
+     * @param sleepIntervalMs       milliseconds to sleep between cycles
+     * @param cycleLock             shared lock for mutual exclusion with wildcard refresh cycles
+     */
+    public ServerLifecycle(SyncCycleExecutor executor,
+                           MetricsEmitter metricsEmitter,
+                           ServerConfig serverConfig,
+                           long sleepIntervalMs,
+                           ReentrantLock cycleLock) {
         this.executor = executor;
         this.metricsEmitter = metricsEmitter;
         this.shutdownTimeoutSeconds = serverConfig.getShutdownTimeoutSeconds();
         this.sleepIntervalMs = sleepIntervalMs;
+        this.cycleLock = cycleLock;
     }
 
     /**
@@ -83,49 +104,54 @@ public class ServerLifecycle {
     }
 
     /**
-     * Executes a single sync cycle: logs start, delegates to the executor,
-     * logs the outcome, and emits metrics.
+     * Executes a single sync cycle: acquires the cycle lock, logs start,
+     * delegates to the executor, logs the outcome, and emits metrics.
      */
     void executeCycle() {
-        long cycleNumber = cycleCounter.incrementAndGet();
-        Instant startTime = Instant.now();
-
-        LOG.info("Sync cycle {} starting at {}", cycleNumber, startTime);
-
-        long startMs = System.currentTimeMillis();
+        cycleLock.lock();
         try {
-            SyncCycleResult result = executor.execute();
-            long durationMs = System.currentTimeMillis() - startMs;
+            long cycleNumber = cycleCounter.incrementAndGet();
+            Instant startTime = Instant.now();
 
-            // Build a result with the measured duration if the executor didn't set it
-            SyncCycleResult measured = result.isSuccess()
-                    ? SyncCycleResult.success(durationMs,
-                        result.getPoliciesProcessed(),
-                        result.getGrantsApplied(),
-                        result.getRevocationsApplied(),
-                        result.getPoliciesSkipped())
-                    : SyncCycleResult.failure(durationMs, result.getError());
+            LOG.info("Sync cycle {} starting at {}", cycleNumber, startTime);
 
-            if (measured.isSuccess()) {
-                LOG.info("Sync cycle {} completed successfully: durationMs={}, policiesProcessed={}, "
-                        + "grantsApplied={}, revocationsApplied={}, policiesSkipped={}",
-                        cycleNumber, measured.getDurationMs(),
-                        measured.getPoliciesProcessed(), measured.getGrantsApplied(),
-                        measured.getRevocationsApplied(), measured.getPoliciesSkipped());
-                metricsEmitter.recordSuccess(measured);
-            } else {
+            long startMs = System.currentTimeMillis();
+            try {
+                SyncCycleResult result = executor.execute();
+                long durationMs = System.currentTimeMillis() - startMs;
+
+                // Build a result with the measured duration if the executor didn't set it
+                SyncCycleResult measured = result.isSuccess()
+                        ? SyncCycleResult.success(durationMs,
+                            result.getPoliciesProcessed(),
+                            result.getGrantsApplied(),
+                            result.getRevocationsApplied(),
+                            result.getPoliciesSkipped())
+                        : SyncCycleResult.failure(durationMs, result.getError());
+
+                if (measured.isSuccess()) {
+                    LOG.info("Sync cycle {} completed successfully: durationMs={}, policiesProcessed={}, "
+                            + "grantsApplied={}, revocationsApplied={}, policiesSkipped={}",
+                            cycleNumber, measured.getDurationMs(),
+                            measured.getPoliciesProcessed(), measured.getGrantsApplied(),
+                            measured.getRevocationsApplied(), measured.getPoliciesSkipped());
+                    metricsEmitter.recordSuccess(measured);
+                } else {
+                    LOG.error("Sync cycle {} failed: errorClass={}, errorMessage={}",
+                            cycleNumber, measured.getErrorClass(), measured.getErrorMessage(),
+                            measured.getError());
+                    metricsEmitter.recordFailure(measured);
+                }
+            } catch (Exception e) {
+                long durationMs = System.currentTimeMillis() - startMs;
+                SyncCycleResult failureResult = SyncCycleResult.failure(durationMs, e);
+
                 LOG.error("Sync cycle {} failed: errorClass={}, errorMessage={}",
-                        cycleNumber, measured.getErrorClass(), measured.getErrorMessage(),
-                        measured.getError());
-                metricsEmitter.recordFailure(measured);
+                        cycleNumber, e.getClass().getName(), e.getMessage(), e);
+                metricsEmitter.recordFailure(failureResult);
             }
-        } catch (Exception e) {
-            long durationMs = System.currentTimeMillis() - startMs;
-            SyncCycleResult failureResult = SyncCycleResult.failure(durationMs, e);
-
-            LOG.error("Sync cycle {} failed: errorClass={}, errorMessage={}",
-                    cycleNumber, e.getClass().getName(), e.getMessage(), e);
-            metricsEmitter.recordFailure(failureResult);
+        } finally {
+            cycleLock.unlock();
         }
     }
 
@@ -168,5 +194,13 @@ public class ServerLifecycle {
      */
     boolean isRunning() {
         return running;
+    }
+
+    /**
+     * Returns the shared cycle lock for coordination with
+     * {@link WildcardRefreshScheduler}.
+     */
+    public ReentrantLock getCycleLock() {
+        return cycleLock;
     }
 }

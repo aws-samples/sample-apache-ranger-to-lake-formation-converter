@@ -275,7 +275,7 @@ public class ConfigLoader {
         return new SyncConfig(
                 newRangerConfig, newAwsConfig, config.getPrincipalMapping(),
                 policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs, deadLetterLogPath,
-                checkpointPath
+                checkpointPath, config.getWildcardRefreshIntervalSeconds()
         );
     }
 

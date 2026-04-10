@@ -13,6 +13,8 @@ import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation.Operat
 import com.amazonaws.policyconverters.lakeformation.LFResource;
 import com.amazonaws.policyconverters.config.SyncConfig;
 import com.amazonaws.policyconverters.reporting.GapReporter;
+import com.amazonaws.policyconverters.model.WildcardRefreshResult;
+import com.amazonaws.policyconverters.ranger.GlobPatternDetector;
 import com.amazonaws.policyconverters.ranger.RangerPlugin;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
 import org.apache.ranger.plugin.model.RangerPolicy;
@@ -291,6 +293,104 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             return;
         }
         LOG.info("SyncService: connectivity to Ranger Admin restored. Resuming synchronization.");
+    }
+
+    /**
+     * Execute a wildcard refresh cycle: re-expand glob-containing policies
+     * against the current Glue catalog, compute diff, and apply delta.
+     *
+     * @return WildcardRefreshResult with counts of grants, revocations, and policies evaluated
+     */
+    public WildcardRefreshResult executeWildcardRefresh() {
+        long startTime = System.currentTimeMillis();
+        try {
+            // Step 1: Filter lastKnownPolicies to those containing glob patterns
+            List<RangerPolicy> globPolicies = GlobPatternDetector.filterGlobPolicies(lastKnownPolicies);
+            LOG.info("Wildcard refresh: re-evaluating {} glob-containing policies out of {} total policies",
+                    globPolicies.size(), lastKnownPolicies.size());
+
+            if (globPolicies.isEmpty()) {
+                long duration = System.currentTimeMillis() - startTime;
+                LOG.info("Wildcard refresh: no glob policies found, no changes detected");
+                return WildcardRefreshResult.success(duration, 0, 0, 0, 0);
+            }
+
+            // Step 2: Collect the source policy IDs of glob-containing policies
+            Set<String> globPolicyIds = new HashSet<>();
+            for (RangerPolicy policy : globPolicies) {
+                String policyId = policy.getId() != null ? String.valueOf(policy.getId()) : "unknown";
+                globPolicyIds.add(policyId);
+            }
+
+            // Step 3: Re-run conversion pipeline on glob policies
+            CedarPolicySet globCedarPolicySet = rangerToCedarConverter.convert(globPolicies);
+            List<LFPermissionOperation> reExpandedGlobOps = cedarToLFConverter.convert(globCedarPolicySet);
+
+            // Step 4: Build merged operation set
+            // Keep non-glob operations from previousOperations (those whose source policy ID
+            // does not belong to a glob-containing policy)
+            List<LFPermissionOperation> mergedOperations = new ArrayList<>();
+            for (LFPermissionOperation op : previousOperations) {
+                if (!globPolicyIds.contains(op.getSourcePolicyId())) {
+                    mergedOperations.add(op);
+                }
+            }
+            // Add re-expanded glob operations
+            mergedOperations.addAll(reExpandedGlobOps);
+
+            // Step 5: Compute diff against previousOperations
+            PolicyDiff diff = computeDiff(previousOperations, mergedOperations);
+
+            int newGrants = diff.getNewGrants().size();
+            int revocations = diff.getRevocations().size();
+            int unchanged = diff.getUnchangedCount();
+
+            LOG.info("Wildcard refresh diff: {} new grants, {} revocations, {} unchanged",
+                    newGrants, revocations, unchanged);
+
+            // Step 6: Apply delta if non-empty
+            List<LFPermissionOperation> deltaOperations = new ArrayList<>();
+            deltaOperations.addAll(diff.getNewGrants());
+            deltaOperations.addAll(diff.getRevocations());
+
+            if (deltaOperations.isEmpty()) {
+                LOG.info("Wildcard refresh: no changes detected");
+            } else {
+                LOG.info("Wildcard refresh: applying {} delta operations", deltaOperations.size());
+
+                // Audit log each operation
+                for (LFPermissionOperation op : deltaOperations) {
+                    logAuditEntry(op);
+                }
+
+                lakeFormationClient.applyBatch(deltaOperations, deadLetterLogger);
+            }
+
+            // Step 7: Update state and persist checkpoint
+            previousOperations = mergedOperations;
+
+            // Build the full Cedar text: re-convert ALL lastKnownPolicies to get complete Cedar text
+            CedarPolicySet fullCedarPolicySet = rangerToCedarConverter.convert(lastKnownPolicies);
+            lastCedarPolicyText = fullCedarPolicySet.toCedarString();
+
+            if (checkpointStore != null) {
+                checkpointStore.save(lastPolicyVersion, lastCedarPolicyText);
+            }
+
+            long duration = System.currentTimeMillis() - startTime;
+            LOG.info("Wildcard refresh completed: duration={}ms, policiesEvaluated={}, "
+                    + "newGrants={}, revocations={}, unchanged={}",
+                    duration, globPolicies.size(), newGrants, revocations, unchanged);
+
+            return WildcardRefreshResult.success(duration, globPolicies.size(),
+                    newGrants, revocations, unchanged);
+
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            LOG.error("Wildcard refresh failed: {}", e.getMessage(), e);
+            // Leave previousOperations unchanged on failure
+            return WildcardRefreshResult.failure(duration, e);
+        }
     }
 
     /**

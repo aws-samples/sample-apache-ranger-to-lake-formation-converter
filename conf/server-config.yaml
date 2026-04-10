@@ -76,6 +76,10 @@ principalMapping:
 # Interval between sync cycles in milliseconds (default: 30000 = 30 seconds)
 policyRefreshIntervalMs: 30000
 
+# Interval in seconds for periodic wildcard pattern re-evaluation against Glue catalog.
+# Set to 0 or omit to disable. Positive value enables periodic refresh.
+wildcardRefreshIntervalSeconds: 0
+
 # Maximum number of retries for Lake Formation API calls (default: 5)
 maxLfRetries: 5
 

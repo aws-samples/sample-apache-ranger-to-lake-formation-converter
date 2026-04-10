@@ -49,6 +49,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Entry point for the Conversion Server.
@@ -264,12 +265,26 @@ public class ConversionServerMain {
         lfAdapter.setMetricsEmitter(metricsEmitter);
         AccessTypeMapper.setMetricsEmitter(metricsEmitter);
 
+        // Create shared lock for mutual exclusion between sync cycles and wildcard refresh
+        ReentrantLock cycleLock = new ReentrantLock();
+
         ServerLifecycle serverLifecycle = new ServerLifecycle(
-                executor, metricsEmitter, serverConfig, syncConfig.getPolicyRefreshIntervalMs());
+                executor, metricsEmitter, serverConfig, syncConfig.getPolicyRefreshIntervalMs(), cycleLock);
+
+        // Create WildcardRefreshScheduler with shared lock
+        WildcardRefreshScheduler wildcardRefreshScheduler = new WildcardRefreshScheduler(
+                syncService, metricsEmitter, cycleLock);
+
+        int wildcardRefreshInterval = syncConfig.getWildcardRefreshIntervalSeconds();
+        if (wildcardRefreshInterval > 0) {
+            LOG.info("Wildcard refresh enabled with interval={}s", wildcardRefreshInterval);
+            wildcardRefreshScheduler.start(wildcardRefreshInterval);
+        }
 
         // Register SIGTERM shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.info("SIGTERM received, initiating graceful shutdown");
+            wildcardRefreshScheduler.shutdown(serverConfig.getShutdownTimeoutSeconds());
             boolean completed = serverLifecycle.shutdown();
             try {
                 deadLetterWriter.close();

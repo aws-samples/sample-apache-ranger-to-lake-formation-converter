@@ -1,6 +1,7 @@
 package com.amazonaws.policyconverters.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -101,5 +102,106 @@ class SyncConfigTest {
         assertTrue(str.contains("policyRefreshIntervalMs=30000"));
         assertTrue(str.contains("maxLfRetries=5"));
         assertTrue(str.contains("deadLetterLogPath='/tmp/dl.log'"));
+    }
+
+    // --- wildcardRefreshIntervalSeconds tests (Task 2.4) ---
+
+    @Test
+    void wildcardRefreshInterval_absentDefaultsToZero() {
+        SyncConfig config = new SyncConfig(null, null, null,
+                null, null, null, null, null, null);
+        assertEquals(0, config.getWildcardRefreshIntervalSeconds());
+    }
+
+    @Test
+    void wildcardRefreshInterval_nullDefaultsToZero() {
+        SyncConfig config = new SyncConfig(null, null, null,
+                null, null, null, null, null, null);
+        assertEquals(0, config.getWildcardRefreshIntervalSeconds());
+    }
+
+    @Test
+    void wildcardRefreshInterval_zeroStoresAsZero() {
+        SyncConfig config = new SyncConfig(null, null, null,
+                null, null, null, null, null, 0);
+        assertEquals(0, config.getWildcardRefreshIntervalSeconds());
+    }
+
+    @Test
+    void wildcardRefreshInterval_positiveValueStoresCorrectly() {
+        SyncConfig config = new SyncConfig(null, null, null,
+                null, null, null, null, null, 300);
+        assertEquals(300, config.getWildcardRefreshIntervalSeconds());
+    }
+
+    @Test
+    void wildcardRefreshInterval_backwardCompatibleConstructorDefaultsToZero() {
+        SyncConfig config = new SyncConfig(null, null, null,
+                null, null, null, null);
+        assertEquals(0, config.getWildcardRefreshIntervalSeconds());
+    }
+
+    @Test
+    void wildcardRefreshInterval_yamlDeserialization() throws Exception {
+        ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "  username: admin\n" +
+                "  password: secret\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n" +
+                "  catalogId: '123456789012'\n" +
+                "wildcardRefreshIntervalSeconds: 300\n";
+
+        SyncConfig config = yamlMapper.readValue(yaml, SyncConfig.class);
+
+        assertEquals(300, config.getWildcardRefreshIntervalSeconds());
+        assertEquals("http://ranger:6080", config.getRangerConfig().getRangerAdminUrl());
+        assertEquals("us-east-1", config.getAwsConfig().getRegion());
+    }
+
+    @Test
+    void wildcardRefreshInterval_yamlDeserializationAbsent() throws Exception {
+        ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n";
+
+        SyncConfig config = yamlMapper.readValue(yaml, SyncConfig.class);
+
+        assertEquals(0, config.getWildcardRefreshIntervalSeconds());
+    }
+
+    @Test
+    void wildcardRefreshInterval_includedInToString() {
+        SyncConfig config = new SyncConfig(null, null, null,
+                null, null, null, null, null, 600);
+        String str = config.toString();
+        assertTrue(str.contains("wildcardRefreshIntervalSeconds=600"));
+    }
+
+    @Test
+    void wildcardRefreshInterval_includedInEquals() {
+        SyncConfig a = new SyncConfig(null, null, null,
+                null, null, null, null, null, 300);
+        SyncConfig b = new SyncConfig(null, null, null,
+                null, null, null, null, null, 300);
+        SyncConfig c = new SyncConfig(null, null, null,
+                null, null, null, null, null, 600);
+        assertEquals(a, b);
+        assertNotEquals(a, c);
+    }
+
+    @Test
+    void wildcardRefreshInterval_jsonRoundTrip() throws Exception {
+        SyncConfig original = new SyncConfig(null, null, null,
+                null, null, null, null, null, 300);
+        String json = mapper.writeValueAsString(original);
+        SyncConfig deserialized = mapper.readValue(json, SyncConfig.class);
+        assertEquals(original, deserialized);
+        assertEquals(300, deserialized.getWildcardRefreshIntervalSeconds());
     }
 }

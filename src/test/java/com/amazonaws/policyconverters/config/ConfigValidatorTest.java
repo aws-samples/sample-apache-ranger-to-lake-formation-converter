@@ -231,6 +231,45 @@ class ConfigValidatorTest {
         assertTrue(errors.isEmpty());
     }
 
+    // --- wildcardRefreshIntervalSeconds validation tests (Task 2.4) ---
+
+    @Test
+    void negativeWildcardRefreshInterval_reportsError() {
+        SyncConfig config = buildConfigWithWildcardInterval(-1);
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("wildcardRefreshIntervalSeconds must be >= 0")),
+                "Expected validation error for negative interval but got: " + errors);
+    }
+
+    @Test
+    void zeroWildcardRefreshInterval_returnsNoErrors() {
+        SyncConfig config = buildConfigWithWildcardInterval(0);
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.isEmpty(), "Expected no errors for zero interval but got: " + errors);
+    }
+
+    @Test
+    void positiveWildcardRefreshInterval_returnsNoErrors() {
+        SyncConfig config = buildConfigWithWildcardInterval(300);
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.isEmpty(), "Expected no errors for positive interval but got: " + errors);
+    }
+
+    @Test
+    void largeNegativeWildcardRefreshInterval_reportsError() {
+        SyncConfig config = buildConfigWithWildcardInterval(Integer.MIN_VALUE);
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("wildcardRefreshIntervalSeconds must be >= 0")));
+    }
+
     private SyncConfig buildConfig(
             String rangerUrl, String username, String password,
             String keytab, String principal,
@@ -240,5 +279,13 @@ class ConfigValidatorTest {
                 rangerUrl, username, password, keytab, principal, null, null);
         AwsConfig awsConfig = new AwsConfig(region, catalogId, accessKey, secretKey, roleArn);
         return new SyncConfig(rangerConfig, awsConfig, null, null, null, null, null);
+    }
+
+    private SyncConfig buildConfigWithWildcardInterval(int intervalSeconds) {
+        RangerConnectionConfig rangerConfig = new RangerConnectionConfig(
+                "https://ranger:6080", "admin", "secret", null, null, null, null);
+        AwsConfig awsConfig = new AwsConfig("us-east-1", "123456789012", "AKIA123", "secretKey", null);
+        return new SyncConfig(rangerConfig, awsConfig, null, null, null, null, null, null,
+                intervalSeconds);
     }
 }

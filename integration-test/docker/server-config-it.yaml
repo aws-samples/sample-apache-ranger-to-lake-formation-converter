@@ -28,5 +28,10 @@ principalMapping:
     admin_role: "arn:aws:iam::123456789012:role/LFAdminRole"
 
 policyRefreshIntervalMs: 5000
+
+# Interval in seconds for periodic wildcard pattern re-evaluation against Glue catalog.
+# Set to 0 or omit to disable. Positive value enables periodic refresh.
+wildcardRefreshIntervalSeconds: 0
+
 maxLfRetries: 3
 lfRetryBackoffMs: 500

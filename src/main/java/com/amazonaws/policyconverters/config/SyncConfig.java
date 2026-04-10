@@ -19,6 +19,7 @@ public class SyncConfig {
     private static final long DEFAULT_POLICY_REFRESH_INTERVAL_MS = 30000L;
     private static final int DEFAULT_MAX_LF_RETRIES = 5;
     private static final long DEFAULT_LF_RETRY_BACKOFF_MS = 2000L;
+    private static final int DEFAULT_WILDCARD_REFRESH_INTERVAL_SECONDS = 0;
 
     private final RangerConnectionConfig rangerConfig;
     private final AwsConfig awsConfig;
@@ -28,9 +29,10 @@ public class SyncConfig {
     private final long lfRetryBackoffMs;
     private final String deadLetterLogPath;
     private final String checkpointPath;
+    private final int wildcardRefreshIntervalSeconds;
 
     /**
-     * Backward-compatible constructor without checkpointPath.
+     * Backward-compatible constructor without checkpointPath or wildcardRefreshIntervalSeconds.
      */
     public SyncConfig(
             RangerConnectionConfig rangerConfig,
@@ -41,7 +43,7 @@ public class SyncConfig {
             Long lfRetryBackoffMs,
             String deadLetterLogPath) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
-                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, null);
+                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, null, null);
     }
 
     @JsonCreator
@@ -53,7 +55,8 @@ public class SyncConfig {
             @JsonProperty("maxLfRetries") Integer maxLfRetries,
             @JsonProperty("lfRetryBackoffMs") Long lfRetryBackoffMs,
             @JsonProperty("deadLetterLogPath") String deadLetterLogPath,
-            @JsonProperty("checkpointPath") String checkpointPath) {
+            @JsonProperty("checkpointPath") String checkpointPath,
+            @JsonProperty("wildcardRefreshIntervalSeconds") Integer wildcardRefreshIntervalSeconds) {
         this.rangerConfig = rangerConfig;
         this.awsConfig = awsConfig;
         this.principalMapping = principalMapping;
@@ -65,6 +68,8 @@ public class SyncConfig {
                 ? lfRetryBackoffMs : DEFAULT_LF_RETRY_BACKOFF_MS;
         this.deadLetterLogPath = deadLetterLogPath;
         this.checkpointPath = checkpointPath;
+        this.wildcardRefreshIntervalSeconds = wildcardRefreshIntervalSeconds != null
+                ? wildcardRefreshIntervalSeconds : DEFAULT_WILDCARD_REFRESH_INTERVAL_SECONDS;
     }
 
     public RangerConnectionConfig getRangerConfig() {
@@ -99,6 +104,10 @@ public class SyncConfig {
         return checkpointPath;
     }
 
+    public int getWildcardRefreshIntervalSeconds() {
+        return wildcardRefreshIntervalSeconds;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -107,6 +116,7 @@ public class SyncConfig {
         return policyRefreshIntervalMs == that.policyRefreshIntervalMs
                 && maxLfRetries == that.maxLfRetries
                 && lfRetryBackoffMs == that.lfRetryBackoffMs
+                && wildcardRefreshIntervalSeconds == that.wildcardRefreshIntervalSeconds
                 && Objects.equals(rangerConfig, that.rangerConfig)
                 && Objects.equals(awsConfig, that.awsConfig)
                 && Objects.equals(principalMapping, that.principalMapping)
@@ -118,7 +128,7 @@ public class SyncConfig {
     public int hashCode() {
         return Objects.hash(rangerConfig, awsConfig, principalMapping,
                 policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs,
-                deadLetterLogPath, checkpointPath);
+                deadLetterLogPath, checkpointPath, wildcardRefreshIntervalSeconds);
     }
 
     @Override
@@ -132,6 +142,7 @@ public class SyncConfig {
                 ", lfRetryBackoffMs=" + lfRetryBackoffMs +
                 ", deadLetterLogPath='" + deadLetterLogPath + '\'' +
                 ", checkpointPath='" + checkpointPath + '\'' +
+                ", wildcardRefreshIntervalSeconds=" + wildcardRefreshIntervalSeconds +
                 '}';
     }
 }
