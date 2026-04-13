@@ -7,7 +7,9 @@ import com.amazonaws.policyconverters.config.SyncConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Validates a {@link SyncConfig} at startup, collecting all validation errors
@@ -17,6 +19,12 @@ import java.util.List;
 public class ConfigValidator {
 
     private static final Logger logger = LoggerFactory.getLogger(ConfigValidator.class);
+
+    private static final Set<String> ALLOWED_SERVICE_TYPES = Set.of(
+            "lakeformation", "hive", "presto", "trino");
+
+    private static final Set<String> CATALOG_REQUIRED_SERVICE_TYPES = Set.of(
+            "presto", "trino");
     /**
      * Validate the given configuration and return a list of descriptive error messages.
      * An empty list means the configuration is valid.
@@ -39,7 +47,56 @@ public class ConfigValidator {
             errors.add("Invalid parameter: wildcardRefreshIntervalSeconds must be >= 0");
         }
 
+        if (config.getRangerServices() != null && !config.getRangerServices().isEmpty()) {
+            validateRangerServices(config.getRangerServices(), errors);
+        }
+
         return errors;
+    }
+
+    /**
+     * Validate the {@code rangerServices} list for duplicates, unknown service types,
+     * missing instance names, and missing gdcCatalogName for presto/trino entries.
+     *
+     * @param rangerServices the list of service configurations to validate
+     * @param errors         the error list to append to
+     */
+    void validateRangerServices(List<RangerServiceConfig> rangerServices, List<String> errors) {
+        Set<String> seen = new HashSet<>();
+
+        for (int i = 0; i < rangerServices.size(); i++) {
+            RangerServiceConfig entry = rangerServices.get(i);
+            String prefix = "rangerServices[" + i + "]: ";
+
+            if (isBlank(entry.getServiceInstanceName())) {
+                errors.add(prefix + "missing required serviceInstanceName");
+            }
+
+            String serviceType = entry.getServiceType();
+            if (isBlank(serviceType)) {
+                errors.add(prefix + "missing required serviceType");
+                continue;
+            }
+
+            if (!ALLOWED_SERVICE_TYPES.contains(serviceType)) {
+                errors.add(prefix + "unknown serviceType '" + serviceType
+                        + "'; allowed values: " + ALLOWED_SERVICE_TYPES);
+            }
+
+            if (!isBlank(entry.getServiceInstanceName())) {
+                String key = serviceType + "+" + entry.getServiceInstanceName();
+                if (!seen.add(key)) {
+                    errors.add(prefix + "duplicate serviceType+serviceInstanceName pair '"
+                            + serviceType + "+" + entry.getServiceInstanceName() + "'");
+                }
+            }
+
+            if (CATALOG_REQUIRED_SERVICE_TYPES.contains(serviceType)
+                    && isBlank(entry.getGdcCatalogName())) {
+                errors.add(prefix + "serviceType '" + serviceType
+                        + "' requires gdcCatalogName");
+            }
+        }
     }
 
     private void validateRangerConfig(RangerConnectionConfig rangerConfig, List<String> errors) {

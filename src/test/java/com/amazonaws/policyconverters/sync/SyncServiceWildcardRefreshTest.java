@@ -394,7 +394,7 @@ class SyncServiceWildcardRefreshTest {
 
         // Verify non-glob op is preserved
         assertTrue(updatedOps.stream().anyMatch(op ->
-                "20".equals(op.getSourcePolicyId()) && "exact_table".equals(op.getResource().getTableName())));
+                "lakeformation:20".equals(op.getSourcePolicyId()) && "exact_table".equals(op.getResource().getTableName())));
     }
 
     // ---------------------------------------------------------------
@@ -441,9 +441,12 @@ class SyncServiceWildcardRefreshTest {
 
     private LFPermissionOperation makeGrantOp(String policyId, String principalArn,
                                                String database, String table) {
+        // Use service-type-prefixed source policy ID to match the @source("serviceType:policyId")
+        // format used by RangerToCedarConverter with namespace isolation (Req 9.1)
+        String sourcePolicyId = policyId.contains(":") ? policyId : "lakeformation:" + policyId;
         LFResource resource = new LFResource("catalog-1", database, table, null, null);
         Set<LFPermission> perms = EnumSet.of(LFPermission.SELECT);
-        return new LFPermissionOperation(OperationType.GRANT, policyId, principalArn,
+        return new LFPermissionOperation(OperationType.GRANT, sourcePolicyId, principalArn,
                 resource, perms, false);
     }
 

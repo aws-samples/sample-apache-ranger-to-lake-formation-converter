@@ -6,6 +6,7 @@ import com.amazonaws.policyconverters.config.SyncConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -268,6 +269,183 @@ class ConfigValidatorTest {
         List<String> errors = validator.validate(config);
 
         assertTrue(errors.stream().anyMatch(e -> e.contains("wildcardRefreshIntervalSeconds must be >= 0")));
+    }
+
+    // --- rangerServices validation tests (Task 1.3) ---
+
+    @Test
+    void validRangerServices_returnsNoErrors() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("lakeformation", "lf_prod", null, null),
+                new RangerServiceConfig("hive", "hive_prod", null, null),
+                new RangerServiceConfig("presto", "presto_prod", null, "awsdatacatalog"),
+                new RangerServiceConfig("trino", "trino_prod", null, "glue_catalog")
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.isEmpty(), "Expected no errors but got: " + errors);
+    }
+
+    @Test
+    void nullRangerServices_returnsNoErrors() {
+        SyncConfig config = buildConfigWithRangerServices(null);
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.isEmpty(), "Expected no errors but got: " + errors);
+    }
+
+    @Test
+    void emptyRangerServices_returnsNoErrors() {
+        SyncConfig config = buildConfigWithRangerServices(List.of());
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.isEmpty(), "Expected no errors but got: " + errors);
+    }
+
+    @Test
+    void duplicateServiceTypeAndInstanceName_reportsError() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("hive", "hive_prod", null, null),
+                new RangerServiceConfig("hive", "hive_prod", null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("duplicate serviceType+serviceInstanceName")),
+                "Expected duplicate error but got: " + errors);
+    }
+
+    @Test
+    void sameServiceTypeDifferentInstanceName_returnsNoErrors() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("hive", "hive_prod", null, null),
+                new RangerServiceConfig("hive", "hive_staging", null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.isEmpty(), "Expected no errors but got: " + errors);
+    }
+
+    @Test
+    void unknownServiceType_reportsError() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("spark", "spark_prod", null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("unknown serviceType 'spark'")),
+                "Expected unknown serviceType error but got: " + errors);
+    }
+
+    @Test
+    void missingServiceInstanceName_reportsError() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("hive", null, null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("missing required serviceInstanceName")),
+                "Expected missing serviceInstanceName error but got: " + errors);
+    }
+
+    @Test
+    void blankServiceInstanceName_reportsError() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("hive", "  ", null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("missing required serviceInstanceName")),
+                "Expected missing serviceInstanceName error but got: " + errors);
+    }
+
+    @Test
+    void prestoMissingGdcCatalogName_reportsError() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("presto", "presto_prod", null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("'presto' requires gdcCatalogName")),
+                "Expected missing gdcCatalogName error but got: " + errors);
+    }
+
+    @Test
+    void trinoMissingGdcCatalogName_reportsError() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("trino", "trino_prod", null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("'trino' requires gdcCatalogName")),
+                "Expected missing gdcCatalogName error but got: " + errors);
+    }
+
+    @Test
+    void prestoWithGdcCatalogName_returnsNoErrors() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("presto", "presto_prod", null, "awsdatacatalog")
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.isEmpty(), "Expected no errors but got: " + errors);
+    }
+
+    @Test
+    void lakeformationDoesNotRequireGdcCatalogName_returnsNoErrors() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("lakeformation", "lf_prod", null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.isEmpty(), "Expected no errors but got: " + errors);
+    }
+
+    @Test
+    void hiveDoesNotRequireGdcCatalogName_returnsNoErrors() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("hive", "hive_prod", null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.isEmpty(), "Expected no errors but got: " + errors);
+    }
+
+    @Test
+    void multipleValidationErrors_reportsAll() {
+        SyncConfig config = buildConfigWithRangerServices(Arrays.asList(
+                new RangerServiceConfig("spark", null, null, null),
+                new RangerServiceConfig("presto", "presto_prod", null, null)
+        ));
+
+        List<String> errors = validator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("unknown serviceType")),
+                "Expected unknown serviceType error");
+        assertTrue(errors.stream().anyMatch(e -> e.contains("missing required serviceInstanceName")),
+                "Expected missing serviceInstanceName error");
+        assertTrue(errors.stream().anyMatch(e -> e.contains("requires gdcCatalogName")),
+                "Expected missing gdcCatalogName error");
+    }
+
+    private SyncConfig buildConfigWithRangerServices(List<RangerServiceConfig> rangerServices) {
+        RangerConnectionConfig rangerConfig = new RangerConnectionConfig(
+                "https://ranger:6080", "admin", "secret", null, null, null, null);
+        AwsConfig awsConfig = new AwsConfig("us-east-1", "123456789012", "AKIA123", "secretKey", null);
+        return new SyncConfig(rangerConfig, awsConfig, null, null, null, null, null, null,
+                null, rangerServices);
     }
 
     private SyncConfig buildConfig(

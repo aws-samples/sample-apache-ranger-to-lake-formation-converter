@@ -3,6 +3,7 @@ package com.amazonaws.policyconverters.app;
 import com.amazonaws.policyconverters.config.ConfigLoader;
 import com.amazonaws.policyconverters.config.ConfigValidator;
 import com.amazonaws.policyconverters.config.RangerConnectionConfig;
+import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.config.SyncConfig;
 import com.amazonaws.policyconverters.ranger.service.ServiceDefinitionInstaller;
 import org.slf4j.Logger;
@@ -15,10 +16,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Main entry point for installing the Lake Formation service definition
- * into Apache Ranger Admin.
+ * Main entry point for installing Ranger service definitions into Apache Ranger Admin.
  * <p>
  * Supports two installation modes:
  * <ul>
@@ -27,6 +28,10 @@ import java.util.List;
  *   <li><b>file</b>: Copy the service definition JSON to the ranger-admin
  *       plugin directory on the local filesystem</li>
  * </ul>
+ * <p>
+ * When the configuration contains a {@code rangerServices} list, each configured
+ * service definition is installed. When the list is absent or empty, the installer
+ * falls back to the single LakeFormation service definition for backward compatibility.
  * <p>
  * Usage:
  * <pre>
@@ -38,6 +43,16 @@ public class ServiceDefInstallerMain {
 
     private static final Logger LOG = LoggerFactory.getLogger(ServiceDefInstallerMain.class);
     private static final String BUNDLED_SERVICE_DEF = "/ranger-servicedef-lakeformation.json";
+
+    /**
+     * Map of known service types to their bundled service definition classpath resources.
+     */
+    static final Map<String, String> BUNDLED_SERVICE_DEFS = Map.of(
+            "lakeformation", "/ranger-servicedef-lakeformation.json",
+            "hive", "/ranger-servicedef-hive.json",
+            "presto", "/ranger-servicedef-presto.json",
+            "trino", "/ranger-servicedef-trino.json"
+    );
 
     public static void main(String[] args) {
         try {
@@ -54,41 +69,155 @@ public class ServiceDefInstallerMain {
      */
     static void run(String[] args) throws IOException {
         CliArgs cliArgs = parseArgs(args);
-        String serviceDefJson = loadServiceDefinitionJson(cliArgs.serviceDefPath);
-
-        ServiceDefinitionInstaller installer = new ServiceDefinitionInstaller();
 
         if ("rest".equalsIgnoreCase(cliArgs.mode)) {
-            installViaRest(installer, cliArgs.configPath, serviceDefJson);
+            ConfigLoader configLoader = new ConfigLoader();
+            SyncConfig config = configLoader.load(cliArgs.configPath);
+            configLoader.logConfig(config);
+
+            RangerConnectionConfig rangerConfig = config.getRangerConfig();
+            if (rangerConfig == null || rangerConfig.getRangerAdminUrl() == null
+                    || rangerConfig.getRangerAdminUrl().trim().isEmpty()) {
+                throw new IllegalStateException(
+                        "Ranger Admin URL is required for REST installation mode. "
+                        + "Provide it in the config file or via RANGER_ADMIN_URL environment variable.");
+            }
+
+            ServiceDefinitionInstaller installer = new ServiceDefinitionInstaller();
+            List<RangerServiceConfig> rangerServices = config.getRangerServices();
+
+            if (rangerServices != null && !rangerServices.isEmpty()) {
+                installMultipleServicesViaRest(installer, rangerConfig, rangerServices, cliArgs.serviceDefPath);
+            } else {
+                // Backward compatibility: single LakeFormation service
+                String serviceDefJson = loadServiceDefinitionJson(cliArgs.serviceDefPath);
+                installViaRest(installer, rangerConfig, serviceDefJson);
+            }
         } else {
+            String serviceDefJson = loadServiceDefinitionJson(cliArgs.serviceDefPath);
+            ServiceDefinitionInstaller installer = new ServiceDefinitionInstaller();
             installViaFile(installer, cliArgs.rangerAdminHome, serviceDefJson);
         }
     }
 
     /**
-     * Load configuration from the given file, validate the Ranger connection
-     * parameters, and install the service definition via REST.
+     * Install service definitions for all configured services via REST.
+     * Logs errors for individual failures but continues with remaining services.
      */
-    static void installViaRest(ServiceDefinitionInstaller installer,
-                               String configPath, String serviceDefJson) throws IOException {
-        LOG.info("Installing service definition via REST mode");
+    static void installMultipleServicesViaRest(ServiceDefinitionInstaller installer,
+                                                RangerConnectionConfig rangerConfig,
+                                                List<RangerServiceConfig> rangerServices,
+                                                String cliServiceDefPath) {
+        LOG.info("Installing service definitions for {} configured service(s) via REST",
+                rangerServices.size());
 
-        ConfigLoader configLoader = new ConfigLoader();
-        SyncConfig config = configLoader.load(configPath);
-        configLoader.logConfig(config);
+        int successCount = 0;
+        int failureCount = 0;
 
-        // Validate that Ranger connection config is present
-        ConfigValidator validator = new ConfigValidator();
-        List<String> errors = validator.validate(config);
-        // Filter to only Ranger-related errors for REST mode
-        RangerConnectionConfig rangerConfig = config.getRangerConfig();
-        if (rangerConfig == null || rangerConfig.getRangerAdminUrl() == null
-                || rangerConfig.getRangerAdminUrl().trim().isEmpty()) {
-            throw new IllegalStateException(
-                    "Ranger Admin URL is required for REST installation mode. "
-                    + "Provide it in the config file or via RANGER_ADMIN_URL environment variable.");
+        for (RangerServiceConfig serviceConfig : rangerServices) {
+            String serviceType = serviceConfig.getServiceType();
+            String instanceName = serviceConfig.getServiceInstanceName();
+            LOG.info("Installing service definition for serviceType={}, instanceName={}",
+                    serviceType, instanceName);
+
+            try {
+                String serviceDefJson = loadServiceDefForConfig(serviceConfig, cliServiceDefPath);
+                installer.installViaRest(rangerConfig, serviceDefJson);
+                LOG.info("Successfully installed service definition for serviceType={}", serviceType);
+                successCount++;
+            } catch (Exception e) {
+                LOG.error("Failed to install service definition for serviceType={}, instanceName={}: {}",
+                        serviceType, instanceName, e.getMessage(), e);
+                failureCount++;
+            }
         }
 
+        LOG.info("Multi-service installation complete: {} succeeded, {} failed",
+                successCount, failureCount);
+
+        if (successCount == 0 && failureCount > 0) {
+            throw new RuntimeException("All service definition installations failed");
+        }
+    }
+
+    /**
+     * Load the service definition JSON for a specific service config entry.
+     * Uses the config's custom serviceDefPath if specified, otherwise loads
+     * the bundled service definition for the service type.
+     */
+    static String loadServiceDefForConfig(RangerServiceConfig serviceConfig,
+                                           String cliServiceDefPath) throws IOException {
+        // If the config entry has a custom serviceDefPath, use it
+        if (serviceConfig.getServiceDefPath() != null
+                && !serviceConfig.getServiceDefPath().trim().isEmpty()) {
+            LOG.info("Loading custom service definition for serviceType={} from: {}",
+                    serviceConfig.getServiceType(), serviceConfig.getServiceDefPath());
+            return loadServiceDefinitionFromFile(serviceConfig.getServiceDefPath());
+        }
+
+        // If a CLI-level --service-def was provided and there's only one service, use it
+        // (backward compat for single-service CLI usage)
+        // For multi-service, we load the bundled def for each service type
+        String serviceType = serviceConfig.getServiceType();
+        String bundledPath = BUNDLED_SERVICE_DEFS.get(serviceType);
+        if (bundledPath == null) {
+            throw new IOException("No bundled service definition found for service type: " + serviceType);
+        }
+
+        LOG.info("Loading bundled service definition for serviceType={} from classpath: {}",
+                serviceType, bundledPath);
+        return loadBundledServiceDefinition(bundledPath);
+    }
+
+    /**
+     * Load the service definition JSON from a custom path or the bundled resource.
+     */
+    static String loadServiceDefinitionJson(String customPath) throws IOException {
+        if (customPath != null) {
+            return loadServiceDefinitionFromFile(customPath);
+        }
+        return loadBundledServiceDefinition(BUNDLED_SERVICE_DEF);
+    }
+
+    /**
+     * Load a service definition JSON from a file path.
+     */
+    static String loadServiceDefinitionFromFile(String filePath) throws IOException {
+        LOG.info("Loading service definition from path: {}", filePath);
+        Path path = Paths.get(filePath);
+        if (!Files.exists(path)) {
+            throw new IOException("Service definition file not found: " + filePath);
+        }
+        return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Load a bundled service definition from the classpath.
+     */
+    static String loadBundledServiceDefinition(String resourcePath) throws IOException {
+        LOG.info("Loading bundled service definition from classpath: {}", resourcePath);
+        try (InputStream is = ServiceDefInstallerMain.class.getResourceAsStream(resourcePath)) {
+            if (is == null) {
+                throw new IOException(
+                        "Bundled service definition not found on classpath: " + resourcePath);
+            }
+            byte[] buffer = new byte[8192];
+            StringBuilder sb = new StringBuilder();
+            int bytesRead;
+            while ((bytesRead = is.read(buffer)) != -1) {
+                sb.append(new String(buffer, 0, bytesRead, StandardCharsets.UTF_8));
+            }
+            return sb.toString();
+        }
+    }
+
+    /**
+     * Install the service definition via REST using the given installer and config.
+     */
+    static void installViaRest(ServiceDefinitionInstaller installer,
+                               RangerConnectionConfig rangerConfig,
+                               String serviceDefJson) {
+        LOG.info("Installing service definition via REST mode");
         installer.installViaRest(rangerConfig, serviceDefJson);
         LOG.info("Service definition installation via REST completed successfully");
     }
@@ -109,35 +238,6 @@ public class ServiceDefInstallerMain {
 
         installer.installViaFile(adminHomePath, serviceDefJson);
         LOG.info("Service definition installation via file completed successfully");
-    }
-
-    /**
-     * Load the service definition JSON from a custom path or the bundled resource.
-     */
-    static String loadServiceDefinitionJson(String customPath) throws IOException {
-        if (customPath != null) {
-            LOG.info("Loading service definition from custom path: {}", customPath);
-            Path path = Paths.get(customPath);
-            if (!Files.exists(path)) {
-                throw new IOException("Service definition file not found: " + customPath);
-            }
-            return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
-        }
-
-        LOG.info("Loading bundled service definition from classpath: {}", BUNDLED_SERVICE_DEF);
-        try (InputStream is = ServiceDefInstallerMain.class.getResourceAsStream(BUNDLED_SERVICE_DEF)) {
-            if (is == null) {
-                throw new IOException(
-                        "Bundled service definition not found on classpath: " + BUNDLED_SERVICE_DEF);
-            }
-            byte[] buffer = new byte[8192];
-            StringBuilder sb = new StringBuilder();
-            int bytesRead;
-            while ((bytesRead = is.read(buffer)) != -1) {
-                sb.append(new String(buffer, 0, bytesRead, StandardCharsets.UTF_8));
-            }
-            return sb.toString();
-        }
     }
 
     /**

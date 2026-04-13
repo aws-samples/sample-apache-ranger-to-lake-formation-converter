@@ -109,6 +109,13 @@ public class RangerToCedarConverter {
             return Collections.emptyList();
         }
 
+        // Check if the adapter wants to process this policy (e.g., GDC catalog filtering)
+        if (!adapter.shouldProcessPolicy(policy)) {
+            LOG.debug("Adapter for service type '{}' skipped policy {} ({})",
+                    adapter.getServiceType(), policyId, policyName);
+            return Collections.emptyList();
+        }
+
         // Check for data masking (policyType == 1)
         if (policy.getPolicyType() != null && policy.getPolicyType() == 1) {
             gapReporter.recordGap(new GapEntry(
@@ -256,8 +263,9 @@ public class RangerToCedarConverter {
                 for (String action : cedarActions) {
                     StringBuilder sb = new StringBuilder();
 
-                    // Annotations
-                    sb.append("@source(\"").append(policyId).append("\")\n");
+                    // Annotations — prefix with service type for namespace isolation
+                    sb.append("@source(\"").append(adapter.getServiceType())
+                            .append(":").append(policyId).append("\")\n");
                     if ("denyException".equals(extraAnnotation)) {
                         sb.append("@denyException(\"true\")\n");
                     }

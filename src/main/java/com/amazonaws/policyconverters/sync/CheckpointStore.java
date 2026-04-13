@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -38,6 +39,26 @@ public class CheckpointStore {
     public void save(long policyVersion, String cedarPolicyText) {
         SyncCheckpoint checkpoint = new SyncCheckpoint(
                 policyVersion, Instant.now().toString(), cedarPolicyText);
+        writeCheckpoint(checkpoint, cedarPolicyText.length());
+    }
+
+    /**
+     * Persist the current Cedar policy state as a checkpoint with per-service version tracking.
+     *
+     * @param serviceVersions map of service type to Ranger policy version
+     * @param cedarPolicyText the Cedar policy text to persist
+     */
+    public void save(Map<String, Long> serviceVersions, String cedarPolicyText) {
+        long combinedVersion = serviceVersions.values().stream()
+                .mapToLong(Long::longValue)
+                .max()
+                .orElse(0L);
+        SyncCheckpoint checkpoint = new SyncCheckpoint(
+                combinedVersion, serviceVersions, Instant.now().toString(), cedarPolicyText);
+        writeCheckpoint(checkpoint, cedarPolicyText.length());
+    }
+
+    private void writeCheckpoint(SyncCheckpoint checkpoint, int cedarTextLength) {
         Path tempFile = checkpointPath.resolveSibling(
                 checkpointPath.getFileName() + ".tmp");
         try {
@@ -47,8 +68,8 @@ public class CheckpointStore {
             Files.move(tempFile, checkpointPath,
                     StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
-            LOG.info("Checkpoint saved: policyVersion={}, cedarTextLength={}",
-                    policyVersion, cedarPolicyText.length());
+            LOG.info("Checkpoint saved: {}, cedarTextLength={}",
+                    checkpoint, cedarTextLength);
         } catch (IOException e) {
             LOG.error("Failed to save checkpoint to {}: {}",
                     checkpointPath, e.getMessage(), e);

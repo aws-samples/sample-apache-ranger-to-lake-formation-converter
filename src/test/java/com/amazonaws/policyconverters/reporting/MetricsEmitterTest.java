@@ -319,4 +319,159 @@ class MetricsEmitterTest {
 
         assertDoesNotThrow(() -> emitter.recordWildcardRefresh(result));
     }
+
+    // --- ServiceType Dimension Tests (Requirement 7.7) ---
+
+    @Test
+    void recordSuccess_withServiceType_addsServiceTypeDimensionToCommonMetrics() {
+        SyncCycleResult result = SyncCycleResult.success(1500, 10, 3, 2, 1);
+
+        emitter.recordSuccess(result, "hive");
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        Map<String, MetricDatum> byName = captor.getValue().metricData().stream()
+                .collect(Collectors.toMap(MetricDatum::metricName, d -> d));
+
+        // Common metrics should have ServiceType dimension
+        for (String metricName : List.of("PoliciesProcessed", "GrantsApplied", "RevocationsApplied")) {
+            MetricDatum datum = byName.get(metricName);
+            assertNotNull(datum, "Expected " + metricName + " metric");
+            boolean hasServiceType = datum.dimensions().stream()
+                    .anyMatch(d -> "ServiceType".equals(d.name()) && "hive".equals(d.value()));
+            assertTrue(hasServiceType, metricName + " missing ServiceType dimension");
+        }
+
+        // SyncCycleSuccess and SyncCycleDuration should NOT have ServiceType dimension
+        for (String metricName : List.of("SyncCycleSuccess", "SyncCycleDuration")) {
+            MetricDatum datum = byName.get(metricName);
+            assertNotNull(datum, "Expected " + metricName + " metric");
+            boolean hasServiceType = datum.dimensions().stream()
+                    .anyMatch(d -> "ServiceType".equals(d.name()));
+            assertFalse(hasServiceType, metricName + " should not have ServiceType dimension");
+        }
+    }
+
+    @Test
+    void recordSuccess_withNullServiceType_behavesLikeNoServiceType() {
+        SyncCycleResult result = SyncCycleResult.success(100, 5, 1, 0, 0);
+
+        emitter.recordSuccess(result, null);
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        for (MetricDatum datum : captor.getValue().metricData()) {
+            boolean hasServiceType = datum.dimensions().stream()
+                    .anyMatch(d -> "ServiceType".equals(d.name()));
+            assertFalse(hasServiceType, datum.metricName() + " should not have ServiceType when null");
+        }
+    }
+
+    @Test
+    void recordFailure_withServiceType_addsServiceTypeDimensionToCommonMetrics() {
+        SyncCycleResult result = SyncCycleResult.failure(500, new RuntimeException("err"));
+
+        emitter.recordFailure(result, "presto");
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        Map<String, MetricDatum> byName = captor.getValue().metricData().stream()
+                .collect(Collectors.toMap(MetricDatum::metricName, d -> d));
+
+        // Common metrics should have ServiceType dimension
+        for (String metricName : List.of("PoliciesProcessed", "GrantsApplied", "RevocationsApplied")) {
+            MetricDatum datum = byName.get(metricName);
+            assertNotNull(datum, "Expected " + metricName + " metric");
+            boolean hasServiceType = datum.dimensions().stream()
+                    .anyMatch(d -> "ServiceType".equals(d.name()) && "presto".equals(d.value()));
+            assertTrue(hasServiceType, metricName + " missing ServiceType dimension");
+        }
+
+        // SyncCycleFailure and ErrorCount should NOT have ServiceType dimension
+        MetricDatum failure = byName.get("SyncCycleFailure");
+        assertFalse(failure.dimensions().stream().anyMatch(d -> "ServiceType".equals(d.name())),
+                "SyncCycleFailure should not have ServiceType dimension");
+    }
+
+    @Test
+    void recordFailure_withNullServiceType_behavesLikeNoServiceType() {
+        SyncCycleResult result = SyncCycleResult.failure(100, new RuntimeException("err"));
+
+        emitter.recordFailure(result, null);
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        for (MetricDatum datum : captor.getValue().metricData()) {
+            boolean hasServiceType = datum.dimensions().stream()
+                    .anyMatch(d -> "ServiceType".equals(d.name()));
+            assertFalse(hasServiceType, datum.metricName() + " should not have ServiceType when null");
+        }
+    }
+
+    @Test
+    void recordPluginFetchFailure_publishesMetricWithServiceTypeDimension() {
+        emitter.recordPluginFetchFailure("hive");
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        PutMetricDataRequest request = captor.getValue();
+        assertEquals("TestNamespace", request.namespace());
+        assertEquals(1, request.metricData().size());
+
+        MetricDatum datum = request.metricData().get(0);
+        assertEquals("PluginFetchFailure", datum.metricName());
+        assertEquals(1.0, datum.value());
+        assertEquals(StandardUnit.COUNT, datum.unit());
+
+        boolean hasServiceName = datum.dimensions().stream()
+                .anyMatch(d -> "ServiceName".equals(d.name()) && "conversion-server".equals(d.value()));
+        assertTrue(hasServiceName, "PluginFetchFailure missing ServiceName dimension");
+
+        boolean hasServiceType = datum.dimensions().stream()
+                .anyMatch(d -> "ServiceType".equals(d.name()) && "hive".equals(d.value()));
+        assertTrue(hasServiceType, "PluginFetchFailure missing ServiceType dimension");
+    }
+
+    @Test
+    void recordPluginFetchFailure_withNullServiceType_usesUnknown() {
+        emitter.recordPluginFetchFailure(null);
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        MetricDatum datum = captor.getValue().metricData().get(0);
+        boolean hasUnknown = datum.dimensions().stream()
+                .anyMatch(d -> "ServiceType".equals(d.name()) && "unknown".equals(d.value()));
+        assertTrue(hasUnknown, "PluginFetchFailure should use 'unknown' for null serviceType");
+    }
+
+    @Test
+    void recordPluginFetchFailure_cloudWatchError_doesNotThrow() {
+        when(cloudWatchClient.putMetricData(any(PutMetricDataRequest.class)))
+                .thenThrow(new RuntimeException("CloudWatch unavailable"));
+
+        assertDoesNotThrow(() -> emitter.recordPluginFetchFailure("trino"));
+    }
+
+    @Test
+    void recordSuccess_withServiceType_backwardCompatible_existingMethodStillWorks() {
+        // Verify the original no-arg overload still works without ServiceType
+        SyncCycleResult result = SyncCycleResult.success(100, 5, 1, 0, 0);
+
+        emitter.recordSuccess(result);
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        for (MetricDatum datum : captor.getValue().metricData()) {
+            boolean hasServiceType = datum.dimensions().stream()
+                    .anyMatch(d -> "ServiceType".equals(d.name()));
+            assertFalse(hasServiceType, datum.metricName() + " should not have ServiceType in backward-compat mode");
+        }
+    }
 }

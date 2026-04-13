@@ -3,12 +3,22 @@ package com.amazonaws.policyconverters.app;
 import ch.qos.logback.classic.Level;
 import com.amazonaws.policyconverters.cedar.CedarSchemaProvider;
 import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
+import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.config.ServerConfig;
 import com.amazonaws.policyconverters.config.ServerConfigLoader;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
 import com.amazonaws.policyconverters.cedar.CedarToLFConverter;
 import com.amazonaws.policyconverters.model.SyncCycleResult;
+import com.amazonaws.policyconverters.ranger.HiveServiceAdapter;
+import com.amazonaws.policyconverters.ranger.PrestoServiceAdapter;
+import com.amazonaws.policyconverters.ranger.TrinoServiceAdapter;
+import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
+import com.amazonaws.policyconverters.ranger.service.HiveRangerService;
+import com.amazonaws.policyconverters.ranger.service.LakeFormationRangerService;
+import com.amazonaws.policyconverters.ranger.service.PrestoRangerService;
+import com.amazonaws.policyconverters.ranger.service.TrinoRangerService;
 import com.amazonaws.policyconverters.reporting.MetricsEmitter;
+import com.amazonaws.policyconverters.sync.CheckpointStore;
 import com.amazonaws.policyconverters.sync.DeadLetterLogger;
 import com.amazonaws.policyconverters.lakeformation.DryRunLakeFormationClient;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionFetcher;
@@ -46,6 +56,7 @@ import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -181,13 +192,6 @@ public class ConversionServerMain {
                 awsConfig.getRegion(),
                 awsConfig.getCatalogId(),
                 awsConfig.getCatalogId());
-        RangerServiceAdapter lfAdapter = new RangerServiceAdapter(awsContext);
-
-        Map<String, SourcePolicyAdapter> adapterRegistry = new HashMap<>();
-        adapterRegistry.put("lakeformation", lfAdapter);
-
-        RangerToCedarConverter rangerToCedarConverter = new RangerToCedarConverter(
-                adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider);
 
         CedarToLFConverter cedarToLFConverter = new CedarToLFConverter(
                 cedarSchemaProvider, gapReporter, null);
@@ -218,13 +222,74 @@ public class ConversionServerMain {
         BufferedWriter deadLetterWriter = new BufferedWriter(new FileWriter(deadLetterPath, true));
         DeadLetterLogger deadLetterLogger = new DeadLetterLogger(deadLetterWriter);
 
-        // Create plugin and sync service
-        RangerPlugin plugin = new RangerPlugin();
-        SyncService syncService = new SyncService(
-                plugin, rangerToCedarConverter, cedarToLFConverter,
-                lakeFormationClient, gapReporter, deadLetterLogger);
+        // Build checkpoint store if configured
+        CheckpointStore checkpointStore = null;
+        if (syncConfig.getCheckpointPath() != null && !syncConfig.getCheckpointPath().isBlank()) {
+            checkpointStore = new CheckpointStore(
+                    Path.of(syncConfig.getCheckpointPath()), new ObjectMapper());
+        }
 
-        // Create the SyncCycleExecutor that wraps the pipeline
+        // Determine multi-service vs single-service mode (Req 6.2, 6.3, 7.1)
+        List<RangerServiceConfig> rangerServiceConfigs = syncConfig.getRangerServices();
+        boolean multiServiceMode = rangerServiceConfigs != null && !rangerServiceConfigs.isEmpty();
+
+        RangerPlugin plugin = null;
+        SyncService syncService;
+        Map<String, SourcePolicyAdapter> adapterRegistry = new HashMap<>();
+        List<SourcePolicyAdapter> allAdapters = new ArrayList<>();
+
+        if (multiServiceMode) {
+            // --- Multi-service pipeline (Req 6.3, 7.1) ---
+            LOG.info("Multi-service mode: configuring {} Ranger service(s)", rangerServiceConfigs.size());
+
+            List<BaseRangerService> rangerServices = new ArrayList<>();
+            for (RangerServiceConfig cfg : rangerServiceConfigs) {
+                BaseRangerService service = createRangerService(cfg);
+                rangerServices.add(service);
+
+                SourcePolicyAdapter adapter = service.createAdapter(awsContext);
+                adapterRegistry.put(cfg.getServiceType(), adapter);
+                allAdapters.add(adapter);
+
+                LOG.info("Configured Ranger service: serviceType={}, instanceName={}",
+                        cfg.getServiceType(), cfg.getServiceInstanceName());
+            }
+
+            RangerToCedarConverter rangerToCedarConverter = new RangerToCedarConverter(
+                    adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider);
+
+            syncService = new SyncService(
+                    rangerServices, rangerToCedarConverter, cedarToLFConverter,
+                    lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore);
+
+            // Initialize all plugins (Req 6.3)
+            for (BaseRangerService service : rangerServices) {
+                try {
+                    LOG.info("Initializing Ranger plugin: serviceType={}, instanceName={}",
+                            service.getServiceType(), service.getServiceInstanceName());
+                    service.init();
+                } catch (Exception e) {
+                    LOG.error("Failed to initialize Ranger plugin: serviceType={}, instanceName={}: {}",
+                            service.getServiceType(), service.getServiceInstanceName(), e.getMessage(), e);
+                }
+            }
+        } else {
+            // --- Single-service pipeline (backward compatibility, Req 6.2) ---
+            LOG.info("Single-service mode: using legacy LakeFormation plugin wiring");
+
+            RangerServiceAdapter lfAdapter = new RangerServiceAdapter(awsContext);
+            adapterRegistry.put("lakeformation", lfAdapter);
+            allAdapters.add(lfAdapter);
+
+            RangerToCedarConverter rangerToCedarConverter = new RangerToCedarConverter(
+                    adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider);
+
+            plugin = new RangerPlugin();
+            syncService = new SyncService(
+                    plugin, rangerToCedarConverter, cedarToLFConverter,
+                    lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore);
+        }
+
         // Optionally wire reverse-sync if enabled
         ReverseSyncService reverseSyncService = null;
         if (reverseSyncConfig != null && reverseSyncConfig.isEnabled()) {
@@ -253,16 +318,33 @@ public class ConversionServerMain {
                     cedarToLFConverter, deadLetterLogger);
         }
 
+        // Create the SyncCycleExecutor based on mode
         final ReverseSyncService finalReverseSyncService = reverseSyncService;
         final ReverseSyncConfig finalReverseSyncConfig = reverseSyncConfig;
-        SyncCycleExecutor executor = createSyncCycleExecutor(plugin, syncService,
-                finalReverseSyncService, finalReverseSyncConfig);
+        SyncCycleExecutor executor;
+        if (multiServiceMode) {
+            executor = createMultiServiceSyncCycleExecutor(syncService,
+                    finalReverseSyncService, finalReverseSyncConfig);
+        } else {
+            executor = createSyncCycleExecutor(plugin, syncService,
+                    finalReverseSyncService, finalReverseSyncConfig);
+        }
 
         // Create MetricsEmitter and ServerLifecycle
         MetricsEmitter metricsEmitter = new MetricsEmitter(cloudWatchClient, serverConfig);
 
-        // Wire MetricsEmitter into access type mappers for unmapped type alerting
-        lfAdapter.setMetricsEmitter(metricsEmitter);
+        // Wire MetricsEmitter into all adapters and the static AccessTypeMapper
+        for (SourcePolicyAdapter adapter : allAdapters) {
+            if (adapter instanceof RangerServiceAdapter) {
+                ((RangerServiceAdapter) adapter).setMetricsEmitter(metricsEmitter);
+            } else if (adapter instanceof HiveServiceAdapter) {
+                ((HiveServiceAdapter) adapter).setMetricsEmitter(metricsEmitter);
+            } else if (adapter instanceof PrestoServiceAdapter) {
+                ((PrestoServiceAdapter) adapter).setMetricsEmitter(metricsEmitter);
+            } else if (adapter instanceof TrinoServiceAdapter) {
+                ((TrinoServiceAdapter) adapter).setMetricsEmitter(metricsEmitter);
+            }
+        }
         AccessTypeMapper.setMetricsEmitter(metricsEmitter);
 
         // Create shared lock for mutual exclusion between sync cycles and wildcard refresh
@@ -301,9 +383,11 @@ public class ConversionServerMain {
             }
         }, "shutdown-hook"));
 
-        // Initialize the plugin (registers with Ranger Admin)
-        LOG.info("Initializing LakeFormation plugin and registering with Ranger Admin");
-        plugin.init();
+        // Initialize plugin and start sync service
+        if (!multiServiceMode && plugin != null) {
+            LOG.info("Initializing LakeFormation plugin and registering with Ranger Admin");
+            plugin.init();
+        }
         syncService.start(syncConfig);
 
         // Start the run-loop (blocks until shutdown)
@@ -311,6 +395,70 @@ public class ConversionServerMain {
 
         // Determine exit code based on shutdown result
         return serverLifecycle.isRunning() ? 1 : 0;
+    }
+
+    /**
+     * Creates a BaseRangerService instance from a RangerServiceConfig entry.
+     * Maps the service type string to the appropriate concrete class.
+     *
+     * @param config the service configuration entry
+     * @return the created BaseRangerService instance
+     * @throws IllegalArgumentException if the service type is unknown
+     */
+    static BaseRangerService createRangerService(RangerServiceConfig config) {
+        String serviceType = config.getServiceType();
+        String instanceName = config.getServiceInstanceName();
+
+        switch (serviceType) {
+            case "lakeformation":
+                return new LakeFormationRangerService(instanceName);
+            case "hive":
+                return new HiveRangerService(instanceName);
+            case "presto":
+                return new PrestoRangerService(instanceName, config.getGdcCatalogName());
+            case "trino":
+                return new TrinoRangerService(instanceName, config.getGdcCatalogName());
+            default:
+                throw new IllegalArgumentException("Unknown Ranger service type: " + serviceType);
+        }
+    }
+
+    /**
+     * Creates a SyncCycleExecutor for multi-service mode that delegates to
+     * {@link SyncService#executeSyncCycle()} and optionally triggers reverse-sync.
+     */
+    static SyncCycleExecutor createMultiServiceSyncCycleExecutor(
+            SyncService syncService,
+            ReverseSyncService reverseSyncService,
+            ReverseSyncConfig reverseSyncConfig) {
+        return () -> {
+            long startMs = System.currentTimeMillis();
+            try {
+                syncService.executeSyncCycle();
+
+                // Trigger reverse-sync after forward-sync if enabled
+                if (reverseSyncService != null && reverseSyncConfig != null
+                        && reverseSyncConfig.isEnabled()) {
+                    try {
+                        com.amazonaws.policyconverters.cedar.CedarPolicySet cedarPolicySet =
+                                syncService.getLastCedarPolicySet();
+                        if (cedarPolicySet != null) {
+                            reverseSyncService.execute(reverseSyncConfig, cedarPolicySet);
+                        } else {
+                            LOG.debug("No Cedar policy set available for reverse-sync");
+                        }
+                    } catch (Exception e) {
+                        LOG.error("Reverse-sync cycle failed: {}", e.getMessage(), e);
+                    }
+                }
+
+                long durationMs = System.currentTimeMillis() - startMs;
+                return SyncCycleResult.success(durationMs, 0, 0, 0, 0);
+            } catch (Exception e) {
+                long durationMs = System.currentTimeMillis() - startMs;
+                return SyncCycleResult.failure(durationMs, e);
+            }
+        };
     }
 
     /**

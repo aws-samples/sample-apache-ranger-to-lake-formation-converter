@@ -17,6 +17,7 @@ import com.amazonaws.policyconverters.model.WildcardRefreshResult;
 import com.amazonaws.policyconverters.ranger.GlobPatternDetector;
 import com.amazonaws.policyconverters.ranger.RangerPlugin;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
+import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
 import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.util.ServicePolicies;
 import org.slf4j.Logger;
@@ -30,14 +31,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Orchestrates the real-time synchronization of Ranger policies to Lake Formation.
  * <p>
- * The SyncService registers as a {@link RangerPlugin.PolicyUpdateListener}
- * to receive policy updates from Ranger Admin. On each update, it computes the
- * diff between the previous and current policy snapshots, converts the delta
- * through the Cedar pipeline ({@link RangerToCedarConverter} → {@link CedarToLFConverter}),
+ * The SyncService supports two modes of operation:
+ * <ul>
+ *   <li><b>Single-plugin mode (backward compatible):</b> Registers as a
+ *       {@link RangerPlugin.PolicyUpdateListener} to receive policy updates
+ *       from a single Ranger Admin plugin.</li>
+ *   <li><b>Multi-service mode:</b> Holds a {@code List<BaseRangerService>} and
+ *       fetches policies from all configured services via {@link #executeSyncCycle()}.
+ *       Policies are merged into a single list before conversion.</li>
+ * </ul>
+ * <p>
+ * On each update, it computes the diff between the previous and current policy
+ * snapshots, converts the delta through the Cedar pipeline
+ * ({@link RangerToCedarConverter} → {@link CedarToLFConverter}),
  * and applies the resulting grant/revoke operations via {@link LakeFormationClient}.
  * <p>
  * On first startup with an empty previous snapshot, all current policies are
@@ -53,13 +64,31 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
      */
     private static final Logger AUDIT_LOG = LoggerFactory.getLogger(SyncService.class.getName() + ".audit");
 
+    /** Legacy single-plugin reference, kept for backward compatibility. */
     private final RangerPlugin plugin;
+
+    /** Multi-service list of Ranger services. Empty in single-plugin mode. */
+    private final List<BaseRangerService> rangerServices;
+
     private final RangerToCedarConverter rangerToCedarConverter;
     private final CedarToLFConverter cedarToLFConverter;
     private final LakeFormationClient lakeFormationClient;
     private final GapReporter gapReporter;
     private final DeadLetterLogger deadLetterLogger;
     private final CheckpointStore checkpointStore;
+
+    /**
+     * Tracks which services have completed at least one successful policy fetch.
+     * Used for the first-sync gate: diff-and-apply is deferred until all services
+     * have initialized (Req 7.4).
+     */
+    private final Set<String> initializedServices = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Per-service policy version tracking for checkpoint persistence (Req 10.1).
+     * Maps service type to the latest policy version fetched from that service.
+     */
+    private final Map<String, Long> serviceVersions = new ConcurrentHashMap<>();
 
     /**
      * The previous set of LF permission operations derived from the last
@@ -74,7 +103,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     private volatile String lastCedarPolicyText = "";
 
     /**
-     * The last known Ranger policy version, used for checkpoint persistence.
+     * The last known Ranger policy version, used for checkpoint persistence
+     * in single-plugin mode.
      */
     private volatile long lastPolicyVersion = -1L;
 
@@ -82,10 +112,15 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
      * The last known set of Ranger policies received from Ranger Admin.
      * Used for connectivity loss resilience: if Ranger Admin becomes
      * unreachable, the service continues operating with this snapshot.
+     * In multi-service mode, this is the merged list from all services.
      */
     private volatile List<RangerPolicy> lastKnownPolicies = Collections.emptyList();
 
     private volatile boolean running = false;
+
+    // ---------------------------------------------------------------
+    // Single-plugin constructors (backward compatible)
+    // ---------------------------------------------------------------
 
     public SyncService(
             RangerPlugin plugin,
@@ -107,6 +142,43 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             DeadLetterLogger deadLetterLogger,
             CheckpointStore checkpointStore) {
         this.plugin = plugin;
+        this.rangerServices = Collections.emptyList();
+        this.rangerToCedarConverter = rangerToCedarConverter;
+        this.cedarToLFConverter = cedarToLFConverter;
+        this.lakeFormationClient = lakeFormationClient;
+        this.gapReporter = gapReporter;
+        this.deadLetterLogger = deadLetterLogger;
+        this.checkpointStore = checkpointStore;
+    }
+
+    // ---------------------------------------------------------------
+    // Multi-service constructor (Req 7.1, 7.2, 7.3)
+    // ---------------------------------------------------------------
+
+    /**
+     * Creates a SyncService in multi-service mode, fetching policies from
+     * all provided {@link BaseRangerService} instances.
+     *
+     * @param rangerServices         the list of Ranger services to fetch policies from
+     * @param rangerToCedarConverter the Ranger-to-Cedar converter
+     * @param cedarToLFConverter     the Cedar-to-LF converter
+     * @param lakeFormationClient    the Lake Formation client
+     * @param gapReporter            the gap reporter
+     * @param deadLetterLogger       the dead letter logger
+     * @param checkpointStore        the checkpoint store (nullable)
+     */
+    public SyncService(
+            List<BaseRangerService> rangerServices,
+            RangerToCedarConverter rangerToCedarConverter,
+            CedarToLFConverter cedarToLFConverter,
+            LakeFormationClient lakeFormationClient,
+            GapReporter gapReporter,
+            DeadLetterLogger deadLetterLogger,
+            CheckpointStore checkpointStore) {
+        this.plugin = null;
+        this.rangerServices = rangerServices != null
+                ? Collections.unmodifiableList(new ArrayList<>(rangerServices))
+                : Collections.emptyList();
         this.rangerToCedarConverter = rangerToCedarConverter;
         this.cedarToLFConverter = cedarToLFConverter;
         this.lakeFormationClient = lakeFormationClient;
@@ -116,8 +188,16 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     }
 
     /**
-     * Start the sync service. Registers as a policy update listener on the
-     * plugin so that policy refreshes trigger diff computation and application.
+     * Returns whether this SyncService is operating in multi-service mode.
+     */
+    public boolean isMultiServiceMode() {
+        return !rangerServices.isEmpty();
+    }
+
+    /**
+     * Start the sync service. In single-plugin mode, registers as a policy
+     * update listener on the plugin. In multi-service mode, restores state
+     * from checkpoint and marks the service as running.
      *
      * @param config the sync configuration
      */
@@ -126,8 +206,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             LOG.warn("SyncService is already running, ignoring start request");
             return;
         }
-        LOG.info("Starting SyncService with config: policyRefreshIntervalMs={}, maxLfRetries={}",
-                config.getPolicyRefreshIntervalMs(), config.getMaxLfRetries());
+        LOG.info("Starting SyncService with config: policyRefreshIntervalMs={}, maxLfRetries={}, multiServiceMode={}",
+                config.getPolicyRefreshIntervalMs(), config.getMaxLfRetries(), isMultiServiceMode());
 
         // Restore previous state from checkpoint if available
         if (checkpointStore != null) {
@@ -154,13 +234,27 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
                     LOG.info("Restored checkpoint with empty Cedar policies, policyVersion={}",
                             checkpoint.getPolicyVersion());
                 }
+
+                // Restore per-service versions from checkpoint (Req 10.2)
+                Map<String, Long> restoredVersions = checkpoint.getServiceVersions();
+                if (restoredVersions != null) {
+                    serviceVersions.putAll(restoredVersions);
+                    LOG.info("Restored per-service versions from checkpoint: {}", serviceVersions);
+                }
             });
         }
 
-        plugin.setPolicyUpdateListener(this);
+        if (plugin != null) {
+            plugin.setPolicyUpdateListener(this);
+        }
         running = true;
 
-        LOG.info("SyncService started, listening for policy updates from Ranger Admin");
+        if (isMultiServiceMode()) {
+            LOG.info("SyncService started in multi-service mode with {} services: {}",
+                    rangerServices.size(), getServiceNames());
+        } else {
+            LOG.info("SyncService started, listening for policy updates from Ranger Admin");
+        }
     }
 
     /**
@@ -173,7 +267,9 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         }
         LOG.info("Stopping SyncService");
         running = false;
-        plugin.setPolicyUpdateListener(null);
+        if (plugin != null) {
+            plugin.setPolicyUpdateListener(null);
+        }
         LOG.info("SyncService stopped");
     }
 
@@ -270,6 +366,148 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         }
     }
 
+    // ---------------------------------------------------------------
+    // Multi-service sync cycle (Req 7.1, 7.2, 7.3, 7.4, 7.5, 7.6)
+    // ---------------------------------------------------------------
+
+    /**
+     * Execute a multi-service sync cycle: fetch policies from all configured
+     * {@link BaseRangerService} instances, merge them, convert through the
+     * Cedar pipeline, compute diff, and apply to Lake Formation.
+     * <p>
+     * This method implements:
+     * <ul>
+     *   <li>Per-service policy fetching with fault tolerance (Req 7.1, 7.5, 7.6)</li>
+     *   <li>First-sync gate: defers diff-and-apply until all services have
+     *       completed at least one successful fetch (Req 7.4)</li>
+     *   <li>Per-service version tracking for checkpoint persistence (Req 10.1)</li>
+     * </ul>
+     */
+    public void executeSyncCycle() {
+        if (!running) {
+            LOG.warn("SyncService.executeSyncCycle called but service is not running, ignoring");
+            return;
+        }
+
+        if (rangerServices.isEmpty()) {
+            LOG.warn("SyncService.executeSyncCycle called but no Ranger services configured");
+            return;
+        }
+
+        LOG.debug("SyncService executing multi-service sync cycle for {} services", rangerServices.size());
+
+        // Stage 1: Fetch policies from all services, merging into a single list
+        List<RangerPolicy> mergedPolicies = new ArrayList<>();
+
+        for (BaseRangerService service : rangerServices) {
+            String serviceKey = service.getServiceType();
+            try {
+                ServicePolicies sp = service.getLatestPolicies();
+                if (sp != null && sp.getPolicies() != null) {
+                    List<RangerPolicy> policies = sp.getPolicies();
+                    mergedPolicies.addAll(policies);
+
+                    // Track per-service version
+                    long version = sp.getPolicyVersion() != null ? sp.getPolicyVersion() : -1L;
+                    serviceVersions.put(serviceKey, version);
+
+                    // Mark service as initialized on first successful fetch
+                    initializedServices.add(serviceKey);
+
+                    LOG.info("SyncService fetched policies: serviceType={}, version={}, count={}",
+                            serviceKey, version, policies.size());
+                } else {
+                    // Null response — use last-known-good (Req 7.5, 7.6)
+                    List<RangerPolicy> fallback = service.getLastKnownGoodPolicies();
+                    mergedPolicies.addAll(fallback);
+                    LOG.warn("SyncService: null policies from serviceType={}, using last-known-good ({} policies)",
+                            serviceKey, fallback.size());
+                }
+            } catch (Exception e) {
+                // Fetch failure — use last-known-good (Req 7.5, 7.6)
+                List<RangerPolicy> fallback = service.getLastKnownGoodPolicies();
+                mergedPolicies.addAll(fallback);
+                LOG.error("SyncService: failed to fetch policies from serviceType={}, "
+                        + "using last-known-good ({} policies): {}",
+                        serviceKey, fallback.size(), e.getMessage());
+            }
+        }
+
+        // First-sync gate: defer diff-and-apply until all services initialized (Req 7.4)
+        if (initializedServices.size() < rangerServices.size()) {
+            List<String> pending = new ArrayList<>();
+            for (BaseRangerService svc : rangerServices) {
+                if (!initializedServices.contains(svc.getServiceType())) {
+                    pending.add(svc.getServiceType());
+                }
+            }
+            LOG.warn("SyncService: waiting for first successful fetch from {} service(s): {}. "
+                    + "Deferring diff-and-apply until all services are initialized.",
+                    pending.size(), pending);
+            return;
+        }
+
+        // Store merged policies for connectivity resilience and wildcard refresh
+        lastKnownPolicies = mergedPolicies;
+
+        LOG.info("SyncService multi-service merge: {} total policies from {} services",
+                mergedPolicies.size(), rangerServices.size());
+
+        // Stage 2: Convert merged Ranger policies to Cedar PolicySet
+        CedarPolicySet cedarPolicySet = rangerToCedarConverter.convert(mergedPolicies);
+
+        LOG.info("SyncService Cedar conversion: {} permit(s), {} forbid(s) from {} merged policies",
+                cedarPolicySet.getPermitCount(), cedarPolicySet.getForbidCount(),
+                mergedPolicies.size());
+
+        // Stage 3: Convert Cedar PolicySet to LF permission operations
+        List<LFPermissionOperation> currentOperations = cedarToLFConverter.convert(cedarPolicySet);
+
+        LOG.info("SyncService LF conversion complete: {} operations from Cedar PolicySet",
+                currentOperations.size());
+
+        // Log gap report info if unsupported features were encountered
+        logGapReportIfPresent();
+
+        // Compute diff between previous and current operations
+        PolicyDiff diff = computeDiff(previousOperations, currentOperations);
+
+        LOG.info("SyncService diff computed: {} new grants, {} revocations, {} unchanged",
+                diff.getNewGrants().size(), diff.getRevocations().size(), diff.getUnchangedCount());
+
+        // Build the list of delta operations to apply
+        List<LFPermissionOperation> deltaOperations = new ArrayList<>();
+        deltaOperations.addAll(diff.getNewGrants());
+        deltaOperations.addAll(diff.getRevocations());
+
+        if (deltaOperations.isEmpty()) {
+            LOG.info("SyncService: no changes to apply in multi-service sync cycle");
+        } else {
+            LOG.info("SyncService: applying {} delta operations in multi-service sync cycle",
+                    deltaOperations.size());
+
+            for (LFPermissionOperation op : deltaOperations) {
+                logAuditEntry(op);
+            }
+
+            BatchResult batchResult = lakeFormationClient.applyBatch(deltaOperations, deadLetterLogger);
+
+            LOG.info("SyncService batch result: applied={}, rolledBack={}, failedPolicies={}",
+                    batchResult.getAppliedOperations(),
+                    batchResult.getRolledBackOperations(),
+                    batchResult.getFailedPolicyIds());
+        }
+
+        // Update the previous snapshot to the current state
+        previousOperations = currentOperations;
+        lastCedarPolicyText = cedarPolicySet.toCedarString();
+
+        // Persist checkpoint with per-service version map (Req 10.1, 10.2)
+        if (checkpointStore != null) {
+            checkpointStore.save(new HashMap<>(serviceVersions), lastCedarPolicyText);
+        }
+    }
+
     /**
      * Called when Ranger Admin connectivity is lost. The service continues
      * operating with the last known policy set (Req 4.7).
@@ -315,11 +553,24 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
                 return WildcardRefreshResult.success(duration, 0, 0, 0, 0);
             }
 
+            // Log per-service breakdown of glob policies (Req 11.2)
+            Map<String, Integer> globCountByService = new HashMap<>();
+            for (RangerPolicy policy : globPolicies) {
+                String serviceType = policy.getService() != null ? policy.getService() : "lakeformation";
+                globCountByService.merge(serviceType, 1, Integer::sum);
+            }
+            LOG.info("Wildcard refresh: glob policies by serviceType: {}", globCountByService);
+
             // Step 2: Collect the source policy IDs of glob-containing policies
+            // Use service-type-prefixed IDs to match the @source annotation format
             Set<String> globPolicyIds = new HashSet<>();
             for (RangerPolicy policy : globPolicies) {
                 String policyId = policy.getId() != null ? String.valueOf(policy.getId()) : "unknown";
-                globPolicyIds.add(policyId);
+                String serviceType = policy.getService() != null ? policy.getService() : "lakeformation";
+                // Match the @source("serviceType:policyId") format used in Cedar namespace isolation
+                globPolicyIds.add(serviceType + ":" + policyId);
+                LOG.debug("Wildcard refresh: re-expanding policy {} from serviceType={}",
+                        policyId, serviceType);
             }
 
             // Step 3: Re-run conversion pipeline on glob policies
@@ -358,7 +609,7 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             } else {
                 LOG.info("Wildcard refresh: applying {} delta operations", deltaOperations.size());
 
-                // Audit log each operation
+                // Audit log each operation (includes service type via @source prefix)
                 for (LFPermissionOperation op : deltaOperations) {
                     logAuditEntry(op);
                 }
@@ -373,14 +624,20 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             CedarPolicySet fullCedarPolicySet = rangerToCedarConverter.convert(lastKnownPolicies);
             lastCedarPolicyText = fullCedarPolicySet.toCedarString();
 
+            // Persist checkpoint: use per-service version map in multi-service mode
             if (checkpointStore != null) {
-                checkpointStore.save(lastPolicyVersion, lastCedarPolicyText);
+                if (isMultiServiceMode()) {
+                    checkpointStore.save(new HashMap<>(serviceVersions), lastCedarPolicyText);
+                } else {
+                    checkpointStore.save(lastPolicyVersion, lastCedarPolicyText);
+                }
             }
 
             long duration = System.currentTimeMillis() - startTime;
             LOG.info("Wildcard refresh completed: duration={}ms, policiesEvaluated={}, "
-                    + "newGrants={}, revocations={}, unchanged={}",
-                    duration, globPolicies.size(), newGrants, revocations, unchanged);
+                    + "newGrants={}, revocations={}, unchanged={}, serviceTypes={}",
+                    duration, globPolicies.size(), newGrants, revocations, unchanged,
+                    globCountByService.keySet());
 
             return WildcardRefreshResult.success(duration, globPolicies.size(),
                     newGrants, revocations, unchanged);
@@ -395,19 +652,43 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
 
     /**
      * Logs an audit entry for a single grant/revoke operation.
-     * Each entry includes the policy ID, resource path, principal ARN,
-     * and permission type(s) for audit purposes (Req 4.6).
+     * Each entry includes the service type, policy ID, resource path, principal ARN,
+     * and permission type(s) for audit purposes (Req 4.6, Req 12.1, Req 12.2).
+     * <p>
+     * The service type is parsed from the source policy ID, which uses the format
+     * {@code "serviceType:policyId"} (e.g., "hive:42", "lakeformation:5").
      */
     static void logAuditEntry(LFPermissionOperation op) {
         LFResource resource = op.getResource();
         String resourcePath = formatResourcePath(resource);
+        String serviceType = parseServiceType(op.getSourcePolicyId());
 
-        AUDIT_LOG.info("AUDIT: operation={}, policyId={}, resource={}, principal={}, permissions={}",
+        AUDIT_LOG.info("AUDIT: serviceType={}, operation={}, policyId={}, resource={}, principal={}, permissions={}",
+                serviceType,
                 op.getOperationType(),
                 op.getSourcePolicyId(),
                 resourcePath,
                 op.getPrincipalArn(),
                 op.getPermissions());
+    }
+
+    /**
+     * Parses the service type prefix from a source policy ID.
+     * The expected format is {@code "serviceType:policyId"} (e.g., "hive:42").
+     * Returns "unknown" if the source policy ID is null or does not contain a colon.
+     *
+     * @param sourcePolicyId the source policy ID with optional service type prefix
+     * @return the service type, or "unknown" if not present
+     */
+    static String parseServiceType(String sourcePolicyId) {
+        if (sourcePolicyId == null || sourcePolicyId.isEmpty()) {
+            return "unknown";
+        }
+        int colonIndex = sourcePolicyId.indexOf(':');
+        if (colonIndex > 0) {
+            return sourcePolicyId.substring(0, colonIndex);
+        }
+        return "unknown";
     }
 
     /**
@@ -570,6 +851,41 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
      */
     List<RangerPolicy> getLastKnownPolicies() {
         return lastKnownPolicies;
+    }
+
+    /**
+     * Returns the set of service types that have completed at least one
+     * successful policy fetch (for testing the first-sync gate).
+     */
+    Set<String> getInitializedServices() {
+        return Collections.unmodifiableSet(new HashSet<>(initializedServices));
+    }
+
+    /**
+     * Returns the per-service version map (for testing checkpoint persistence).
+     */
+    Map<String, Long> getServiceVersions() {
+        return Collections.unmodifiableMap(new HashMap<>(serviceVersions));
+    }
+
+    /**
+     * Returns the list of configured Ranger services (for testing).
+     */
+    List<BaseRangerService> getRangerServices() {
+        return rangerServices;
+    }
+
+    /**
+     * Returns a comma-separated list of service type names for logging.
+     */
+    private String getServiceNames() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < rangerServices.size(); i++) {
+            if (i > 0) sb.append(", ");
+            BaseRangerService svc = rangerServices.get(i);
+            sb.append(svc.getServiceType()).append(":").append(svc.getServiceInstanceName());
+        }
+        return sb.toString();
     }
 
     /**

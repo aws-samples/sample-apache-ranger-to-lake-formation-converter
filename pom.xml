@@ -163,6 +163,9 @@
                 <directory>conf</directory>
                 <includes>
                     <include>ranger-servicedef-lakeformation.json</include>
+                    <include>ranger-servicedef-hive.json</include>
+                    <include>ranger-servicedef-presto.json</include>
+                    <include>ranger-servicedef-trino.json</include>
                     <include>ranger-lakeformation-security.xml</include>
                     <include>ranger-lakeformation-audit.xml</include>
                     <include>ranger-lakeformation-policymgr-ssl.xml</include>
@@ -177,6 +180,9 @@
                 <directory>conf</directory>
                 <includes>
                     <include>ranger-servicedef-lakeformation.json</include>
+                    <include>ranger-servicedef-hive.json</include>
+                    <include>ranger-servicedef-presto.json</include>
+                    <include>ranger-servicedef-trino.json</include>
                 </includes>
             </testResource>
         </testResources>

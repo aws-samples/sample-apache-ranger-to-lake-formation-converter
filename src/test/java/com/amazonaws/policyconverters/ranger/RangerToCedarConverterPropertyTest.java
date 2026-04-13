@@ -358,12 +358,12 @@ class RangerToCedarConverterPropertyTest {
 
         CedarPolicySet result = converter.convert(Collections.singletonList(policy));
 
-        // All source policy IDs should match the original policy ID
+        // All source policy IDs should match the original policy ID with service type prefix
         List<String> sourcePolicyIds = result.getSourcePolicyIds();
         assertFalse(sourcePolicyIds.isEmpty(), "Should have at least one source policy ID");
         for (String id : sourcePolicyIds) {
-            assertEquals(String.valueOf(policyId), id,
-                    "Source policy ID should match original Ranger policy ID");
+            assertEquals("lakeformation:" + policyId, id,
+                    "Source policy ID should be prefixed with service type");
         }
     }
 

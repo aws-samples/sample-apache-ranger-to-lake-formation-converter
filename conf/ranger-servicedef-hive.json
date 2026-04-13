@@ -1,0 +1,65 @@
+{
+    "name": "hive",
+    "displayName": "Apache Hive",
+    "implClass": "com.amazonaws.policyconverters.ranger.service.ResourceLookupService",
+    "label": "Hive",
+    "description": "Apache Hive Permission Management for Lake Formation Sync",
+    "options": {
+        "enableDenyAndExceptionsInPolicies": "false"
+    },
+    "resources": [
+        {
+            "itemId": 1,
+            "name": "database",
+            "type": "string",
+            "level": 10,
+            "mandatory": true,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "excludesSupported": false,
+            "isValidLeaf": true,
+            "label": "Database",
+            "description": "Hive Database"
+        },
+        {
+            "itemId": 2,
+            "name": "table",
+            "type": "string",
+            "level": 20,
+            "mandatory": false,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "excludesSupported": false,
+            "parent": "database",
+            "isValidLeaf": true,
+            "label": "Table",
+            "description": "Table within a database"
+        },
+        {
+            "itemId": 3,
+            "name": "column",
+            "type": "string",
+            "level": 30,
+            "mandatory": false,
+            "lookupSupported": true,
+            "recursiveSupported": false,
+            "excludesSupported": false,
+            "parent": "table",
+            "isValidLeaf": true,
+            "label": "Column",
+            "description": "Column within a table"
+        }
+    ],
+    "accessTypes": [
+        {"itemId": 1, "name": "select", "label": "Select"},
+        {"itemId": 2, "name": "update", "label": "Update"},
+        {"itemId": 3, "name": "create", "label": "Create"},
+        {"itemId": 4, "name": "drop", "label": "Drop"},
+        {"itemId": 5, "name": "alter", "label": "Alter"},
+        {"itemId": 6, "name": "index", "label": "Index"},
+        {"itemId": 7, "name": "lock", "label": "Lock"},
+        {"itemId": 8, "name": "all", "label": "All"},
+        {"itemId": 9, "name": "read", "label": "Read"},
+        {"itemId": 10, "name": "write", "label": "Write"}
+    ]
+}

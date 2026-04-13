@@ -25,6 +25,7 @@ public class MetricsEmitter {
 
     private static final String SERVICE_NAME_DIMENSION = "ServiceName";
     private static final String SERVICE_NAME_VALUE = "conversion-server";
+    private static final String SERVICE_TYPE_DIMENSION = "ServiceType";
 
     private final CloudWatchClient cloudWatchClient;
     private final String namespace;
@@ -46,6 +47,31 @@ public class MetricsEmitter {
         metrics.add(datum("SyncCycleSuccess", 1.0, StandardUnit.COUNT, serviceDimension));
         metrics.add(datum("SyncCycleDuration", result.getDurationMs(), StandardUnit.MILLISECONDS, serviceDimension));
         metrics.addAll(commonMetrics(result, serviceDimension));
+
+        publish(metrics);
+    }
+
+    /**
+     * Records metrics for a successful sync cycle with a ServiceType dimension.
+     * Publishes the same metrics as {@link #recordSuccess(SyncCycleResult)} but adds
+     * a {@code ServiceType} dimension to PoliciesProcessed, GrantsApplied, and RevocationsApplied.
+     *
+     * @param result      the sync cycle result
+     * @param serviceType the Ranger service type (e.g., "hive", "presto")
+     */
+    public void recordSuccess(SyncCycleResult result, String serviceType) {
+        Dimension serviceDimension = serviceDimension();
+        List<MetricDatum> metrics = new ArrayList<>();
+
+        metrics.add(datum("SyncCycleSuccess", 1.0, StandardUnit.COUNT, serviceDimension));
+        metrics.add(datum("SyncCycleDuration", result.getDurationMs(), StandardUnit.MILLISECONDS, serviceDimension));
+
+        if (serviceType != null) {
+            Dimension serviceTypeDimension = serviceTypeDimension(serviceType);
+            metrics.addAll(commonMetrics(result, serviceDimension, serviceTypeDimension));
+        } else {
+            metrics.addAll(commonMetrics(result, serviceDimension));
+        }
 
         publish(metrics);
     }
@@ -78,11 +104,81 @@ public class MetricsEmitter {
         publish(metrics);
     }
 
+    /**
+     * Records metrics for a failed sync cycle with a ServiceType dimension.
+     * Publishes the same metrics as {@link #recordFailure(SyncCycleResult)} but adds
+     * a {@code ServiceType} dimension to PoliciesProcessed, GrantsApplied, and RevocationsApplied.
+     *
+     * @param result      the sync cycle result
+     * @param serviceType the Ranger service type (e.g., "hive", "presto")
+     */
+    public void recordFailure(SyncCycleResult result, String serviceType) {
+        Dimension serviceDimension = serviceDimension();
+        List<MetricDatum> metrics = new ArrayList<>();
+
+        metrics.add(datum("SyncCycleFailure", 1.0, StandardUnit.COUNT, serviceDimension));
+
+        String errorType = result.getErrorClass() != null ? result.getErrorClass() : "Unknown";
+        Dimension errorTypeDimension = Dimension.builder()
+                .name("ErrorType")
+                .value(errorType)
+                .build();
+        metrics.add(MetricDatum.builder()
+                .metricName("ErrorCount")
+                .value(1.0)
+                .unit(StandardUnit.COUNT)
+                .dimensions(serviceDimension, errorTypeDimension)
+                .build());
+
+        if (serviceType != null) {
+            Dimension serviceTypeDimension = serviceTypeDimension(serviceType);
+            metrics.addAll(commonMetrics(result, serviceDimension, serviceTypeDimension));
+        } else {
+            metrics.addAll(commonMetrics(result, serviceDimension));
+        }
+
+        publish(metrics);
+    }
+
+    /**
+     * Records a metric when a Ranger plugin fails to fetch policies.
+     * Publishes PluginFetchFailure count with a ServiceType dimension
+     * so alarms can be configured per service in CloudWatch.
+     *
+     * @param serviceType the Ranger service type that failed (e.g., "hive", "presto")
+     */
+    public void recordPluginFetchFailure(String serviceType) {
+        Dimension serviceDimension = serviceDimension();
+        Dimension serviceTypeDimension = serviceTypeDimension(
+                serviceType != null ? serviceType : "unknown");
+        List<MetricDatum> metrics = List.of(
+                MetricDatum.builder()
+                        .metricName("PluginFetchFailure")
+                        .value(1.0)
+                        .unit(StandardUnit.COUNT)
+                        .dimensions(serviceDimension, serviceTypeDimension)
+                        .build()
+        );
+        publish(metrics);
+    }
+
     private List<MetricDatum> commonMetrics(SyncCycleResult result, Dimension serviceDimension) {
         return List.of(
                 datum("PoliciesProcessed", result.getPoliciesProcessed(), StandardUnit.COUNT, serviceDimension),
                 datum("GrantsApplied", result.getGrantsApplied(), StandardUnit.COUNT, serviceDimension),
                 datum("RevocationsApplied", result.getRevocationsApplied(), StandardUnit.COUNT, serviceDimension)
+        );
+    }
+
+    private List<MetricDatum> commonMetrics(SyncCycleResult result, Dimension serviceDimension,
+                                            Dimension serviceTypeDimension) {
+        return List.of(
+                datum("PoliciesProcessed", result.getPoliciesProcessed(), StandardUnit.COUNT,
+                        serviceDimension, serviceTypeDimension),
+                datum("GrantsApplied", result.getGrantsApplied(), StandardUnit.COUNT,
+                        serviceDimension, serviceTypeDimension),
+                datum("RevocationsApplied", result.getRevocationsApplied(), StandardUnit.COUNT,
+                        serviceDimension, serviceTypeDimension)
         );
     }
 
@@ -146,6 +242,13 @@ public class MetricsEmitter {
         return Dimension.builder()
                 .name(SERVICE_NAME_DIMENSION)
                 .value(SERVICE_NAME_VALUE)
+                .build();
+    }
+
+    private static Dimension serviceTypeDimension(String serviceType) {
+        return Dimension.builder()
+                .name(SERVICE_TYPE_DIMENSION)
+                .value(serviceType)
                 .build();
     }
 

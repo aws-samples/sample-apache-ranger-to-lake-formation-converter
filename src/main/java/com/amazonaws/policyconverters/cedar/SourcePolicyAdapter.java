@@ -45,4 +45,13 @@ public interface SourcePolicyAdapter {
      * or empty if not applicable (non-AWS sources).
      */
     Optional<AwsContext> getAwsContext();
+
+    /**
+     * Whether this adapter should process the given policy.
+     * Returns {@code true} by default. Catalog-aware adapters (Presto, Trino)
+     * override this to filter policies by their configured GDC catalog name.
+     */
+    default boolean shouldProcessPolicy(RangerPolicy policy) {
+        return true;
+    }
 }
