@@ -27,7 +27,6 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 ## Features not yet implemented
 
 - **Tags**: Tags within Apache Ranger is not yet supported but is planned to be implemented. Due to how tagging works in both systems being vastly different, this has a lot of complexity that needs to be thoroughly thought through, implemented and tested. Also, tagging usually requires the integration of a Tagging service, such as Apache Atlas which increases the complexity.
-- 
 
 ## Features not planned to be implemented
 
@@ -157,13 +156,23 @@ Copy the configuration files to the plugin's configuration directory:
 
 ### 4. Start the Sync Service
 
+The recommended entry point is `ConversionServerMain`, which provides structured logging, CloudWatch metrics, and graceful shutdown:
+
 ```bash
 java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
   com.amazonaws.policyconverters.app.ConversionServerMain \
   /path/to/server-config.yaml
 ```
 
-The process blocks on the main thread until a shutdown signal (SIGTERM/SIGINT) is received, at which point it gracefully finishes the current sync cycle and exits.
+A legacy `SyncServiceMain` entry point is also available for simpler deployments without the server wrapper (no CloudWatch metrics or structured JSON logging):
+
+```bash
+java -cp ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
+  com.amazonaws.policyconverters.app.SyncServiceMain \
+  /path/to/sync-config.yaml
+```
+
+Both entry points block on the main thread until a shutdown signal (SIGTERM/SIGINT) is received, at which point they gracefully finish the current sync cycle and exit.
 
 On first startup with an empty checkpoint, the first policy refresh performs a bulk sync (all current policies are treated as new grants).
 
@@ -217,11 +226,17 @@ rangerConfig:
   password: "admin_password"
   maxRetries: 3
   retryBackoffMs: 1000
+  # Kerberos authentication (alternative to username/password)
+  # kerberosKeytab: "/etc/security/keytabs/ranger.keytab"
+  # kerberosPrincipal: "ranger/host@EXAMPLE.COM"
 
 awsConfig:
   region: "us-east-1"
   catalogId: "123456789012"
   roleArn: "arn:aws:iam::123456789012:role/RangerLFSyncRole"
+  # Static credentials (optional, not recommended for production)
+  # accessKey: "AKIAIOSFODNN7EXAMPLE"
+  # secretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
 principalMapping:
   userMappings:
@@ -241,7 +256,7 @@ checkpointPath: "/var/lib/ranger/lakeformation/sync-checkpoint.json"
 
 server:
   shutdownTimeoutSeconds: 30
-  logLevel: INFO
+  logLevel: INFO                # TRACE | DEBUG | INFO | WARN | ERROR
   metricsNamespace: RangerLFSync
 
 reverseSync:
@@ -249,10 +264,13 @@ reverseSync:
   reportOnly: false
   dryRun: false
   periodicIntervalMs: 0
+  # catalogId: "123456789012"   # defaults to awsConfig.catalogId
   exclusionFilter:
     excludedPrincipals: []
     excludedResourcePatterns: []
 ```
+
+The Ranger connection supports both username/password and Kerberos authentication. At least one must be configured.
 
 
 ### Multi-Service Ranger Configuration
@@ -381,13 +399,20 @@ The checkpoint store tracks a per-service policy version map alongside the merge
 | Ranger Access Type | Lake Formation Permission | Notes |
 |-------------------|--------------------------|-------|
 | `select` | `SELECT` | Direct mapping |
-| `update` | `INSERT` | Ranger "update" maps to LF "INSERT" |
-| `create` | `CREATE_TABLE` | Table-level creation |
-| `drop` | `DROP` | Direct mapping |
+| `insert` | `INSERT` | Direct mapping |
+| `delete` | `DELETE` | Direct mapping |
+| `describe` | `DESCRIBE` | Direct mapping |
 | `alter` | `ALTER` | Direct mapping |
-| `read` | `SELECT` | Alias for select |
-| `write` | `INSERT` | Alias for update |
+| `drop` | `DROP` | Direct mapping |
+| `create_database` | `CREATE_DATABASE` | Catalog-level creation |
+| `create_table` | `CREATE_TABLE` | Database-level creation |
+| `update` | `INSERT` | Legacy alias |
+| `create` | `CREATE_TABLE` | Legacy alias |
+| `read` | `SELECT` | Legacy alias |
+| `write` | `INSERT` | Legacy alias |
 | `all` | `SELECT, INSERT, DELETE, ALTER, DROP, DESCRIBE` | Expanded to all applicable permissions |
+| `datalocation` | `DATA_LOCATION_ACCESS` | S3 data location access |
+| `data_location_access` | `DATA_LOCATION_ACCESS` | S3 data location access |
 
 ## Wildcard Pattern Refresh
 
@@ -463,6 +488,25 @@ Failed operations are written in JSON-lines format:
 {"timestamp":"2025-01-15T10:30:00Z","policyId":"42","operation":"GRANT","resource":{"database":"analytics","table":"events"},"principal":"arn:aws:iam::123456789012:role/DataAnalyst","permissions":["SELECT"],"error":"ConcurrentModificationException","retryCount":5}
 ```
 
+## Cedar Policy Schema
+
+The conversion pipeline uses an intermediate Cedar policy representation validated against a DataCatalog schema (`src/main/resources/cedar/datacatalog.cedarschema`). The schema defines valid entity types and action-resource constraints:
+
+| Cedar Action | Valid Resource Types |
+|---|---|
+| `SELECT` | Table, Column |
+| `INSERT` | Table |
+| `UPDATE` | Table |
+| `DELETE` | Table |
+| `DESCRIBE` | Catalog, Database, Table |
+| `ALTER` | Database, Table |
+| `DROP` | Database, Table |
+| `CREATE_DATABASE` | Catalog |
+| `CREATE_TABLE` | Database |
+| `DATA_LOCATION_ACCESS` | DataLocation |
+
+Cedar policy statements that fail schema validation are excluded and recorded in the gap report.
+
 ## Architecture
 
 The codebase is organized by responsibility:
@@ -532,6 +576,25 @@ The project includes a multi-stage `Dockerfile` that builds the fat JAR and pack
 docker build -t ranger-lf-sync .
 docker run -v /path/to/config.yaml:/app/config.yaml ranger-lf-sync
 ```
+
+## CloudWatch Metrics
+
+The conversion server publishes operational metrics to a configurable CloudWatch namespace (default: `RangerLFSync`). All metrics include a `ServiceName=conversion-server` dimension.
+
+| Metric | Unit | When Published |
+|--------|------|----------------|
+| `SyncCycleSuccess` | Count (1) | Sync cycle succeeds |
+| `SyncCycleFailure` | Count (1) | Sync cycle fails |
+| `SyncCycleDuration` | Milliseconds | Sync cycle succeeds |
+| `PoliciesProcessed` | Count | Every cycle |
+| `GrantsApplied` | Count | Every cycle |
+| `RevocationsApplied` | Count | Every cycle |
+| `ErrorCount` | Count (1) | On error (includes `ErrorType` dimension) |
+| `PluginFetchFailure` | Count (1) | Ranger plugin fetch fails (includes `ServiceType` dimension) |
+| `WildcardRefreshSuccess` / `WildcardRefreshFailure` | Count (1) | Wildcard refresh cycle completes |
+| `WildcardRefreshDuration` | Milliseconds | Wildcard refresh cycle completes |
+| `WildcardRefreshDeltaOperations` | Count | Wildcard refresh cycle completes |
+| `UnmappedAccessType` | Count (1) | Unknown access type encountered |
 
 ## License
 
