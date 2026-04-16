@@ -69,7 +69,7 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
-    entrypoint: ["java", "-cp", "/app/app.jar:/app", "com.amazonaws.policyconverters.server.ConversionServerMain", "/app/config-it.yaml"]
+    entrypoint: ["java", "-cp", "/app/app.jar:/app", "com.amazonaws.policyconverters.app.ConversionServerMain", "/app/config-it.yaml"]
 
 networks:
   rangernw:

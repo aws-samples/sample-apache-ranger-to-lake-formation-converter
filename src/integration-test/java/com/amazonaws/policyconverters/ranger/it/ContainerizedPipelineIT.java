@@ -7,10 +7,13 @@ import org.junit.jupiter.api.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStreamReader;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Abstract base class for containerized integration tests.
@@ -31,6 +34,10 @@ public abstract class ContainerizedPipelineIT {
     protected static final String DEFAULT_DRY_RUN_PATH = "integration-test/docker/dry-run-output";
     protected static final long DEFAULT_SYNC_TIMEOUT_MS = 60_000;
     protected static final long POLL_INTERVAL_MS = 1_000;
+    protected static final long DEFAULT_HEALTH_TIMEOUT_MS = 120_000;
+    protected static final long HEALTH_POLL_INTERVAL_MS = 2_000;
+    private static final String COMPOSE_FILE_PATH = "integration-test/docker/docker-compose.yml";
+    private static final String CHECKPOINT_FILENAME = "sync-checkpoint.json";
 
     private static final String DEFAULT_RANGER_URL = "http://localhost:6080";
     private static final String AUTH_USER = "admin";
@@ -215,14 +222,16 @@ public abstract class ContainerizedPipelineIT {
     }
 
     /**
-     * Delete all files in the dry-run output directory.
+     * Delete dry-run output files (matching {@code dry-run-*.json}) from the output directory.
+     * Preserves other files such as the checkpoint file ({@code sync-checkpoint.json}).
      */
     protected void clearDryRunOutputs() {
         File outputDir = dryRunOutputPath.toFile();
         if (!outputDir.exists()) {
             return;
         }
-        File[] files = outputDir.listFiles();
+        File[] files = outputDir.listFiles((dir, name) ->
+                name.startsWith("dry-run-") && name.endsWith(".json"));
         if (files != null) {
             for (File f : files) {
                 if (!f.delete()) {
@@ -230,6 +239,122 @@ public abstract class ContainerizedPipelineIT {
                 }
             }
         }
+    }
+
+    // ---- Checkpoint helpers ----
+
+    /**
+     * Read and parse the checkpoint file ({@code sync-checkpoint.json}) from the dry-run output directory.
+     *
+     * @return a map of checkpoint fields, or an empty map if the file does not exist or cannot be parsed
+     */
+    @SuppressWarnings("unchecked")
+    protected Map<String, Object> readCheckpointFile() {
+        File checkpointFile = dryRunOutputPath.resolve(CHECKPOINT_FILENAME).toFile();
+        if (!checkpointFile.exists()) {
+            LOG.info("Checkpoint file does not exist: {}", checkpointFile);
+            return Collections.emptyMap();
+        }
+        try {
+            return objectMapper.readValue(checkpointFile, Map.class);
+        } catch (Exception e) {
+            LOG.warn("Failed to parse checkpoint file {}: {}", checkpointFile, e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    // ---- Container lifecycle helpers ----
+
+    /**
+     * Return the Docker Compose file path used by the integration test stack.
+     *
+     * @return the relative path to {@code docker-compose.yml}
+     */
+    protected String getComposeFilePath() {
+        return COMPOSE_FILE_PATH;
+    }
+
+    /**
+     * Poll the conversion-server container until it reaches a running/healthy state.
+     *
+     * @param timeoutMs maximum time to wait in milliseconds
+     * @throws AssertionError if the container does not become healthy within the timeout
+     */
+    protected void waitForContainerHealth(long timeoutMs) {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        LOG.info("Waiting up to {}ms for conversion-server container to become healthy", timeoutMs);
+
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                ProcessBuilder pb = new ProcessBuilder(
+                        "docker", "compose", "-f", getComposeFilePath(), "ps", "conversion-server");
+                pb.redirectErrorStream(true);
+                Process process = pb.start();
+
+                String output;
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    output = reader.lines().collect(Collectors.joining("\n"));
+                }
+                int exitCode = process.waitFor();
+
+                if (exitCode == 0 && output.toLowerCase().contains("running")) {
+                    LOG.info("conversion-server container is running");
+                    return;
+                }
+
+                LOG.debug("Container not yet healthy (exit={}): {}", exitCode, output);
+            } catch (Exception e) {
+                LOG.warn("Error checking container health: {}", e.getMessage());
+            }
+
+            try {
+                Thread.sleep(HEALTH_POLL_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while waiting for container health", e);
+            }
+        }
+
+        throw new AssertionError(
+                "conversion-server container did not become healthy within " + timeoutMs + "ms");
+    }
+
+    /**
+     * Restart the conversion-server container and wait for it to become healthy.
+     *
+     * @throws Exception if the restart command fails or the container does not become healthy
+     */
+    protected void restartConversionServer() throws Exception {
+        LOG.info("Restarting conversion-server container via docker stop + start");
+        // Use 'docker stop' + 'docker start' instead of 'docker restart' to avoid
+        // nerdctl healthcheck timer issues on macOS (systemd-run fails).
+        String containerName = "docker-conversion-server-1";
+
+        // Stop the container
+        ProcessBuilder stopPb = new ProcessBuilder("docker", "stop", containerName);
+        stopPb.redirectErrorStream(true);
+        Process stopProcess = stopPb.start();
+        try (java.io.InputStream is = stopProcess.getInputStream()) {
+            byte[] buf = new byte[1024];
+            while (is.read(buf) != -1) { /* drain */ }
+        }
+        int stopExit = stopProcess.waitFor();
+        LOG.info("docker stop exit code: {}", stopExit);
+
+        // Start the container
+        ProcessBuilder startPb = new ProcessBuilder("docker", "start", containerName);
+        startPb.redirectErrorStream(true);
+        Process startProcess = startPb.start();
+        try (java.io.InputStream is = startProcess.getInputStream()) {
+            byte[] buf = new byte[1024];
+            while (is.read(buf) != -1) { /* drain */ }
+        }
+        int startExit = startProcess.waitFor();
+        if (startExit != 0) {
+            throw new RuntimeException("docker start conversion-server failed with exit code " + startExit);
+        }
+        LOG.info("Restart command completed, waiting for container health");
+        waitForContainerHealth(DEFAULT_HEALTH_TIMEOUT_MS);
     }
 
     // ---- Private helpers ----

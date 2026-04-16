@@ -3,6 +3,7 @@ package com.amazonaws.policyconverters.app;
 import ch.qos.logback.classic.Level;
 import com.amazonaws.policyconverters.cedar.CedarSchemaProvider;
 import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
+import com.amazonaws.policyconverters.config.RangerConnectionConfig;
 import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.config.ServerConfig;
 import com.amazonaws.policyconverters.config.ServerConfigLoader;
@@ -38,7 +39,11 @@ import com.amazonaws.policyconverters.config.ConfigValidator;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
 import com.amazonaws.policyconverters.ranger.RangerPlugin;
 import com.amazonaws.policyconverters.sync.SyncService;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.ranger.plugin.model.RangerPolicy;
+import org.apache.ranger.plugin.util.ServicePolicies;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -53,10 +58,16 @@ import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
 
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -326,8 +337,18 @@ public class ConversionServerMain {
             executor = createMultiServiceSyncCycleExecutor(syncService,
                     finalReverseSyncService, finalReverseSyncConfig);
         } else {
+            // Extract Ranger Admin credentials for direct REST API fetch
+            RangerConnectionConfig rangerConnectionConfig = syncConfig.getRangerConfig();
+            String rangerAdminUrl = rangerConnectionConfig != null
+                    ? rangerConnectionConfig.getRangerAdminUrl() : null;
+            String rangerUsername = rangerConnectionConfig != null
+                    ? rangerConnectionConfig.getUsername() : null;
+            String rangerPassword = rangerConnectionConfig != null
+                    ? rangerConnectionConfig.getPassword() : null;
+
             executor = createSyncCycleExecutor(plugin, syncService,
-                    finalReverseSyncService, finalReverseSyncConfig);
+                    finalReverseSyncService, finalReverseSyncConfig,
+                    rangerAdminUrl, rangerUsername, rangerPassword);
         }
 
         // Create MetricsEmitter and ServerLifecycle
@@ -462,25 +483,30 @@ public class ConversionServerMain {
     }
 
     /**
-     * Creates a SyncCycleExecutor that fetches policies from the plugin,
-     * feeds them through the SyncService pipeline, and optionally triggers
-     * reverse-sync after each forward-sync cycle.
+     * Creates a SyncCycleExecutor that fetches policies directly from Ranger Admin
+     * via the REST API (bypassing the PolicyRefresher), feeds them through the
+     * SyncService pipeline, and optionally triggers reverse-sync after each
+     * forward-sync cycle.
      */
     static SyncCycleExecutor createSyncCycleExecutor(RangerPlugin plugin, SyncService syncService,
                                                       ReverseSyncService reverseSyncService,
-                                                      ReverseSyncConfig reverseSyncConfig) {
+                                                      ReverseSyncConfig reverseSyncConfig,
+                                                      String rangerAdminUrl, String username,
+                                                      String password) {
         return () -> {
             long startMs = System.currentTimeMillis();
             try {
-                // Fetch latest policies from Ranger Admin via the plugin
-                org.apache.ranger.plugin.util.ServicePolicies servicePolicies = plugin.getLatestPolicies();
+                // Fetch policies directly from Ranger Admin REST API
+                // (bypasses PolicyRefresher backoff)
+                org.apache.ranger.plugin.util.ServicePolicies servicePolicies =
+                        fetchPoliciesFromRangerAdmin(rangerAdminUrl, username, password);
                 int policyCount = 0;
                 if (servicePolicies != null) {
                     policyCount = servicePolicies.getPolicies() != null
                             ? servicePolicies.getPolicies().size() : 0;
                     syncService.onPoliciesUpdated(servicePolicies);
                 } else {
-                    LOG.warn("No policies available from Ranger Admin plugin");
+                    LOG.warn("No policies available from Ranger Admin REST API");
                 }
 
                 // Trigger reverse-sync after forward-sync if enabled
@@ -507,6 +533,86 @@ public class ConversionServerMain {
                 return SyncCycleResult.failure(durationMs, e);
             }
         };
+    }
+
+    /**
+     * Fetches policies directly from Ranger Admin REST API, bypassing the PolicyRefresher.
+     * Uses GET /service/public/v2/api/service/{serviceName}/policy with Basic auth.
+     * Returns a ServicePolicies envelope with policyVersion = System.currentTimeMillis(),
+     * or null on error.
+     *
+     * @param rangerAdminUrl the Ranger Admin base URL (e.g. http://ranger-admin:6080)
+     * @param username       the Ranger Admin username
+     * @param password       the Ranger Admin password
+     * @return ServicePolicies containing the current policies, or null on error
+     */
+    static ServicePolicies fetchPoliciesFromRangerAdmin(
+            String rangerAdminUrl, String username, String password) {
+        String endpoint = rangerAdminUrl + "/service/public/v2/api/service/lakeformation/policy";
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(endpoint).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(10_000);
+
+            String credentials = username + ":" + password;
+            String encoded = Base64.getEncoder().encodeToString(
+                    credentials.getBytes(StandardCharsets.UTF_8));
+            conn.setRequestProperty("Authorization", "Basic " + encoded);
+
+            int status = conn.getResponseCode();
+            if (status != 200) {
+                String errorBody = readResponseStream(
+                        status >= 400 ? conn.getErrorStream() : conn.getInputStream());
+                LOG.error("Failed to fetch policies from Ranger Admin: HTTP {} - {}",
+                        status, errorBody);
+                return null;
+            }
+
+            String responseBody = readResponseStream(conn.getInputStream());
+
+            ObjectMapper mapper = new ObjectMapper();
+            mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+            List<RangerPolicy> policies = mapper.readValue(responseBody,
+                    new TypeReference<List<RangerPolicy>>() {});
+
+            // Filter out disabled policies — the REST API returns all policies
+            // regardless of isEnabled status, but the conversion pipeline should
+            // only process enabled policies (matching PolicyRefresher behavior).
+            policies.removeIf(p -> p.getIsEnabled() != null && !p.getIsEnabled());
+
+            ServicePolicies servicePolicies = new ServicePolicies();
+            servicePolicies.setServiceName("lakeformation");
+            servicePolicies.setPolicies(policies);
+            servicePolicies.setPolicyVersion(System.currentTimeMillis());
+
+            LOG.debug("Fetched {} policies from Ranger Admin REST API", policies.size());
+            return servicePolicies;
+        } catch (IOException e) {
+            LOG.error("IOException fetching policies from Ranger Admin: {}", e.getMessage(), e);
+            return null;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    /**
+     * Reads the full content of an InputStream into a String.
+     */
+    private static String readResponseStream(InputStream is) throws IOException {
+        if (is == null) return "";
+        ByteArrayOutputStream result = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int length;
+        while ((length = is.read(buffer)) != -1) {
+            result.write(buffer, 0, length);
+        }
+        return result.toString(StandardCharsets.UTF_8.name());
     }
 
     /**

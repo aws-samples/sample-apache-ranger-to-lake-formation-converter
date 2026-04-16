@@ -46,10 +46,10 @@ SERVICEDEF_CODE=$(curl -s -o /tmp/servicedef-body.json -w "%{http_code}" \
   -u "${AUTH}" 2>/dev/null) || true
 
 if [ "${SERVICEDEF_CODE}" = "200" ]; then
-  if grep -q "LakeFormationResourceLookupService" /tmp/servicedef-body.json 2>/dev/null; then
+  if grep -q "ResourceLookupService" /tmp/servicedef-body.json 2>/dev/null; then
     echo "Patching servicedef implClass for Docker compatibility..."
     # Replace the custom implClass with a built-in Ranger class
-    sed 's/com\.amazonaws\.policyconverters\.ranger\.service\.LakeFormationResourceLookupService/org.apache.ranger.services.tag.RangerServiceTag/g' \
+    sed 's/com\.amazonaws\.policyconverters\.ranger\.service\.ResourceLookupService/org.apache.ranger.services.tag.RangerServiceTag/g' \
       /tmp/servicedef-body.json > /tmp/servicedef-patched.json
 
     # Extract the servicedef ID
@@ -94,6 +94,19 @@ if [ "${CREATE_CODE}" = "200" ]; then
 elif [ "${CREATE_CODE}" = "409" ]; then
   echo "Service instance '${SERVICE_NAME}' already exists (HTTP 409)."
   exit 0
+elif [ "${CREATE_CODE}" = "400" ]; then
+  # Ranger returns 400 with a warning when the implClass is not found in the
+  # Ranger Admin classpath. The service instance is still created — the warning
+  # just means resource lookup won't be available (which is fine for IT).
+  RESPONSE_BODY=$(cat /tmp/service-response.json 2>/dev/null) || true
+  if echo "${RESPONSE_BODY}" | grep -q "Resource lookup will not be available"; then
+    echo "WARNING: Service instance '${SERVICE_NAME}' created with resource lookup warning (HTTP 400)."
+    echo "  ${RESPONSE_BODY}"
+    exit 0
+  fi
+  echo "ERROR: Failed to create service instance '${SERVICE_NAME}'. HTTP status: ${CREATE_CODE}" >&2
+  cat /tmp/service-response.json >&2 2>/dev/null || true
+  exit 1
 else
   echo "ERROR: Failed to create service instance '${SERVICE_NAME}'. HTTP status: ${CREATE_CODE}" >&2
   cat /tmp/service-response.json >&2 2>/dev/null || true

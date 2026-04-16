@@ -65,6 +65,12 @@ public class ContainerizedDataLocationIT extends ContainerizedPipelineIT {
 
     @Test
     void testDataLocationDeletionRevoke() throws Exception {
+        // Use a unique data location path to avoid collisions with testDataLocationGrant's
+        // previousOperations state in the shared conversion server container. If both tests
+        // use the same path, a race between @AfterEach policy deletion and this test's
+        // policy creation can cause the conversion server's diff to see no change.
+        String uniquePath = "revoke-bucket/data/staging";
+
         // Step 1: Create policy and confirm initial GRANT
         String policyJson = "{"
                 + "\"name\":\"containerized-datalocation-revoke\","
@@ -72,7 +78,7 @@ public class ContainerizedDataLocationIT extends ContainerizedPipelineIT {
                 + "\"isEnabled\":true,"
                 + "\"policyType\":0,"
                 + "\"resources\":{"
-                + "  \"datalocation\":{\"values\":[\"my-bucket/data/warehouse\"],\"isRecursive\":false}"
+                + "  \"datalocation\":{\"values\":[\"" + uniquePath + "\"],\"isRecursive\":false}"
                 + "},"
                 + "\"policyItems\":[{"
                 + "  \"users\":[\"data_admin\"],"
@@ -81,6 +87,10 @@ public class ContainerizedDataLocationIT extends ContainerizedPipelineIT {
                 + "}";
 
         int policyId = createAndTrackPolicy(policyJson);
+
+        // Verify conversion-server container is still running before waiting
+        waitForContainerHealth(10_000);
+
         List<DryRunOutput> initialOutputs = waitForDryRunOutput();
 
         assertFalse(initialOutputs.isEmpty(), "Expected initial dry-run output");
@@ -95,9 +105,9 @@ public class ContainerizedDataLocationIT extends ContainerizedPipelineIT {
         clearDryRunOutputs();
         deletePolicyAndUntrack(policyId);
 
-        // Step 3: Wait for revoke output (use extended timeout — the Ranger SDK PolicyRefresher
-        // may take longer to detect deletions due to internal backoff logic when policyDeltas=null)
-        List<DryRunOutput> revokeOutputs = waitForDryRunOutput();
+        // Step 3: Wait for revoke output (bounded by PolicyRefresher bypass fix:
+        // REST fetch every 5s, so 3 × 5s + 10s margin = 25s)
+        List<DryRunOutput> revokeOutputs = waitForDryRunOutput(25_000);
 
         assertFalse(revokeOutputs.isEmpty(), "Expected dry-run output after deletion");
 
