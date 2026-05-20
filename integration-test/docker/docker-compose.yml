@@ -1,5 +1,4 @@
 name: ranger-lf-it
-version: "3.8"
 
 services:
   ranger-db:

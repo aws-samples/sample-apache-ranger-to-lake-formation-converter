@@ -33,13 +33,13 @@ echo "Ranger Admin is ready."
 "${SCRIPT_DIR}/create-service-instance.sh" --ranger-url http://localhost:6080
 
 # Start conversion-server
-docker compose up -d conversion-server
 mkdir -p "${REPO_ROOT}/integration-test/docker/dry-run-output"
+docker compose up -d conversion-server
 
-# Wait for conversion-server (60s timeout)
+# Wait for conversion-server to become healthy (60s timeout)
 elapsed=0
-until docker compose ps conversion-server 2>/dev/null | grep -q "running"; do
+until [ "$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q conversion-server 2>/dev/null)" 2>/dev/null)" = "healthy" ]; do
   sleep 2; elapsed=$((elapsed + 2))
-  [ $elapsed -ge 60 ] && echo "ERROR: conversion-server did not start" >&2 && exit 1
+  [ $elapsed -ge 60 ] && echo "ERROR: conversion-server did not become healthy" >&2 && exit 1
 done
 echo "conversion-server is ready."
