@@ -318,6 +318,7 @@
                             <systemPropertyVariables>
                                 <ranger.admin.url>http://localhost:6080</ranger.admin.url>
                                 <dry.run.output.path>${project.basedir}/integration-test/docker/dry-run-output</dry.run.output.path>
+                                <compose.file.path>${project.basedir}/integration-test/docker/docker-compose.yml</compose.file.path>
                             </systemPropertyVariables>
                         </configuration>
                         <executions>

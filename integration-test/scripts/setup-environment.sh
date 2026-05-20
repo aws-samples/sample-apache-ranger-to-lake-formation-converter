@@ -4,9 +4,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Build IT image from pre-built JAR
-JAR=$(ls "${REPO_ROOT}"/target/conversion-server-*.jar 2>/dev/null | head -1 || ls "${REPO_ROOT}"/target/ranger-lakeformation-plugin-*.jar 2>/dev/null | head -1)
+JAR=$(ls "${REPO_ROOT}"/target/*-jar-with-dependencies.jar 2>/dev/null | head -1)
 if [ -z "${JAR}" ]; then
-  echo "ERROR: No JAR found in ${REPO_ROOT}/target/. Run 'mvn package -DskipTests' first." >&2
+  echo "ERROR: No fat JAR (*-jar-with-dependencies.jar) found in ${REPO_ROOT}/target/. Run 'mvn package -DskipTests' first." >&2
   exit 1
 fi
 

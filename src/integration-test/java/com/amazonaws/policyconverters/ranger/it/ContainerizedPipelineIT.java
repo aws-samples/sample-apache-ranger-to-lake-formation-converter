@@ -36,7 +36,8 @@ public abstract class ContainerizedPipelineIT {
     protected static final long POLL_INTERVAL_MS = 1_000;
     protected static final long DEFAULT_HEALTH_TIMEOUT_MS = 120_000;
     protected static final long HEALTH_POLL_INTERVAL_MS = 2_000;
-    private static final String COMPOSE_FILE_PATH = "integration-test/docker/docker-compose.yml";
+    private static final String COMPOSE_FILE_PATH = System.getProperty(
+            "compose.file.path", "integration-test/docker/docker-compose.yml");
     private static final String CHECKPOINT_FILENAME = "sync-checkpoint.json";
 
     private static final String DEFAULT_RANGER_URL = "http://localhost:6080";
