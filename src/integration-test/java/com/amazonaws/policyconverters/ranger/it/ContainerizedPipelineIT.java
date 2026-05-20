@@ -340,6 +340,9 @@ public abstract class ContainerizedPipelineIT {
         }
         int stopExit = stopProcess.waitFor();
         LOG.info("docker stop exit code: {}", stopExit);
+        if (stopExit != 0) {
+            throw new RuntimeException("docker stop conversion-server failed with exit code " + stopExit);
+        }
 
         // Start the container
         ProcessBuilder startPb = new ProcessBuilder("docker", "start", containerId);
@@ -374,9 +377,17 @@ public abstract class ContainerizedPipelineIT {
             "ps", "-q", "conversion-server");
         pb.redirectErrorStream(true);
         Process p = pb.start();
-        String id = new String(p.getInputStream().readAllBytes()).trim();
-        if (id.isEmpty()) throw new IllegalStateException("conversion-server container not running");
-        return id;
+        try {
+            String id = new String(p.getInputStream().readAllBytes()).trim();
+            int exitCode = p.waitFor();
+            if (exitCode != 0 || id.isEmpty()) {
+                throw new IllegalStateException(
+                    "docker compose ps -q failed (exit=" + exitCode + "): " + id);
+            }
+            return id;
+        } finally {
+            p.destroy();
+        }
     }
 
     // ---- Private helpers ----
