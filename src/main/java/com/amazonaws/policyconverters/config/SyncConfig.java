@@ -32,6 +32,7 @@ public class SyncConfig {
     private final String checkpointPath;
     private final int wildcardRefreshIntervalSeconds;
     private final List<RangerServiceConfig> rangerServices;
+    private final TagSyncConfig tagSync;
 
     /**
      * Backward-compatible constructor without checkpointPath, wildcardRefreshIntervalSeconds,
@@ -46,7 +47,7 @@ public class SyncConfig {
             Long lfRetryBackoffMs,
             String deadLetterLogPath) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
-                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, null, null, null);
+                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, null, null, null, null);
     }
 
     /**
@@ -64,7 +65,26 @@ public class SyncConfig {
             Integer wildcardRefreshIntervalSeconds) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
                 maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
-                wildcardRefreshIntervalSeconds, null);
+                wildcardRefreshIntervalSeconds, null, null);
+    }
+
+    /**
+     * Backward-compatible constructor without tagSync.
+     */
+    public SyncConfig(
+            RangerConnectionConfig rangerConfig,
+            AwsConfig awsConfig,
+            PrincipalMappingConfig principalMapping,
+            Long policyRefreshIntervalMs,
+            Integer maxLfRetries,
+            Long lfRetryBackoffMs,
+            String deadLetterLogPath,
+            String checkpointPath,
+            Integer wildcardRefreshIntervalSeconds,
+            List<RangerServiceConfig> rangerServices) {
+        this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
+                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
+                wildcardRefreshIntervalSeconds, rangerServices, null);
     }
 
     @JsonCreator
@@ -78,7 +98,8 @@ public class SyncConfig {
             @JsonProperty("deadLetterLogPath") String deadLetterLogPath,
             @JsonProperty("checkpointPath") String checkpointPath,
             @JsonProperty("wildcardRefreshIntervalSeconds") Integer wildcardRefreshIntervalSeconds,
-            @JsonProperty("rangerServices") List<RangerServiceConfig> rangerServices) {
+            @JsonProperty("rangerServices") List<RangerServiceConfig> rangerServices,
+            @JsonProperty("tagSync") TagSyncConfig tagSync) {
         this.rangerConfig = rangerConfig;
         this.awsConfig = awsConfig;
         this.principalMapping = principalMapping;
@@ -93,6 +114,7 @@ public class SyncConfig {
         this.wildcardRefreshIntervalSeconds = wildcardRefreshIntervalSeconds != null
                 ? wildcardRefreshIntervalSeconds : DEFAULT_WILDCARD_REFRESH_INTERVAL_SECONDS;
         this.rangerServices = rangerServices;
+        this.tagSync = tagSync != null ? tagSync : new TagSyncConfig(false, null, 0L);
     }
 
     public RangerConnectionConfig getRangerConfig() {
@@ -135,6 +157,10 @@ public class SyncConfig {
         return rangerServices;
     }
 
+    public TagSyncConfig getTagSync() {
+        return tagSync;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -149,7 +175,8 @@ public class SyncConfig {
                 && Objects.equals(principalMapping, that.principalMapping)
                 && Objects.equals(deadLetterLogPath, that.deadLetterLogPath)
                 && Objects.equals(checkpointPath, that.checkpointPath)
-                && Objects.equals(rangerServices, that.rangerServices);
+                && Objects.equals(rangerServices, that.rangerServices)
+                && Objects.equals(tagSync, that.tagSync);
     }
 
     @Override
@@ -157,7 +184,7 @@ public class SyncConfig {
         return Objects.hash(rangerConfig, awsConfig, principalMapping,
                 policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs,
                 deadLetterLogPath, checkpointPath, wildcardRefreshIntervalSeconds,
-                rangerServices);
+                rangerServices, tagSync);
     }
 
     @Override
@@ -173,6 +200,7 @@ public class SyncConfig {
                 ", checkpointPath='" + checkpointPath + '\'' +
                 ", wildcardRefreshIntervalSeconds=" + wildcardRefreshIntervalSeconds +
                 ", rangerServices=" + rangerServices +
+                ", tagSync=" + tagSync +
                 '}';
     }
 }

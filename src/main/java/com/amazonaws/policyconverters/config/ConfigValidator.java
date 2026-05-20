@@ -1,9 +1,5 @@
 package com.amazonaws.policyconverters.config;
 
-import com.amazonaws.policyconverters.config.AwsConfig;
-import com.amazonaws.policyconverters.config.RangerConnectionConfig;
-import com.amazonaws.policyconverters.config.SyncConfig;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
@@ -51,6 +47,8 @@ public class ConfigValidator {
             validateRangerServices(config.getRangerServices(), errors);
         }
 
+        validateTagSyncConfig(config.getTagSync(), errors);
+
         return errors;
     }
 
@@ -96,6 +94,18 @@ public class ConfigValidator {
                 errors.add(prefix + "serviceType '" + serviceType
                         + "' requires gdcCatalogName");
             }
+        }
+    }
+
+    void validateTagSyncConfig(TagSyncConfig tagSync, List<String> errors) {
+        if (tagSync == null || !tagSync.isEnabled()) {
+            return;
+        }
+        if (isBlank(tagSync.getTagServiceName())) {
+            errors.add("tagSync.tagServiceName is required when tagSync.enabled is true");
+        }
+        if (tagSync.getTagSyncIntervalMs() < 0) {
+            errors.add("tagSync.tagSyncIntervalMs must be >= 0");
         }
     }
 

@@ -1,30 +1,39 @@
 package com.amazonaws.policyconverters.lakeformation;
 
-import com.amazonaws.policyconverters.lakeformation.LFPermission;
-import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
-import com.amazonaws.policyconverters.lakeformation.LFResource;
 import com.amazonaws.policyconverters.config.RetryConfig;
 import com.amazonaws.policyconverters.sync.DeadLetterLogger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import software.amazon.awssdk.services.lakeformation.model.ConcurrentModificationException;
-import software.amazon.awssdk.services.lakeformation.model.InvalidInputException;
+import software.amazon.awssdk.services.lakeformation.model.AlreadyExistsException;
 import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsFailureEntry;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsRequestEntry;
 import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsResponse;
-import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsRequestEntry;
-import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsFailureEntry;
-import software.amazon.awssdk.services.lakeformation.model.GrantPermissionsRequest;
-import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.ColumnLFTag;
+import software.amazon.awssdk.services.lakeformation.model.ConcurrentModificationException;
+import software.amazon.awssdk.services.lakeformation.model.CreateLfTagRequest;
 import software.amazon.awssdk.services.lakeformation.model.DataLakePrincipal;
+import software.amazon.awssdk.services.lakeformation.model.DataLocationResource;
+import software.amazon.awssdk.services.lakeformation.model.DatabaseResource;
+import software.amazon.awssdk.services.lakeformation.model.DeleteLfTagRequest;
+import software.amazon.awssdk.services.lakeformation.model.EntityNotFoundException;
+import software.amazon.awssdk.services.lakeformation.model.GetResourceLfTagsRequest;
+import software.amazon.awssdk.services.lakeformation.model.GetResourceLfTagsResponse;
+import software.amazon.awssdk.services.lakeformation.model.AddLfTagsToResourceRequest;
+import software.amazon.awssdk.services.lakeformation.model.RemoveLfTagsFromResourceRequest;
+import software.amazon.awssdk.services.lakeformation.model.GrantPermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.InvalidInputException;
+import software.amazon.awssdk.services.lakeformation.model.LFTagPair;
+import software.amazon.awssdk.services.lakeformation.model.ListLfTagsRequest;
+import software.amazon.awssdk.services.lakeformation.model.ListLfTagsResponse;
 import software.amazon.awssdk.services.lakeformation.model.Permission;
 import software.amazon.awssdk.services.lakeformation.model.Resource;
-import software.amazon.awssdk.services.lakeformation.model.DatabaseResource;
+import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.TableResource;
 import software.amazon.awssdk.services.lakeformation.model.TableWildcard;
 import software.amazon.awssdk.services.lakeformation.model.TableWithColumnsResource;
-import software.amazon.awssdk.services.lakeformation.model.DataLocationResource;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -498,6 +507,157 @@ public class LakeFormationClient {
                         operationType + " failed for policyId=" + op.getSourcePolicyId(), e);
             }
         }
+    }
+
+    // ---------------------------------------------------------------
+    // LF-Tag definition management
+    // ---------------------------------------------------------------
+
+    /**
+     * Create an LF-Tag key with the given allowed values.
+     * If the tag already exists, logs INFO and returns without error.
+     */
+    public void createLFTag(String catalogId, String tagKey, List<String> tagValues) {
+        try {
+            lfClient.createLFTag(CreateLfTagRequest.builder()
+                    .catalogId(catalogId)
+                    .tagKey(tagKey)
+                    .tagValues(tagValues)
+                    .build());
+            LOG.info("Created LF-Tag: key={}", tagKey);
+        } catch (AlreadyExistsException e) {
+            LOG.info("LF-Tag already exists (external or prior run): key={}", tagKey);
+        }
+    }
+
+    /**
+     * Delete an LF-Tag key.
+     * If the tag does not exist, logs INFO and returns without error.
+     */
+    public void deleteLFTag(String catalogId, String tagKey) {
+        try {
+            lfClient.deleteLFTag(DeleteLfTagRequest.builder()
+                    .catalogId(catalogId)
+                    .tagKey(tagKey)
+                    .build());
+            LOG.info("Deleted LF-Tag: key={}", tagKey);
+        } catch (EntityNotFoundException e) {
+            LOG.info("LF-Tag not found (already deleted): key={}", tagKey);
+        }
+    }
+
+    /**
+     * List all LF-Tag keys in the catalog. Paginates through all pages.
+     */
+    public List<String> listLFTagKeys(String catalogId) {
+        List<String> keys = new ArrayList<>();
+        String nextToken = null;
+        do {
+            ListLfTagsRequest.Builder reqBuilder = ListLfTagsRequest.builder()
+                    .catalogId(catalogId)
+                    .maxResults(1000);
+            if (nextToken != null) {
+                reqBuilder.nextToken(nextToken);
+            }
+            ListLfTagsResponse response = lfClient.listLFTags(reqBuilder.build());
+            if (response.hasLfTags()) {
+                for (LFTagPair pair : response.lfTags()) {
+                    keys.add(pair.tagKey());
+                }
+            }
+            nextToken = response.nextToken();
+        } while (nextToken != null);
+        return keys;
+    }
+
+    // ---------------------------------------------------------------
+    // LF-Tag resource attachment management
+    // ---------------------------------------------------------------
+
+    /**
+     * Get the LF-Tags currently attached to a resource.
+     * Returns a map of tagKey → tagValue for all managed tags on the resource.
+     * Throws on API failure — caller decides whether to abort reconciliation.
+     */
+    public Map<String, String> getResourceLFTags(LFResource resource, String catalogId) {
+        GetResourceLfTagsResponse response = lfClient.getResourceLFTags(
+                GetResourceLfTagsRequest.builder()
+                        .catalogId(catalogId)
+                        .resource(buildResource(resource))
+                        .showAssignedLFTags(true)
+                        .build());
+
+        Map<String, String> result = new java.util.HashMap<>();
+
+        // Collect database-level tags
+        if (response.hasLfTagOnDatabase()) {
+            for (LFTagPair pair : response.lfTagOnDatabase()) {
+                String val = pair.hasTagValues() && !pair.tagValues().isEmpty()
+                        ? pair.tagValues().get(0) : "true";
+                result.put(pair.tagKey(), val);
+            }
+        }
+        // Collect table-level tags
+        if (response.hasLfTagsOnTable()) {
+            for (LFTagPair pair : response.lfTagsOnTable()) {
+                String val = pair.hasTagValues() && !pair.tagValues().isEmpty()
+                        ? pair.tagValues().get(0) : "true";
+                result.put(pair.tagKey(), val);
+            }
+        }
+        // Collect column-level tags (first column's tags, since we track per-column resources)
+        if (response.hasLfTagsOnColumns()) {
+            for (ColumnLFTag col : response.lfTagsOnColumns()) {
+                if (col.hasLfTags()) {
+                    for (LFTagPair pair : col.lfTags()) {
+                        String val = pair.hasTagValues() && !pair.tagValues().isEmpty()
+                                ? pair.tagValues().get(0) : "true";
+                        result.put(pair.tagKey(), val);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Attach LF-Tags (key → value) to a resource.
+     */
+    public void addLFTagsToResource(LFResource resource, Map<String, String> tags, String catalogId) {
+        List<LFTagPair> lfTags = new ArrayList<>();
+        for (Map.Entry<String, String> e : tags.entrySet()) {
+            lfTags.add(LFTagPair.builder()
+                    .catalogId(catalogId)
+                    .tagKey(e.getKey())
+                    .tagValues(e.getValue())
+                    .build());
+        }
+        lfClient.addLFTagsToResource(AddLfTagsToResourceRequest.builder()
+                .catalogId(catalogId)
+                .resource(buildResource(resource))
+                .lfTags(lfTags)
+                .build());
+        LOG.debug("Added LF-Tags to resource: resource={}, tags={}", resource, tags.keySet());
+    }
+
+    /**
+     * Detach LF-Tag keys from a resource.
+     */
+    public void removeLFTagsFromResource(LFResource resource, List<String> tagKeys, String catalogId) {
+        List<LFTagPair> lfTags = new ArrayList<>();
+        for (String key : tagKeys) {
+            lfTags.add(LFTagPair.builder()
+                    .catalogId(catalogId)
+                    .tagKey(key)
+                    .tagValues("true")
+                    .build());
+        }
+        lfClient.removeLFTagsFromResource(RemoveLfTagsFromResourceRequest.builder()
+                .catalogId(catalogId)
+                .resource(buildResource(resource))
+                .lfTags(lfTags)
+                .build());
+        LOG.debug("Removed LF-Tags from resource: resource={}, tagKeys={}", resource, tagKeys);
     }
 
     /**

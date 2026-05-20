@@ -11,6 +11,7 @@ import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Persists and restores sync checkpoint state to/from a JSON file.
@@ -56,6 +57,27 @@ public class CheckpointStore {
         SyncCheckpoint checkpoint = new SyncCheckpoint(
                 combinedVersion, serviceVersions, Instant.now().toString(), cedarPolicyText);
         writeCheckpoint(checkpoint, cedarPolicyText.length());
+    }
+
+    /**
+     * Persist tag sync state into the existing checkpoint, preserving all other fields.
+     * If no checkpoint exists yet, this is a no-op (tag state will be included on next full save).
+     *
+     * @param tagVersion     the last known Ranger tag version
+     * @param managedTagNames the set of LF-Tag keys created by this pipeline
+     */
+    public void saveTagState(long tagVersion, Set<String> managedTagNames) {
+        Optional<SyncCheckpoint> existing = load();
+        SyncCheckpoint base = existing.orElse(
+                new SyncCheckpoint(0L, null, Instant.now().toString(), ""));
+        SyncCheckpoint updated = new SyncCheckpoint(
+                base.getPolicyVersion(),
+                base.getServiceVersions(),
+                base.getTimestamp(),
+                base.getCedarPolicyText(),
+                tagVersion,
+                managedTagNames);
+        writeCheckpoint(updated, base.getCedarPolicyText().length());
     }
 
     private void writeCheckpoint(SyncCheckpoint checkpoint, int cedarTextLength) {

@@ -3,8 +3,11 @@ package com.amazonaws.policyconverters.sync;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Represents a persisted checkpoint of the sync service state.
@@ -23,19 +26,38 @@ public class SyncCheckpoint {
     private final Map<String, Long> serviceVersions;
     private final String timestamp;
     private final String cedarPolicyText;
+    private final Long lastKnownTagVersion;
+    private final Set<String> lastKnownRangerTagNames;
 
     @JsonCreator
     public SyncCheckpoint(
             @JsonProperty("policyVersion") long policyVersion,
             @JsonProperty("serviceVersions") Map<String, Long> serviceVersions,
             @JsonProperty("timestamp") String timestamp,
-            @JsonProperty("cedarPolicyText") String cedarPolicyText) {
+            @JsonProperty("cedarPolicyText") String cedarPolicyText,
+            @JsonProperty("lastKnownTagVersion") Long lastKnownTagVersion,
+            @JsonProperty("lastKnownRangerTagNames") Set<String> lastKnownRangerTagNames) {
         this.policyVersion = policyVersion;
         this.serviceVersions = serviceVersions != null
                 ? Map.copyOf(serviceVersions)
                 : Map.of("lakeformation", policyVersion);
         this.timestamp = timestamp;
         this.cedarPolicyText = cedarPolicyText != null ? cedarPolicyText : "";
+        this.lastKnownTagVersion = lastKnownTagVersion;
+        this.lastKnownRangerTagNames = lastKnownRangerTagNames != null
+                ? Collections.unmodifiableSet(new HashSet<>(lastKnownRangerTagNames))
+                : Collections.emptySet();
+    }
+
+    /**
+     * Backward-compatible constructor without tag fields.
+     */
+    public SyncCheckpoint(
+            long policyVersion,
+            Map<String, Long> serviceVersions,
+            String timestamp,
+            String cedarPolicyText) {
+        this(policyVersion, serviceVersions, timestamp, cedarPolicyText, null, null);
     }
 
     /**
@@ -43,7 +65,7 @@ public class SyncCheckpoint {
      * Creates a checkpoint with a single "lakeformation" service version entry.
      */
     public SyncCheckpoint(long policyVersion, String timestamp, String cedarPolicyText) {
-        this(policyVersion, null, timestamp, cedarPolicyText);
+        this(policyVersion, null, timestamp, cedarPolicyText, null, null);
     }
 
     public long getPolicyVersion() {
@@ -62,6 +84,14 @@ public class SyncCheckpoint {
         return cedarPolicyText;
     }
 
+    public Long getLastKnownTagVersion() {
+        return lastKnownTagVersion;
+    }
+
+    public Set<String> getLastKnownRangerTagNames() {
+        return lastKnownRangerTagNames;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -70,12 +100,15 @@ public class SyncCheckpoint {
         return policyVersion == that.policyVersion
                 && Objects.equals(serviceVersions, that.serviceVersions)
                 && Objects.equals(timestamp, that.timestamp)
-                && Objects.equals(cedarPolicyText, that.cedarPolicyText);
+                && Objects.equals(cedarPolicyText, that.cedarPolicyText)
+                && Objects.equals(lastKnownTagVersion, that.lastKnownTagVersion)
+                && Objects.equals(lastKnownRangerTagNames, that.lastKnownRangerTagNames);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(policyVersion, serviceVersions, timestamp, cedarPolicyText);
+        return Objects.hash(policyVersion, serviceVersions, timestamp, cedarPolicyText,
+                lastKnownTagVersion, lastKnownRangerTagNames);
     }
 
     @Override
@@ -84,6 +117,8 @@ public class SyncCheckpoint {
         return "SyncCheckpoint{policyVersion=" + policyVersion
                 + ", serviceVersions=" + serviceVersions
                 + ", timestamp='" + timestamp + '\''
-                + ", cedarPolicyTextLength=" + policyLen + '}';
+                + ", cedarPolicyTextLength=" + policyLen
+                + ", lastKnownTagVersion=" + lastKnownTagVersion
+                + ", lastKnownRangerTagNames=" + lastKnownRangerTagNames + '}';
     }
 }

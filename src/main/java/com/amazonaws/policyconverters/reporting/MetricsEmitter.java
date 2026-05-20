@@ -2,6 +2,7 @@ package com.amazonaws.policyconverters.reporting;
 
 import com.amazonaws.policyconverters.config.ServerConfig;
 import com.amazonaws.policyconverters.model.SyncCycleResult;
+import com.amazonaws.policyconverters.model.TagSyncResult;
 import com.amazonaws.policyconverters.model.WildcardRefreshResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -201,6 +202,35 @@ public class MetricsEmitter {
         metrics.add(datum("WildcardRefreshDuration", result.getDurationMs(), StandardUnit.MILLISECONDS, serviceDimension));
         metrics.add(datum("WildcardRefreshDeltaOperations",
                 result.getNewGrants() + result.getRevocations(), StandardUnit.COUNT, serviceDimension));
+
+        publish(metrics);
+    }
+
+    /**
+     * Records metrics for a tag metadata sync cycle.
+     * Emits TagSyncSuccess or TagSyncFailure, TagSyncDuration, individual count metrics,
+     * and TagSyncPartialFailure when the cycle succeeded overall but had individual failures.
+     */
+    public void recordTagSync(TagSyncResult result) {
+        if (result == null) return;
+        Dimension serviceDimension = serviceDimension();
+        List<MetricDatum> metrics = new ArrayList<>();
+
+        if (result.isSuccess()) {
+            metrics.add(datum("TagSyncSuccess", 1.0, StandardUnit.COUNT, serviceDimension));
+        } else {
+            metrics.add(datum("TagSyncFailure", 1.0, StandardUnit.COUNT, serviceDimension));
+        }
+
+        metrics.add(datum("TagSyncDuration", result.getDurationMs(), StandardUnit.MILLISECONDS, serviceDimension));
+        metrics.add(datum("TagsCreated", result.getTagsCreated(), StandardUnit.COUNT, serviceDimension));
+        metrics.add(datum("TagsDeleted", result.getTagsDeleted(), StandardUnit.COUNT, serviceDimension));
+        metrics.add(datum("TagAttachmentsAdded", result.getAttachmentsAdded(), StandardUnit.COUNT, serviceDimension));
+        metrics.add(datum("TagAttachmentsRemoved", result.getAttachmentsRemoved(), StandardUnit.COUNT, serviceDimension));
+
+        if (result.isSuccess() && result.getFailed() > 0) {
+            metrics.add(datum("TagSyncPartialFailure", 1.0, StandardUnit.COUNT, serviceDimension));
+        }
 
         publish(metrics);
     }

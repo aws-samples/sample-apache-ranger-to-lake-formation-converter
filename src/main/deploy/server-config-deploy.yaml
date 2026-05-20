@@ -28,3 +28,11 @@ lfRetryBackoffMs: ${lf.retry.backoff.ms}
 server:
   logLevel: ${server.log.level}
   shutdownTimeoutSeconds: ${server.shutdown.timeout}
+
+# Tag metadata sync configuration.
+# Synchronizes Ranger tag definitions and resource-tag mappings into AWS LF-Tags.
+# Opt-in — set enabled: true and provide tagServiceName to activate.
+tagSync:
+  enabled: false
+  # tagServiceName: "tagservice"  # Ranger tag service instance name (required when enabled)
+  tagSyncIntervalMs: 0             # 0 = same cadence as policyRefreshIntervalMs

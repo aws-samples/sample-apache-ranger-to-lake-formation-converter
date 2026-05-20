@@ -13,10 +13,12 @@ import com.amazonaws.policyconverters.model.SyncCycleResult;
 import com.amazonaws.policyconverters.ranger.HiveServiceAdapter;
 import com.amazonaws.policyconverters.ranger.PrestoServiceAdapter;
 import com.amazonaws.policyconverters.ranger.TrinoServiceAdapter;
+import com.amazonaws.policyconverters.lakeformation.TagMetadataSyncer;
 import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
 import com.amazonaws.policyconverters.ranger.service.HiveRangerService;
 import com.amazonaws.policyconverters.ranger.service.LakeFormationRangerService;
 import com.amazonaws.policyconverters.ranger.service.PrestoRangerService;
+import com.amazonaws.policyconverters.ranger.service.RangerTagService;
 import com.amazonaws.policyconverters.ranger.service.TrinoRangerService;
 import com.amazonaws.policyconverters.reporting.MetricsEmitter;
 import com.amazonaws.policyconverters.sync.CheckpointStore;
@@ -403,6 +405,20 @@ public class ConversionServerMain {
                 LOG.info("Graceful shutdown complete");
             }
         }, "shutdown-hook"));
+
+        // Wire tag sync components if enabled
+        if (syncConfig.getTagSync().isEnabled()) {
+            String tagServiceName = syncConfig.getTagSync().getTagServiceName();
+            LOG.info("Tag sync enabled: tagServiceName={}, tagSyncIntervalMs={}",
+                    tagServiceName, syncConfig.getTagSync().getTagSyncIntervalMs());
+            RangerTagService rangerTagService = new RangerTagService(
+                    tagServiceName, syncConfig.getRangerConfig());
+            TagMetadataSyncer tagMetadataSyncer = new TagMetadataSyncer(
+                    lakeFormationClient, awsConfig.getCatalogId());
+            syncService.setTagSync(rangerTagService, tagMetadataSyncer);
+        } else {
+            LOG.debug("Tag sync disabled — set tagSync.enabled=true to activate");
+        }
 
         // Initialize plugin and start sync service
         if (!multiServiceMode && plugin != null) {

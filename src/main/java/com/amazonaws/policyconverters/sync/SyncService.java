@@ -3,10 +3,12 @@ package com.amazonaws.policyconverters.sync;
 import com.amazonaws.policyconverters.cedar.CedarPolicySet;
 import com.amazonaws.policyconverters.cedar.CedarToLFConverter;
 import com.amazonaws.policyconverters.lakeformation.BatchResult;
+import com.amazonaws.policyconverters.lakeformation.TagMetadataSyncer;
 import com.amazonaws.policyconverters.sync.DeadLetterLogger;
 import com.amazonaws.policyconverters.lakeformation.LakeFormationClient;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapReport;
+import com.amazonaws.policyconverters.model.TagSyncResult;
 import com.amazonaws.policyconverters.lakeformation.LFPermission;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation.OperationType;
@@ -18,6 +20,8 @@ import com.amazonaws.policyconverters.ranger.GlobPatternDetector;
 import com.amazonaws.policyconverters.ranger.RangerPlugin;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
 import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
+import com.amazonaws.policyconverters.ranger.service.RangerTagService;
+import org.apache.ranger.plugin.util.ServiceTags;
 import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.util.ServicePolicies;
 import org.slf4j.Logger;
@@ -69,6 +73,12 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
 
     /** Multi-service list of Ranger services. Empty in single-plugin mode. */
     private final List<BaseRangerService> rangerServices;
+
+    /** Tag sync components — null when tagSync.enabled=false. */
+    private RangerTagService rangerTagService;
+    private TagMetadataSyncer tagMetadataSyncer;
+    private SyncConfig syncConfig;
+    private long lastTagSyncMs = 0L;
 
     private final RangerToCedarConverter rangerToCedarConverter;
     private final CedarToLFConverter cedarToLFConverter;
@@ -188,6 +198,15 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     }
 
     /**
+     * Configure optional tag metadata sync components.
+     * Must be called before {@link #start(SyncConfig)} to take effect.
+     */
+    public void setTagSync(RangerTagService rangerTagService, TagMetadataSyncer tagMetadataSyncer) {
+        this.rangerTagService = rangerTagService;
+        this.tagMetadataSyncer = tagMetadataSyncer;
+    }
+
+    /**
      * Returns whether this SyncService is operating in multi-service mode.
      */
     public boolean isMultiServiceMode() {
@@ -206,6 +225,7 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             LOG.warn("SyncService is already running, ignoring start request");
             return;
         }
+        this.syncConfig = config;
         LOG.info("Starting SyncService with config: policyRefreshIntervalMs={}, maxLfRetries={}, multiServiceMode={}",
                 config.getPolicyRefreshIntervalMs(), config.getMaxLfRetries(), isMultiServiceMode());
 
@@ -506,6 +526,80 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         if (checkpointStore != null) {
             checkpointStore.save(new HashMap<>(serviceVersions), lastCedarPolicyText);
         }
+
+        // Tag metadata sync runs after policy sync; failure does not affect policy sync result
+        executeTagMetadataSync();
+    }
+
+    /**
+     * Execute one tag metadata sync cycle, if tag sync is configured and the interval has elapsed.
+     * Returns null if tag sync is disabled or skipped.
+     */
+    public TagSyncResult executeTagMetadataSync() {
+        if (rangerTagService == null || tagMetadataSyncer == null) {
+            return null;
+        }
+        if (syncConfig != null && !syncConfig.getTagSync().isEnabled()) {
+            return null;
+        }
+
+        long now = System.currentTimeMillis();
+        long interval = resolveTagSyncInterval();
+        if (interval > 0 && (now - lastTagSyncMs) < interval) {
+            LOG.debug("SyncService: tag sync interval not yet elapsed, skipping");
+            return null;
+        }
+
+        long start = now;
+        ServiceTags tags = rangerTagService.getLatestTags();
+        if (tags == null) {
+            LOG.error("SyncService: RangerTagService returned null — no tag data available, skipping tag sync");
+            return TagSyncResult.failure(System.currentTimeMillis() - start,
+                    new IllegalStateException("No tag data available from Ranger"));
+        }
+
+        Set<String> managedTags = checkpointStore != null
+                ? checkpointStore.load()
+                        .map(SyncCheckpoint::getLastKnownRangerTagNames)
+                        .orElse(Collections.emptySet())
+                : Collections.emptySet();
+
+        TagSyncResult result = tagMetadataSyncer.sync(tags, managedTags);
+
+        // Persist tag version and managed tag names on any outcome except total fetch failure
+        if (checkpointStore != null) {
+            Set<String> newManagedTags = buildTagNames(tags);
+            checkpointStore.saveTagState(rangerTagService.getLastKnownTagVersion(), newManagedTags);
+        }
+
+        lastTagSyncMs = System.currentTimeMillis();
+
+        if (!result.isSuccess()) {
+            LOG.error("SyncService: tag sync failed: {}", result.getErrorMessage());
+        } else if (result.getFailed() > 0) {
+            LOG.warn("SyncService: tag sync partial failure — {} operation(s) failed", result.getFailed());
+        } else {
+            LOG.info("SyncService: tag sync complete — tagsCreated={}, tagsDeleted={}, "
+                    + "attachmentsAdded={}, attachmentsRemoved={}, durationMs={}",
+                    result.getTagsCreated(), result.getTagsDeleted(),
+                    result.getAttachmentsAdded(), result.getAttachmentsRemoved(), result.getDurationMs());
+        }
+        return result;
+    }
+
+    private long resolveTagSyncInterval() {
+        if (syncConfig == null) return 0L;
+        long configured = syncConfig.getTagSync().getTagSyncIntervalMs();
+        return configured > 0 ? configured : syncConfig.getPolicyRefreshIntervalMs();
+    }
+
+    private static Set<String> buildTagNames(ServiceTags tags) {
+        if (tags == null || tags.getTagDefinitions() == null) return Collections.emptySet();
+        Set<String> names = new HashSet<>();
+        for (org.apache.ranger.plugin.model.RangerTagDef def : tags.getTagDefinitions().values()) {
+            if (def.getName() != null) names.add(def.getName());
+        }
+        return names;
     }
 
     /**
