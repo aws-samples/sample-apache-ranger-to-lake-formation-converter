@@ -68,23 +68,68 @@ Tests include JUnit 5 unit tests and jqwik property-based tests (minimum 100 ite
 
 Integration tests come in two flavors:
 
-**In-process pipeline tests** exercise the conversion chain against a live Docker Ranger Admin instance using a dry-run client that writes LF operations to JSON files:
+**In-process (DryRun) tests** exercise the full conversion pipeline against a live Ranger Admin using a dry-run Lake Formation client that writes permission operations to JSON files instead of calling AWS. No real AWS credentials required.
+
+**Containerized tests** run the conversion server as a Docker container alongside Ranger Admin. The server registers as a real Ranger plugin, receives policy updates via the plugin refresh mechanism, and writes dry-run output to a bind-mounted directory. Tests create/update/delete Ranger policies via REST and validate the resulting JSON files from the host.
+
+Both test types use pre-configured synthetic AWS credentials and account IDs — no AWS account or IAM setup is required to run them.
+
+#### Automated lifecycle (recommended)
+
+Maven manages the full Docker lifecycle — build, start, provision, test, tear down:
 
 ```bash
-# Full lifecycle: start Ranger, run tests, tear down
-./integration-test/scripts/run-integration-tests.sh
-
-# Or manually:
-./integration-test/scripts/start-ranger.sh
 mvn verify -Pintegration-test
-./integration-test/scripts/stop-ranger.sh
 ```
 
-**Containerized integration tests** run the conversion server as a Docker container alongside Ranger Admin. The server registers as a real plugin, receives policy updates via the Ranger policy refresh mechanism, and writes dry-run output to a shared volume. Tests create/update/delete policies via REST and validate the dry-run JSON files from the host:
+This:
+1. Builds the fat JAR
+2. Builds `Dockerfile.it` into a local Docker image (using the pre-built JAR — no inner Maven build)
+3. Starts `ranger-db`, `ranger-solr`, `ranger-admin` and waits for readiness
+4. Installs the Lake Formation service definition and creates the service instance
+5. Starts the `conversion-server` container
+6. Runs all `*IT.java` tests via Maven Failsafe
+7. Tears down the stack (even if tests fail)
+8. Generates an HTML report at `target/site/failsafe-report.html`
 
 ```bash
-# The Docker Compose stack includes: ranger-db, ranger-solr, ranger-admin, conversion-server
-docker compose -f integration-test/docker/docker-compose.yml up --build
+open target/site/failsafe-report.html
+```
+
+To run only the DryRun tests (faster — no containerized server needed):
+
+```bash
+mvn verify -Pintegration-test -Dit.test="*DryRun*" -Dfailsafe.failIfNoSpecifiedTests=false
+```
+
+#### Manual stack for exploratory testing
+
+Start the full stack and keep it running:
+
+```bash
+mvn package -Pstart-stack -DskipTests
+```
+
+This builds the JAR and Docker image, starts all four services in the correct order, and installs the Ranger service definition and instance. The stack stays up so you can:
+- Create Ranger policies in the Admin UI at `http://localhost:6080` (credentials: `admin` / `rangerR0cks!`)
+- Watch dry-run JSON files appear in `integration-test/docker/dry-run-output/`
+
+Check stack status:
+```bash
+docker compose -f integration-test/docker/docker-compose.yml ps
+```
+
+Tear down when done:
+```bash
+mvn validate -Pstop-stack
+```
+
+#### Debugging failed test runs
+
+The legacy `run-integration-tests.sh` script remains available for debugging. It provides Docker preflight checks, a `--skip-teardown` flag to leave the stack running after a failure, and a more robust cleanup trap:
+
+```bash
+./integration-test/scripts/run-integration-tests.sh --skip-teardown
 ```
 
 Integration tests produce human-readable JSON audit logs in `logs/it-audit-<TestClass>.json` showing each Ranger input action and the resulting Lake Formation API calls. See [DESIGN.md](DESIGN.md) for details.
@@ -566,15 +611,25 @@ The codebase is organized by responsibility:
 
 ## Docker Container
 
-The project includes a multi-stage `Dockerfile` that builds the fat JAR and packages it into an `eclipse-temurin:17-jre` runtime image. The container:
+The project ships two Dockerfiles:
 
-- Uses `SIGTERM` as the stop signal for graceful shutdown
-- Includes a `HEALTHCHECK` via `pgrep`
-- Accepts a config file path as the entrypoint argument
+- **`Dockerfile`** — multi-stage build used for production deployment. Runs `mvn package` inside the image to produce the fat JAR, then packages it into an `eclipse-temurin:17-jre` runtime image.
+- **`integration-test/docker/Dockerfile.it`** — single-stage runtime image used for integration tests. Accepts the pre-built fat JAR via `--build-arg JAR_FILE=` to avoid a slow inner Maven build on every test run.
+
+Both containers:
+- Use `SIGTERM` as the stop signal for graceful shutdown
+- Include a `HEALTHCHECK` via `pgrep`
+- Accept a config file path as the entrypoint argument
 
 ```bash
+# Production image
 docker build -t ranger-lf-sync .
 docker run -v /path/to/config.yaml:/app/config.yaml ranger-lf-sync
+
+# Integration test image (built automatically by mvn verify -Pintegration-test)
+docker build -f integration-test/docker/Dockerfile.it \
+  --build-arg "JAR_FILE=target/ranger-lakeformation-plugin-1.0.0-SNAPSHOT-jar-with-dependencies.jar" \
+  -t ranger-lf-it:local .
 ```
 
 ## CloudWatch Metrics
