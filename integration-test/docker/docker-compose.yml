@@ -1,3 +1,4 @@
+name: ranger-lf-it
 version: "3.8"
 
 services:
@@ -48,9 +49,7 @@ services:
       start_period: 30s
 
   conversion-server:
-    build:
-      context: ../..
-      dockerfile: Dockerfile
+    image: ranger-lf-it:local
     depends_on:
       ranger-admin:
         condition: service_healthy

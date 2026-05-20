@@ -1,0 +1,7 @@
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+ARG JAR_FILE
+COPY ${JAR_FILE} app.jar
+COPY integration-test/docker/server-config-it.yaml config-it.yaml
+COPY integration-test/docker/ranger-lakeformation-security-it.xml ranger-security.xml
+ENTRYPOINT ["java", "-jar", "app.jar", "/app/config-it.yaml"]
