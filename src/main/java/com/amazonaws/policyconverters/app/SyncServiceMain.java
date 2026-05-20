@@ -89,7 +89,10 @@ public class SyncServiceMain {
      * @throws IllegalStateException    if configuration validation fails
      */
     static SyncConfig loadAndValidateConfig(String configFilePath) throws IOException {
-        ConfigLoader configLoader = new ConfigLoader();
+        return loadAndValidateConfig(configFilePath, new ConfigLoader());
+    }
+
+    static SyncConfig loadAndValidateConfig(String configFilePath, ConfigLoader configLoader) throws IOException {
         SyncConfig config = configLoader.load(configFilePath);
 
         // Log masked configuration for diagnostics

@@ -1,6 +1,7 @@
 package com.amazonaws.policyconverters.app;
 
 import com.amazonaws.policyconverters.config.AwsConfig;
+import com.amazonaws.policyconverters.config.ConfigLoader;
 import com.amazonaws.policyconverters.config.SyncConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,7 +29,7 @@ class SyncServiceMainTest {
     @Test
     void loadAndValidateConfig_validYaml_succeeds() throws Exception {
         File configFile = createValidYamlConfig();
-        SyncConfig config = SyncServiceMain.loadAndValidateConfig(configFile.getAbsolutePath());
+        SyncConfig config = SyncServiceMain.loadAndValidateConfig(configFile.getAbsolutePath(), cleanEnvLoader());
 
         assertNotNull(config);
         assertNotNull(config.getRangerConfig());
@@ -116,7 +117,7 @@ class SyncServiceMainTest {
     @Test
     void loadAndValidateConfig_validProperties_succeeds() throws Exception {
         File configFile = createValidPropertiesConfig();
-        SyncConfig config = SyncServiceMain.loadAndValidateConfig(configFile.getAbsolutePath());
+        SyncConfig config = SyncServiceMain.loadAndValidateConfig(configFile.getAbsolutePath(), cleanEnvLoader());
 
         assertNotNull(config);
         assertEquals("https://ranger.example.com:6080", config.getRangerConfig().getRangerAdminUrl());
@@ -142,6 +143,11 @@ class SyncServiceMainTest {
             writer.write("  roleMappings: {}\n");
         }
         return configFile;
+    }
+
+    /** ConfigLoader that ignores host environment variables so tests are environment-independent. */
+    private static ConfigLoader cleanEnvLoader() {
+        return new ConfigLoader(name -> null);
     }
 
     private File createValidPropertiesConfig() throws IOException {
