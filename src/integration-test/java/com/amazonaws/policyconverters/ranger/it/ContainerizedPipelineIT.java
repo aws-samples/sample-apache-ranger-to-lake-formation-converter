@@ -328,10 +328,10 @@ public abstract class ContainerizedPipelineIT {
         LOG.info("Restarting conversion-server container via docker stop + start");
         // Use 'docker stop' + 'docker start' instead of 'docker restart' to avoid
         // nerdctl healthcheck timer issues on macOS (systemd-run fails).
-        String containerName = "docker-conversion-server-1";
+        String containerId = resolveConversionServerContainerId();
 
         // Stop the container
-        ProcessBuilder stopPb = new ProcessBuilder("docker", "stop", containerName);
+        ProcessBuilder stopPb = new ProcessBuilder("docker", "stop", containerId);
         stopPb.redirectErrorStream(true);
         Process stopProcess = stopPb.start();
         try (java.io.InputStream is = stopProcess.getInputStream()) {
@@ -342,7 +342,7 @@ public abstract class ContainerizedPipelineIT {
         LOG.info("docker stop exit code: {}", stopExit);
 
         // Start the container
-        ProcessBuilder startPb = new ProcessBuilder("docker", "start", containerName);
+        ProcessBuilder startPb = new ProcessBuilder("docker", "start", containerId);
         startPb.redirectErrorStream(true);
         Process startProcess = startPb.start();
         try (java.io.InputStream is = startProcess.getInputStream()) {
@@ -355,6 +355,28 @@ public abstract class ContainerizedPipelineIT {
         }
         LOG.info("Restart command completed, waiting for container health");
         waitForContainerHealth(DEFAULT_HEALTH_TIMEOUT_MS);
+    }
+
+    /**
+     * Resolve the container ID of the running conversion-server via {@code docker compose ps -q}.
+     *
+     * <p>Using the container ID rather than a hard-coded name makes the method immune to
+     * the checkout directory name (e.g. {@code docker-conversion-server-1} vs
+     * {@code apacherangertolf-conversion-server-1}).</p>
+     *
+     * @return the container ID string
+     * @throws IllegalStateException if the container is not currently running
+     */
+    private static String resolveConversionServerContainerId() throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(
+            "docker", "compose",
+            "-f", COMPOSE_FILE_PATH,
+            "ps", "-q", "conversion-server");
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+        String id = new String(p.getInputStream().readAllBytes()).trim();
+        if (id.isEmpty()) throw new IllegalStateException("conversion-server container not running");
+        return id;
     }
 
     // ---- Private helpers ----

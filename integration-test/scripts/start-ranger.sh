@@ -43,7 +43,7 @@ done
 
 # ── Start the Ranger stack ─────────────────────────────────────────────────
 echo "Starting Ranger stack using compose file: ${COMPOSE_FILE}"
-docker compose -f "${COMPOSE_FILE}" up -d
+docker compose -f "${COMPOSE_FILE}" up -d ranger-db ranger-solr ranger-admin
 
 # ── Poll for readiness ─────────────────────────────────────────────────────
 elapsed=0
@@ -52,6 +52,17 @@ echo "Waiting for Ranger Admin to become ready at ${HEALTH_URL} (timeout=${TIMEO
 while true; do
   if curl -sf "${HEALTH_URL}" > /dev/null 2>&1; then
     echo "Ranger Admin is ready at http://localhost:6080"
+
+    # Install servicedef and service instance so conversion-server can connect
+    echo "Installing Lake Formation service definition..."
+    "${SCRIPT_DIR}/install-servicedef.sh" --ranger-url "${HEALTH_URL%/login.jsp}"
+    echo "Creating Lake Formation service instance..."
+    "${SCRIPT_DIR}/create-service-instance.sh" --ranger-url "${HEALTH_URL%/login.jsp}"
+
+    # Start conversion-server now that Ranger is fully provisioned
+    echo "Starting conversion-server..."
+    docker compose -f "${COMPOSE_FILE}" up -d conversion-server
+    echo "Stack is fully up."
     exit 0
   fi
 
