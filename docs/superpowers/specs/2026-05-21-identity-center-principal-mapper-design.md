@@ -159,7 +159,7 @@ The IdentityStore API's `Filters` parameter on `ListUsers`/`ListGroups` is depre
 **`resolveUser(String rangerUser)`:**
 1. Null input → WARN + `Optional.empty()` (no API call, no metric).
 2. Cache hit (not expired) → return cached ARN.
-3. Call `identityStoreClient.getUserId(GetUserIdRequest.builder().identityStoreId(identityStoreId).alternateIdentifier(AlternateIdentifier.builder().uniqueAttribute(UniqueAttribute.builder().attributePath("userName").attributeValue(rangerUser).build()).build()).build())`:
+3. Call `identityStoreClient.getUserId(GetUserIdRequest.builder().identityStoreId(identityStoreId).alternateIdentifier(AlternateIdentifier.builder().uniqueAttribute(UniqueAttribute.builder().attributePath("userName").attributeValue(Document.fromString(rangerUser)).build()).build()).build())` — note `attributeValue` takes `Document.fromString(...)` not a raw `String` (AWS SDK v2 models this field as `Document`):
    - Success → ARN = `"arn:aws:identitystore::" + accountId + ":user/" + response.userId()`, cache with TTL, return.
    - `ResourceNotFoundException` → WARN + metric + `Optional.empty()`.
    - Any other `IdentityStoreException` or `SdkClientException` → WARN + metric + `Optional.empty()`.
