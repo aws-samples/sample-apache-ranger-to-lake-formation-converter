@@ -31,7 +31,17 @@ policyRefreshIntervalMs: 5000
 
 # Interval in seconds for periodic wildcard pattern re-evaluation against Glue catalog.
 # Set to 0 or omit to disable. Positive value enables periodic refresh.
-wildcardRefreshIntervalSeconds: 0
+wildcardRefreshIntervalSeconds: 15
+
+# Checkpoint file path for restart resilience (inside the dry-run-output bind-mount)
+checkpointPath: /app/dry-run-output/sync-checkpoint.json
 
 maxLfRetries: 3
 lfRetryBackoffMs: 500
+
+# Tag metadata sync configuration.
+# Synchronizes Ranger tag definitions and resource-tag mappings into AWS LF-Tags.
+tagSync:
+  enabled: true
+  tagServiceName: "cl_tag"
+  tagSyncIntervalMs: 0

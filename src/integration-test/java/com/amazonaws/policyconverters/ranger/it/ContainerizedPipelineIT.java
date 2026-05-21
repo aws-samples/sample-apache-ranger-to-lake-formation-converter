@@ -1,6 +1,7 @@
 package com.amazonaws.policyconverters.ranger.it;
 
 import com.amazonaws.policyconverters.model.DryRunOutput;
+import com.amazonaws.policyconverters.model.TagSyncOutput;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
@@ -430,5 +431,106 @@ public abstract class ContainerizedPipelineIT {
         }
         result.sort(Comparator.comparing(File::getName));
         return result;
+    }
+
+    // ---- Tag-sync output helpers ----
+
+    /**
+     * Wait for new tag-sync output files (tag-sync-*.json) to appear, using the default timeout.
+     *
+     * @return list of parsed {@link TagSyncOutput} objects from new files
+     */
+    protected List<TagSyncOutput> waitForTagSyncOutput() {
+        return waitForTagSyncOutput(DEFAULT_SYNC_TIMEOUT_MS);
+    }
+
+    /**
+     * Wait for new tag-sync output files (tag-sync-*.json) to appear.
+     *
+     * @param timeoutMs maximum time to wait
+     * @return list of parsed {@link TagSyncOutput} objects from new files
+     * @throws AssertionError if no new output appears within the timeout
+     */
+    protected List<TagSyncOutput> waitForTagSyncOutput(long timeoutMs) {
+        File outputDir = dryRunOutputPath.toFile();
+        Map<String, Long> baseline = snapshotTagSyncTimestamps(outputDir);
+        long deadline = System.currentTimeMillis() + timeoutMs;
+
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(POLL_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while waiting for tag-sync output", e);
+            }
+
+            Map<String, Long> current = snapshotTagSyncTimestamps(outputDir);
+            List<File> newOrUpdated = findNewOrUpdatedFiles(baseline, current, outputDir);
+            if (!newOrUpdated.isEmpty()) {
+                LOG.info("Found {} new/updated tag-sync output file(s)", newOrUpdated.size());
+                List<TagSyncOutput> outputs = new ArrayList<>();
+                for (File f : newOrUpdated) {
+                    try {
+                        outputs.add(objectMapper.readValue(f, TagSyncOutput.class));
+                    } catch (Exception e) {
+                        LOG.warn("Failed to parse tag-sync output file {}: {}", f.getName(), e.getMessage());
+                    }
+                }
+                return outputs;
+            }
+        }
+
+        throw new AssertionError("Timed out after " + timeoutMs
+                + "ms waiting for tag-sync output in " + dryRunOutputPath);
+    }
+
+    /**
+     * Delete tag-sync output files (tag-sync-*.json) from the output directory.
+     */
+    protected void clearTagSyncOutputs() {
+        File outputDir = dryRunOutputPath.toFile();
+        if (!outputDir.exists()) return;
+        File[] files = outputDir.listFiles((dir, name) ->
+                name.startsWith("tag-sync-") && name.endsWith(".json"));
+        if (files != null) {
+            for (File f : files) {
+                if (!f.delete()) {
+                    LOG.warn("Failed to delete tag-sync output file: {}", f);
+                }
+            }
+        }
+    }
+
+    /**
+     * Read all tag-sync output files currently in the output directory.
+     */
+    protected List<TagSyncOutput> readTagSyncOutputs() {
+        File outputDir = dryRunOutputPath.toFile();
+        File[] files = outputDir.listFiles((dir, name) ->
+                name.startsWith("tag-sync-") && name.endsWith(".json"));
+        if (files == null || files.length == 0) return Collections.emptyList();
+        Arrays.sort(files, Comparator.comparing(File::getName));
+        List<TagSyncOutput> outputs = new ArrayList<>();
+        for (File f : files) {
+            try {
+                outputs.add(objectMapper.readValue(f, TagSyncOutput.class));
+            } catch (Exception e) {
+                LOG.warn("Failed to parse tag-sync output file {}: {}", f.getName(), e.getMessage());
+            }
+        }
+        return outputs;
+    }
+
+    private Map<String, Long> snapshotTagSyncTimestamps(File directory) {
+        Map<String, Long> timestamps = new HashMap<>();
+        if (!directory.exists()) return timestamps;
+        File[] files = directory.listFiles((dir, name) ->
+                name.startsWith("tag-sync-") && name.endsWith(".json"));
+        if (files != null) {
+            for (File f : files) {
+                timestamps.put(f.getName(), f.lastModified());
+            }
+        }
+        return timestamps;
     }
 }

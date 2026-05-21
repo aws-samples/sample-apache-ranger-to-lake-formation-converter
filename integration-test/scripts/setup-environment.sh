@@ -28,9 +28,10 @@ until curl -sf http://localhost:6080/login.jsp >/dev/null 2>&1; do
 done
 echo "Ranger Admin is ready."
 
-# Provision servicedef and service instance
+# Provision servicedef, service instance, and tag service
 "${SCRIPT_DIR}/install-servicedef.sh" --ranger-url http://localhost:6080
 "${SCRIPT_DIR}/create-service-instance.sh" --ranger-url http://localhost:6080
+"${SCRIPT_DIR}/create-tag-service.sh" --ranger-url http://localhost:6080
 
 # Start conversion-server
 mkdir -p "${REPO_ROOT}/integration-test/docker/dry-run-output"
