@@ -18,6 +18,7 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 - **Atomic Per-Policy Application**: Permission changes for a single Ranger policy are applied as a unit with rollback on failure.
 - **Checkpoint Persistence**: Sync state (Cedar policy text and per-service Ranger policy versions) is persisted to a JSON checkpoint file, surviving restarts without a full re-sync.
 - **Gap Reporting**: Produces a structured JSON report of Ranger features that have no Lake Formation equivalent (data masking, deny policies, etc.).
+- **Pre-Migration Assessment**: A one-time CLI tool that connects to Ranger Admin, runs the full conversion pipeline in read-only mode, and reports how many policies will convert cleanly, partially, or not at all — with projected Lake Formation grant counts and a per-gap-type breakdown. No AWS credentials or Lake Formation access required.
 - **Dead-Letter Log**: Failed operations that exhaust retries are written to a JSON-lines file for manual remediation.
 - **Principal Mapping**: Configurable mapping from Ranger users/groups/roles to AWS IAM principal ARNs.
 - **Structured Logging**: JSON-formatted logs to stdout/stderr for container log collection (e.g., Fluent Bit to CloudWatch Logs).
@@ -525,6 +526,158 @@ The gap report is a JSON file listing all unsupported features encountered durin
 }
 ```
 
+## Pre-Migration Assessment Tool
+
+Before setting up the full sync pipeline, run the assessment tool to understand how your existing Ranger policies will migrate. It fetches policies from Ranger Admin, runs the complete conversion pipeline in read-only mode (no AWS Lake Formation calls are made), and produces a console summary plus an optional JSON report.
+
+### Building
+
+```bash
+mvn clean package -DskipTests
+```
+
+This produces `target/assessment-jar-with-dependencies.jar` in addition to the main server JAR.
+
+### Usage
+
+```
+assess [<config-file>] [options]
+
+Options:
+  --ranger-url <url>        Ranger Admin URL (required if no config file)
+  --ranger-user <user>      Ranger Admin username
+  --ranger-password <pass>  Ranger Admin password
+  --services <s1,s2,...>    Comma-separated service instance names to assess
+  --output-dir <dir>        Directory for JSON report (default: current dir)
+  --aws-region <region>     Enable Glue wildcard expansion with this region
+  --console-only            Print report to console only, skip JSON file
+```
+
+### Examples
+
+**Quickstart — CLI flags only (no AWS credentials needed):**
+
+```bash
+java -jar target/assessment-jar-with-dependencies.jar \
+  --ranger-url http://ranger-admin:6080 \
+  --ranger-user admin \
+  --ranger-password rangerR0cks! \
+  --console-only
+```
+
+**Using an existing config file as the base (CLI flags override individual values):**
+
+```bash
+java -jar target/assessment-jar-with-dependencies.jar \
+  /path/to/server-config.yaml \
+  --console-only
+```
+
+**Assess specific services:**
+
+```bash
+java -jar target/assessment-jar-with-dependencies.jar \
+  --ranger-url http://ranger-admin:6080 \
+  --ranger-user admin \
+  --ranger-password rangerR0cks! \
+  --services hive_prod,lakeformation_prod \
+  --output-dir ./assessment-results
+```
+
+**With Glue wildcard expansion (requires AWS credentials in environment):**
+
+```bash
+java -jar target/assessment-jar-with-dependencies.jar \
+  --ranger-url http://ranger-admin:6080 \
+  --ranger-user admin \
+  --ranger-password rangerR0cks! \
+  --aws-region us-east-1
+```
+
+When `--aws-region` is provided, the tool queries the Glue Data Catalog to expand wildcard resource patterns (e.g., `db_*`) into explicit names before counting projected grants. Without it, wildcards are reported as-is and counted as `WILDCARD_PATTERN` gaps if they cannot be resolved.
+
+### Sample Console Output
+
+```
+=== Apache Ranger → Lake Formation Assessment ===
+Assessed at:  2024-06-01T10:30:00Z
+
+Policies scanned:           47
+  Fully convertible:        31 (66%)
+  Partially convertible:    10 (21%)
+  Not convertible:           6 (13%)
+Projected LF grants:       142
+
+Gaps detected (23 total):
+  DATA_MASKING             :   5  — LF has no column masking. Consider removing or migrating to row-level filters.
+  DENY_POLICY              :   8  — Deny rules emit Cedar forbid statements; review carefully before applying.
+  VALIDITY_SCHEDULE        :   3  — Time-bound access control is not supported in LF.
+  CUSTOM_CONDITION         :   2  — Attribute-based conditions cannot be expressed in LF permissions.
+  SECURITY_ZONE            :   2  — Ranger Security Zones have no equivalent in Lake Formation.
+  TAG_BASED_POLICY         :   3  — Tag-based policies cannot be expressed as LF resource permissions.
+
+Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
+```
+
+### JSON Report Format
+
+```json
+{
+  "totalPolicies": 47,
+  "fullyConvertible": 31,
+  "partiallyConvertible": 10,
+  "notConvertible": 6,
+  "projectedGrantCount": 142,
+  "gapReport": {
+    "entries": [
+      {
+        "policyId": "42",
+        "policyName": "mask-ssn",
+        "gapType": "DATA_MASKING",
+        "resourcePath": "hr_db/employees",
+        "details": "Data masking policy (policyType=1) cannot be represented in Cedar.",
+        "recommendation": "Consider using column-level permissions or external masking solutions."
+      }
+    ],
+    "summary": {
+      "DATA_MASKING": 5,
+      "DENY_POLICY": 8
+    },
+    "generatedAt": "2024-06-01T10:30:00Z"
+  }
+}
+```
+
+### Convertibility Classification
+
+| Category | Meaning |
+|----------|---------|
+| **Fully convertible** | Policy produces at least one projected LF grant and has zero gap entries |
+| **Partially convertible** | Policy produces at least one projected LF grant but also has one or more gap entries (some features will be silently dropped) |
+| **Not convertible** | Policy produces zero projected LF grants (entirely skipped — all access types unmapped, no principal mappings, or tag/masking policy type) |
+
+### Gap Types
+
+| Gap Type | Description |
+|----------|-------------|
+| `DATA_MASKING` | Policy type 1 (data masking). LF has no native column masking. |
+| `TAG_BASED_POLICY` | Service name contains "tag". Ranger tag-based policies have no LF equivalent. |
+| `DENY_POLICY` | Policy has deny items. LF uses a grant-only model. |
+| `DENY_EXCEPTION` | Policy has deny exceptions. LF uses a grant-only model. |
+| `VALIDITY_SCHEDULE` | Policy has time-based validity schedules. LF does not support temporal constraints. |
+| `CUSTOM_CONDITION` | Policy has attribute-based conditions. LF has no conditional permission model. |
+| `SECURITY_ZONE` | Policy is scoped to a Ranger Security Zone. LF has no equivalent. |
+| `DELEGATED_ADMIN` | Policy item has `delegateAdmin=true`. Partially supported via `WITH GRANT OPTION`. |
+| `WILDCARD_PATTERN` | Resource pattern contains wildcards and could not be expanded (no AWS credentials). |
+| `UNSUPPORTED_SERVICE_TYPE` | No adapter registered for this Ranger service type. |
+| `UNSUPPORTED_ACTION` | One or more access types have no LF permission mapping. |
+| `UNMAPPED_RESOURCE` | Resource ID is not an ARN and cannot be mapped to an LF resource. |
+| `SCHEMA_VALIDATION_FAILURE` | A Cedar statement failed schema validation and was excluded. |
+
+### Architecture Note
+
+The assessment tool reuses the production `RangerToCedarConverter` and `CedarToLFConverter` pipeline unchanged. Any new service types, access type mappings, or gap detection logic added to the sync pipeline automatically improve assessment accuracy with no changes to the assessment tool.
+
 ## Dead-Letter Log
 
 Failed operations are written in JSON-lines format:
@@ -558,7 +711,8 @@ The codebase is organized by responsibility:
 
 | Package | Purpose |
 |---------|---------|
-| `app` | Entry points (`ConversionServerMain`, `SyncServiceMain`, `ServiceDefInstallerMain`), process lifecycle (`ServerLifecycle`), sync cycle execution (`SyncCycleExecutor`), and wildcard refresh scheduling (`WildcardRefreshScheduler`) |
+| `app` | Entry points (`ConversionServerMain`, `SyncServiceMain`, `ServiceDefInstallerMain`, `AssessmentMain`), process lifecycle (`ServerLifecycle`), sync cycle execution (`SyncCycleExecutor`), and wildcard refresh scheduling (`WildcardRefreshScheduler`) |
+| `assessment` | One-time gap assessment tool: `AssessmentConfig`, `AssessmentRunner`, `AssessmentResult`, `AssessmentReporter` |
 | `config` | All configuration classes, loaders, and validators (`SyncConfig`, `ServerConfig`, `RangerServiceConfig`, `ReverseSyncConfig`) |
 | `cedar` | Cedar policy language bridge layer (`CedarPolicySet`, `CedarToLFConverter`, `SourcePolicyAdapter`) |
 | `ranger` | Ranger-specific logic: plugin, policy-to-Cedar conversion, catalog resolution, service definition, glob pattern detection |

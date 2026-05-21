@@ -442,7 +442,7 @@ public class ConversionServerMain {
      * @return the created BaseRangerService instance
      * @throws IllegalArgumentException if the service type is unknown
      */
-    static BaseRangerService createRangerService(RangerServiceConfig config) {
+    public static BaseRangerService createRangerService(RangerServiceConfig config) {
         String serviceType = config.getServiceType();
         String instanceName = config.getServiceInstanceName();
 
@@ -564,7 +564,24 @@ public class ConversionServerMain {
      */
     static ServicePolicies fetchPoliciesFromRangerAdmin(
             String rangerAdminUrl, String username, String password) {
-        String endpoint = rangerAdminUrl + "/service/public/v2/api/service/lakeformation/policy";
+        return fetchPoliciesFromRangerAdmin(rangerAdminUrl, username, password, "lakeformation");
+    }
+
+    /**
+     * Fetches policies for a specific Ranger service instance from Ranger Admin REST API.
+     * Uses GET /service/public/v2/api/service/{serviceName}/policy with Basic auth.
+     * Returns a ServicePolicies envelope with policyVersion = System.currentTimeMillis(),
+     * or null on error.
+     *
+     * @param rangerAdminUrl  the Ranger Admin base URL (e.g. http://ranger-admin:6080)
+     * @param username        the Ranger Admin username
+     * @param password        the Ranger Admin password
+     * @param serviceInstanceName the Ranger service instance name to fetch policies for
+     * @return ServicePolicies containing the current policies, or null on error
+     */
+    public static ServicePolicies fetchPoliciesFromRangerAdmin(
+            String rangerAdminUrl, String username, String password, String serviceInstanceName) {
+        String endpoint = rangerAdminUrl + "/service/public/v2/api/service/" + serviceInstanceName + "/policy";
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) new URL(endpoint).openConnection();
@@ -601,11 +618,12 @@ public class ConversionServerMain {
             policies.removeIf(p -> p.getIsEnabled() != null && !p.getIsEnabled());
 
             ServicePolicies servicePolicies = new ServicePolicies();
-            servicePolicies.setServiceName("lakeformation");
+            servicePolicies.setServiceName(serviceInstanceName);
             servicePolicies.setPolicies(policies);
             servicePolicies.setPolicyVersion(System.currentTimeMillis());
 
-            LOG.debug("Fetched {} policies from Ranger Admin REST API", policies.size());
+            LOG.debug("Fetched {} policies from Ranger Admin REST API for service '{}'",
+                    policies.size(), serviceInstanceName);
             return servicePolicies;
         } catch (IOException e) {
             LOG.error("IOException fetching policies from Ranger Admin: {}", e.getMessage(), e);
@@ -635,7 +653,7 @@ public class ConversionServerMain {
      * Build an AWS credentials provider based on the configuration.
      * Supports static credentials, STS AssumeRole, or default credential chain.
      */
-    static AwsCredentialsProvider buildCredentialsProvider(AwsConfig awsConfig) {
+    public static AwsCredentialsProvider buildCredentialsProvider(AwsConfig awsConfig) {
         boolean hasStaticCreds = awsConfig.getAccessKey() != null
                 && !awsConfig.getAccessKey().isEmpty()
                 && awsConfig.getSecretKey() != null

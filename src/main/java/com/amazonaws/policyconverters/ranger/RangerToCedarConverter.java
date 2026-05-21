@@ -152,6 +152,54 @@ public class RangerToCedarConverter {
             ));
         }
 
+        // Deny items → gap (LF has no deny model; converted to forbid for Cedar evaluation)
+        if (policy.getDenyPolicyItems() != null && !policy.getDenyPolicyItems().isEmpty()) {
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.DENY_POLICY,
+                    buildResourcePath(policy),
+                    "Deny policy items detected (" + policy.getDenyPolicyItems().size()
+                            + " items). Lake Formation uses a grant-only model.",
+                    "Review deny rules and implement equivalent restrictions using grant-only permissions."
+            ));
+        }
+
+        // Deny exceptions → gap (LF has no deny-exception concept)
+        if (policy.getDenyExceptions() != null && !policy.getDenyExceptions().isEmpty()) {
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.DENY_EXCEPTION,
+                    buildResourcePath(policy),
+                    "Deny exception items detected (" + policy.getDenyExceptions().size()
+                            + " items). Lake Formation has no deny-exception concept.",
+                    "Review deny exception rules and adjust grant permissions accordingly."
+            ));
+        }
+
+        // Security zone → gap (LF has no equivalent)
+        if (policy.getZoneName() != null && !policy.getZoneName().trim().isEmpty()) {
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.SECURITY_ZONE,
+                    buildResourcePath(policy),
+                    "Security zone '" + policy.getZoneName() + "' referenced. "
+                            + "Lake Formation has no equivalent concept.",
+                    "Review zone-based policies and create equivalent resource-scoped permissions."
+            ));
+        }
+
+        // Delegated admin → gap (LF has no delegated admin model)
+        if (policy.getPolicyItems() != null) {
+            boolean hasDelegateAdmin = policy.getPolicyItems().stream()
+                    .anyMatch(item -> Boolean.TRUE.equals(item.getDelegateAdmin()));
+            if (hasDelegateAdmin) {
+                gapReporter.recordGap(new GapEntry(
+                        policyId, policyName, GapType.DELEGATED_ADMIN,
+                        buildResourcePath(policy),
+                        "Delegated admin flag detected on policy items. "
+                                + "Lake Formation has no equivalent concept.",
+                        "Manage Lake Formation administrative access through IAM policies or LF administrator settings."
+                ));
+            }
+        }
+
         // Extract resources and determine resource level
         Map<String, RangerPolicyResource> resources = policy.getResources();
         if (resources == null || resources.isEmpty()) {
