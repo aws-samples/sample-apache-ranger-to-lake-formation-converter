@@ -243,9 +243,11 @@ public class ContainerizedCheckpointIT extends ContainerizedPipelineIT {
         LOG.info("Restarting conversion-server with corrupted checkpoint...");
         restartConversionServer();
 
-        // Step 4: Clear dry-run output and wait for full bulk sync
+        // Step 4: Clear dry-run output and wait for full bulk sync.
+        // Use a longer timeout here: after a cold restart the server must reconnect
+        // to Ranger and complete a full re-sync before writing any dry-run output.
         clearDryRunOutputs();
-        List<DryRunOutput> recoveryOutputs = waitForDryRunOutput();
+        List<DryRunOutput> recoveryOutputs = waitForDryRunOutput(DEFAULT_HEALTH_TIMEOUT_MS);
         assertFalse(recoveryOutputs.isEmpty(),
                 "Expected dry-run output after restart with corrupted checkpoint");
 

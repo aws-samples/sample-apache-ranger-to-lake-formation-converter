@@ -36,10 +36,10 @@ echo "Ranger Admin is ready."
 mkdir -p "${REPO_ROOT}/integration-test/docker/dry-run-output"
 docker compose up -d conversion-server
 
-# Wait for conversion-server to become healthy (60s timeout)
+# Wait for conversion-server JVM to be running (120s timeout)
 elapsed=0
-until [ "$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q conversion-server 2>/dev/null)" 2>/dev/null)" = "healthy" ]; do
+until docker compose exec -T conversion-server pgrep -f 'java.*app.jar' >/dev/null 2>&1; do
   sleep 2; elapsed=$((elapsed + 2))
-  [ $elapsed -ge 60 ] && echo "ERROR: conversion-server did not become healthy" >&2 && exit 1
+  [ $elapsed -ge 120 ] && echo "ERROR: conversion-server did not start" >&2 && exit 1
 done
 echo "conversion-server is ready."
