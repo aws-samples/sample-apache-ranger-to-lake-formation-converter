@@ -17,7 +17,7 @@ public class ConfigValidator {
     private static final Logger logger = LoggerFactory.getLogger(ConfigValidator.class);
 
     private static final Set<String> ALLOWED_SERVICE_TYPES = Set.of(
-            "lakeformation", "hive", "presto", "trino");
+            "lakeformation", "hive", "presto", "trino", "amazon-emr-emrfs");
 
     private static final Set<String> CATALOG_REQUIRED_SERVICE_TYPES = Set.of(
             "presto", "trino");

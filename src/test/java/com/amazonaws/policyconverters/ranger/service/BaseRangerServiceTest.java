@@ -2,6 +2,7 @@ package com.amazonaws.policyconverters.ranger.service;
 
 import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
+import com.amazonaws.policyconverters.ranger.EmrfsServiceAdapter;
 import com.amazonaws.policyconverters.ranger.HiveServiceAdapter;
 import com.amazonaws.policyconverters.ranger.PrestoServiceAdapter;
 import com.amazonaws.policyconverters.ranger.RangerServiceAdapter;
@@ -191,6 +192,39 @@ class BaseRangerServiceTest {
         @Test
         void getGdcCatalogNameReturnsConfiguredValue() {
             assertEquals("glue_catalog", service.getGdcCatalogName());
+        }
+    }
+
+    @Nested
+    class EmrfsRangerServiceTests {
+
+        private EmrfsRangerService service;
+
+        @BeforeEach
+        void setUp() {
+            service = new EmrfsRangerService("emrfs_prod");
+        }
+
+        @Test
+        void getServiceTypeReturnsAmazonEmrEmrfs() {
+            assertEquals("amazon-emr-emrfs", service.getServiceType());
+        }
+
+        @Test
+        void createAdapterReturnsNonNull() {
+            SourcePolicyAdapter adapter = service.createAdapter(awsContext);
+            assertNotNull(adapter);
+        }
+
+        @Test
+        void createAdapterReturnsEmrfsServiceAdapter() {
+            SourcePolicyAdapter adapter = service.createAdapter(awsContext);
+            assertInstanceOf(EmrfsServiceAdapter.class, adapter);
+        }
+
+        @Test
+        void getServiceDefinitionResourcePathReturnsEmrfsJson() {
+            assertEquals("/ranger-servicedef-amazon-emr-emrfs.json", service.getServiceDefinitionResourcePath());
         }
     }
 }

@@ -15,6 +15,7 @@ import com.amazonaws.policyconverters.ranger.PrestoServiceAdapter;
 import com.amazonaws.policyconverters.ranger.TrinoServiceAdapter;
 import com.amazonaws.policyconverters.lakeformation.TagMetadataSyncer;
 import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
+import com.amazonaws.policyconverters.ranger.service.EmrfsRangerService;
 import com.amazonaws.policyconverters.ranger.service.HiveRangerService;
 import com.amazonaws.policyconverters.ranger.service.LakeFormationRangerService;
 import com.amazonaws.policyconverters.ranger.service.PrestoRangerService;
@@ -45,6 +46,7 @@ import com.amazonaws.policyconverters.config.PrincipalMapperType;
 import com.amazonaws.policyconverters.ranger.RangerPlugin;
 import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 import com.amazonaws.policyconverters.sync.SyncService;
+import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantsClient;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -295,9 +297,12 @@ public class ConversionServerMain {
             RangerToCedarConverter rangerToCedarConverter = new RangerToCedarConverter(
                     adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider);
 
+            S3AccessGrantsClient s3AgClient = syncConfig.getS3AccessGrants() != null
+                    ? new S3AccessGrantsClient(syncConfig.getS3AccessGrants(), deadLetterLogger)
+                    : null;
             syncService = new SyncService(
                     rangerServices, rangerToCedarConverter, cedarToLFConverter,
-                    lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore);
+                    lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore, s3AgClient);
 
             // Initialize all plugins (Req 6.3)
             for (BaseRangerService service : rangerServices) {
@@ -378,6 +383,7 @@ public class ConversionServerMain {
         }
 
         // Wire MetricsEmitter into all adapters and the static AccessTypeMapper
+        // EmrfsServiceAdapter does not emit metrics — no arm needed
         for (SourcePolicyAdapter adapter : allAdapters) {
             if (adapter instanceof RangerServiceAdapter) {
                 ((RangerServiceAdapter) adapter).setMetricsEmitter(metricsEmitter);
@@ -479,6 +485,8 @@ public class ConversionServerMain {
                 return new PrestoRangerService(instanceName, config.getGdcCatalogName());
             case "trino":
                 return new TrinoRangerService(instanceName, config.getGdcCatalogName());
+            case "amazon-emr-emrfs":
+                return new EmrfsRangerService(instanceName);
             default:
                 throw new IllegalArgumentException("Unknown Ranger service type: " + serviceType);
         }

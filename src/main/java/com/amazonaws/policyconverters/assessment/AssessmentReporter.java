@@ -60,6 +60,10 @@ public class AssessmentReporter {
                 "Resource IDs are not ARNs and cannot be mapped to LF resources.");
         GAP_EXPLANATIONS.put(GapEntry.GapType.SCHEMA_VALIDATION_FAILURE,
                 "A Cedar statement failed schema validation and was excluded from conversion.");
+        GAP_EXPLANATIONS.put(GapEntry.GapType.UNREGISTERED_S3_LOCATION,
+                "S3 Access Grants location not registered for this prefix. Register the location in your S3 Access Grants instance before migrating (s3control:CreateAccessGrantsLocation).");
+        GAP_EXPLANATIONS.put(GapEntry.GapType.CANNOT_VALIDATE_S3_LOCATION,
+                "No S3 Access Grants configuration provided. Cannot validate whether S3 locations are registered. Add s3AccessGrants config to enable validation.");
     }
 
     private final ObjectMapper objectMapper;
