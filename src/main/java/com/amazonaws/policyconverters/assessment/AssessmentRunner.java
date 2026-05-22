@@ -63,7 +63,8 @@ public class AssessmentRunner {
         IdentitystoreClient identityStoreClient = null;
         com.amazonaws.policyconverters.config.PrincipalMappingConfig principalMappingConfig =
                 config.getPrincipalMapping();
-        if (principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
+        if (principalMappingConfig != null
+                && principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
             identityStoreClient = config.getAwsConfig().map(awsConfig -> {
                 software.amazon.awssdk.auth.credentials.AwsCredentialsProvider credentials =
                         ConversionServerMain.buildCredentialsProvider(awsConfig);
