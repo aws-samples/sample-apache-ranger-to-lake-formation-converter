@@ -1,5 +1,6 @@
 package com.amazonaws.policyconverters.sync;
 
+import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantOperation;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -77,6 +79,28 @@ public class CheckpointStore {
                 base.getCedarPolicyText(),
                 tagVersion,
                 managedTagNames);
+        writeCheckpoint(updated, base.getCedarPolicyText().length());
+    }
+
+    /**
+     * Persist S3 Access Grants operation state into the existing checkpoint, preserving all other fields.
+     * If no checkpoint exists yet, a default base checkpoint is created.
+     *
+     * @param policyVersion the Ranger policy version associated with these operations
+     * @param ops           the list of S3 Access Grant operations to persist
+     */
+    public void saveS3AgOperations(long policyVersion, List<S3AccessGrantOperation> ops) {
+        Optional<SyncCheckpoint> existing = load();
+        SyncCheckpoint base = existing.orElse(
+                new SyncCheckpoint(policyVersion, null, Instant.now().toString(), ""));
+        SyncCheckpoint updated = new SyncCheckpoint(
+                base.getPolicyVersion(),
+                base.getServiceVersions(),
+                base.getTimestamp(),
+                base.getCedarPolicyText(),
+                base.getLastKnownTagVersion(),
+                base.getLastKnownRangerTagNames(),
+                ops);
         writeCheckpoint(updated, base.getCedarPolicyText().length());
     }
 

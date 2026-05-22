@@ -1,5 +1,8 @@
 package com.amazonaws.policyconverters.s3accessgrants;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 /**
  * Represents a single S3 Access Grants operation to apply.
  *
@@ -7,10 +10,13 @@ package com.amazonaws.policyconverters.s3accessgrants;
  * and populated only when records come back from {@code listGrants()} (live API state).
  */
 public record S3AccessGrantOperation(
-    OperationType type,
-    String principalArn,
-    String s3Prefix,
-    S3AccessGrantPermission permission,
+    @JsonProperty("type") OperationType type,
+    @JsonProperty("principalArn") String principalArn,
+    @JsonProperty("s3Prefix") String s3Prefix,
+    @JsonProperty("permission") S3AccessGrantPermission permission,
     /** Null when produced by the converter; populated from listGrants() live state. */
-    String grantId
-) {}
+    @JsonProperty("grantId") String grantId
+) {
+    @JsonCreator
+    public S3AccessGrantOperation {}
+}
