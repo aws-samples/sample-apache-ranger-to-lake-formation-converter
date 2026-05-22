@@ -21,12 +21,25 @@ public class PrincipalMappingConfig {
     private final Map<String, String> userMappings;
     private final Map<String, String> groupMappings;
     private final Map<String, String> roleMappings;
+    private final PrincipalMapperType type;
+    private final IdentityCenterConfig idcConfig;
 
+    // Backward-compat — existing callers and old YAML unaffected
+    public PrincipalMappingConfig(
+            Map<String, String> userMappings,
+            Map<String, String> groupMappings,
+            Map<String, String> roleMappings) {
+        this(userMappings, groupMappings, roleMappings, null, null);
+    }
+
+    // New canonical @JsonCreator
     @JsonCreator
     public PrincipalMappingConfig(
-            @JsonProperty("userMappings") Map<String, String> userMappings,
+            @JsonProperty("userMappings")  Map<String, String> userMappings,
             @JsonProperty("groupMappings") Map<String, String> groupMappings,
-            @JsonProperty("roleMappings") Map<String, String> roleMappings) {
+            @JsonProperty("roleMappings")  Map<String, String> roleMappings,
+            @JsonProperty("type")          PrincipalMapperType type,
+            @JsonProperty("idcConfig")     IdentityCenterConfig idcConfig) {
         this.userMappings = userMappings != null
                 ? Collections.unmodifiableMap(new HashMap<>(userMappings))
                 : Collections.<String, String>emptyMap();
@@ -36,6 +49,8 @@ public class PrincipalMappingConfig {
         this.roleMappings = roleMappings != null
                 ? Collections.unmodifiableMap(new HashMap<>(roleMappings))
                 : Collections.<String, String>emptyMap();
+        this.type = (type != null) ? type : PrincipalMapperType.STATIC;
+        this.idcConfig = idcConfig;
     }
 
     public Map<String, String> getUserMappings() {
@@ -50,6 +65,14 @@ public class PrincipalMappingConfig {
         return roleMappings;
     }
 
+    public PrincipalMapperType getType() {
+        return type;
+    }
+
+    public IdentityCenterConfig getIdcConfig() {
+        return idcConfig;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -57,12 +80,14 @@ public class PrincipalMappingConfig {
         PrincipalMappingConfig that = (PrincipalMappingConfig) o;
         return Objects.equals(userMappings, that.userMappings)
                 && Objects.equals(groupMappings, that.groupMappings)
-                && Objects.equals(roleMappings, that.roleMappings);
+                && Objects.equals(roleMappings, that.roleMappings)
+                && type == that.type
+                && Objects.equals(idcConfig, that.idcConfig);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(userMappings, groupMappings, roleMappings);
+        return Objects.hash(userMappings, groupMappings, roleMappings, type, idcConfig);
     }
 
     @Override
@@ -71,6 +96,8 @@ public class PrincipalMappingConfig {
                 "userMappings=" + userMappings +
                 ", groupMappings=" + groupMappings +
                 ", roleMappings=" + roleMappings +
+                ", type=" + type +
+                ", idcConfig=" + idcConfig +
                 '}';
     }
 }
