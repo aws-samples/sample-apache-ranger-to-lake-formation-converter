@@ -96,4 +96,43 @@ class PrincipalMappingConfigTest {
         assertTrue(str.contains("userMappings="));
         assertTrue(str.contains("alice"));
     }
+
+    // --- IDC field tests ---
+
+    @Test
+    void noTypeField_defaultsToStatic() throws Exception {
+        // Old YAML / JSON with no "type" field should deserialize as STATIC
+        String json = "{\"userMappings\":{\"alice\":\"arn:aws:iam::123456789012:user/alice\"}}";
+        PrincipalMappingConfig config = mapper.readValue(json, PrincipalMappingConfig.class);
+        assertEquals(PrincipalMapperType.STATIC, config.getType());
+    }
+
+    @Test
+    void identityCenterType_roundTrips() throws Exception {
+        IdentityCenterConfig idcConfig = new IdentityCenterConfig("d-test123", "us-east-1", "123456789012", 30);
+        PrincipalMappingConfig original = new PrincipalMappingConfig(
+                null, null, null, PrincipalMapperType.IDENTITY_CENTER, idcConfig);
+
+        String json = mapper.writeValueAsString(original);
+        PrincipalMappingConfig deserialized = mapper.readValue(json, PrincipalMappingConfig.class);
+
+        assertEquals(PrincipalMapperType.IDENTITY_CENTER, deserialized.getType());
+        assertNotNull(deserialized.getIdcConfig());
+        assertEquals("d-test123", deserialized.getIdcConfig().getIdentityStoreId());
+        assertEquals("us-east-1", deserialized.getIdcConfig().getRegion());
+        assertEquals("123456789012", deserialized.getIdcConfig().getAccountId());
+        assertEquals(30, deserialized.getIdcConfig().getCacheTtlMinutes());
+        assertEquals(original, deserialized);
+    }
+
+    @Test
+    void notEqualWhenTypeDiffers() {
+        Map<String, String> users = Collections.singletonMap("alice", "arn:aws:iam::123456789012:user/alice");
+        PrincipalMappingConfig staticConfig = new PrincipalMappingConfig(users, null, null,
+                PrincipalMapperType.STATIC, null);
+        PrincipalMappingConfig idcConfig = new PrincipalMappingConfig(users, null, null,
+                PrincipalMapperType.IDENTITY_CENTER, null);
+
+        assertNotEquals(staticConfig, idcConfig);
+    }
 }

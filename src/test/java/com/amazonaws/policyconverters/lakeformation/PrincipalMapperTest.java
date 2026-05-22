@@ -2,6 +2,7 @@ package com.amazonaws.policyconverters.lakeformation;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
+import com.amazonaws.policyconverters.reporting.MetricsEmitter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -16,6 +17,7 @@ import java.util.Optional;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class PrincipalMapperTest {
 
@@ -175,6 +177,32 @@ class PrincipalMapperTest {
         PrincipalMapper mapper = StaticPrincipalMapper.fromFile(propsFile.getAbsolutePath());
 
         assertEquals(Optional.empty(), mapper.resolveUser("anyone"));
+    }
+
+    // --- Unmapped principal metric tests ---
+
+    @Test
+    void unmappedUser_emitsUnmappedPrincipalMetric() {
+        MetricsEmitter metricsEmitter = mock(MetricsEmitter.class);
+        PrincipalMappingConfig config = new PrincipalMappingConfig(Map.of(), Map.of(), Map.of());
+        StaticPrincipalMapper mapper = StaticPrincipalMapper.fromConfig(config, metricsEmitter);
+
+        Optional<String> result = mapper.resolveUser("unknown_user");
+
+        assertEquals(Optional.empty(), result);
+        verify(metricsEmitter).recordUnmappedPrincipal("user");
+    }
+
+    @Test
+    void unmappedGroup_emitsUnmappedPrincipalMetric() {
+        MetricsEmitter metricsEmitter = mock(MetricsEmitter.class);
+        PrincipalMappingConfig config = new PrincipalMappingConfig(Map.of(), Map.of(), Map.of());
+        StaticPrincipalMapper mapper = StaticPrincipalMapper.fromConfig(config, metricsEmitter);
+
+        Optional<String> result = mapper.resolveGroup("unknown_group");
+
+        assertEquals(Optional.empty(), result);
+        verify(metricsEmitter).recordUnmappedPrincipal("group");
     }
 
     // --- fromFile error cases ---

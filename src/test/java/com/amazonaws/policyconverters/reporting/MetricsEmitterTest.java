@@ -474,4 +474,70 @@ class MetricsEmitterTest {
             assertFalse(hasServiceType, datum.metricName() + " should not have ServiceType in backward-compat mode");
         }
     }
+
+    // --- recordUnmappedPrincipal tests ---
+
+    @Test
+    void recordUnmappedPrincipal_publishesCorrectMetric() {
+        emitter.recordUnmappedPrincipal("user");
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        PutMetricDataRequest request = captor.getValue();
+        assertEquals("TestNamespace", request.namespace());
+        assertEquals(1, request.metricData().size());
+
+        MetricDatum datum = request.metricData().get(0);
+        assertEquals("UnmappedPrincipal", datum.metricName());
+        assertEquals(1.0, datum.value());
+        assertEquals(StandardUnit.COUNT, datum.unit());
+
+        boolean hasServiceName = datum.dimensions().stream()
+                .anyMatch(d -> "ServiceName".equals(d.name()) && "conversion-server".equals(d.value()));
+        assertTrue(hasServiceName, "UnmappedPrincipal missing ServiceName dimension");
+
+        boolean hasPrincipalType = datum.dimensions().stream()
+                .anyMatch(d -> "PrincipalType".equals(d.name()) && "user".equals(d.value()));
+        assertTrue(hasPrincipalType, "UnmappedPrincipal missing PrincipalType=user dimension");
+    }
+
+    @Test
+    void recordUnmappedPrincipal_withGroupType_hasPrincipalTypeDimension() {
+        emitter.recordUnmappedPrincipal("group");
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        MetricDatum datum = captor.getValue().metricData().get(0);
+        assertEquals("UnmappedPrincipal", datum.metricName());
+
+        boolean hasPrincipalType = datum.dimensions().stream()
+                .anyMatch(d -> "PrincipalType".equals(d.name()) && "group".equals(d.value()));
+        assertTrue(hasPrincipalType, "UnmappedPrincipal missing PrincipalType=group dimension");
+    }
+
+    @Test
+    void recordUnmappedPrincipal_nullInput_publishesWithNullString() {
+        emitter.recordUnmappedPrincipal(null);
+
+        ArgumentCaptor<PutMetricDataRequest> captor = ArgumentCaptor.forClass(PutMetricDataRequest.class);
+        verify(cloudWatchClient).putMetricData(captor.capture());
+
+        MetricDatum datum = captor.getValue().metricData().get(0);
+        assertEquals("UnmappedPrincipal", datum.metricName());
+        assertEquals(1.0, datum.value());
+
+        boolean hasNullString = datum.dimensions().stream()
+                .anyMatch(d -> "PrincipalType".equals(d.name()) && "null".equals(d.value()));
+        assertTrue(hasNullString, "UnmappedPrincipal should use 'null' string for null principalType");
+    }
+
+    @Test
+    void recordUnmappedPrincipal_cloudWatchError_doesNotThrow() {
+        when(cloudWatchClient.putMetricData(any(PutMetricDataRequest.class)))
+                .thenThrow(new RuntimeException("CloudWatch unavailable"));
+
+        assertDoesNotThrow(() -> emitter.recordUnmappedPrincipal("role"));
+    }
 }
