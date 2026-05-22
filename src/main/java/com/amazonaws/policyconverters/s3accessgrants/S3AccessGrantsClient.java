@@ -67,9 +67,10 @@ public class S3AccessGrantsClient {
     }
 
     /**
-     * Package-private constructor for testing with an injected client.
+     * Constructor for testing with an injected client.
+     * Accessible from integration tests in other packages.
      */
-    S3AccessGrantsClient(S3AccessGrantsConfig config, S3ControlClient s3control,
+    public S3AccessGrantsClient(S3AccessGrantsConfig config, S3ControlClient s3control,
                          DeadLetterLogger deadLetterLogger) {
         this.accountId = config.accountId();
         this.instanceArn = config.instanceArn();
