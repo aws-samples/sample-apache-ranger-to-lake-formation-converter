@@ -17,12 +17,14 @@ import com.amazonaws.policyconverters.lakeformation.PrincipalMapperFactory;
 import com.amazonaws.policyconverters.config.AwsConfig;
 import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.config.PrincipalMapperType;
+import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 import com.amazonaws.policyconverters.config.RetryConfig;
 import com.amazonaws.policyconverters.config.SyncConfig;
+import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
 import com.amazonaws.policyconverters.reporting.GapReporter;
+import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantsClient;
 import com.amazonaws.policyconverters.sync.CheckpointStore;
-import com.amazonaws.policyconverters.ranger.RangerPlugin;
 import com.amazonaws.policyconverters.sync.SyncService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +44,7 @@ import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -174,10 +177,26 @@ public class SyncServiceMain {
                 awsConfig.getRegion(),
                 awsConfig.getCatalogId(),
                 awsConfig.getCatalogId());
-        RangerServiceAdapter lfAdapter = new RangerServiceAdapter(awsContext);
 
+        // Build the list of Ranger services from configuration.
+        // EmrfsRangerService is registered when the config contains an entry with
+        // serviceType "amazon-emr-emrfs"; ConversionServerMain.createRangerService handles
+        // instantiation for all supported service types including EmrfsRangerService.
         Map<String, SourcePolicyAdapter> adapterRegistry = new HashMap<>();
-        adapterRegistry.put("lakeformation", lfAdapter);
+        List<BaseRangerService> rangerServiceList = new ArrayList<>();
+
+        List<RangerServiceConfig> rangerServiceConfigs = config.getRangerServices();
+        if (rangerServiceConfigs != null && !rangerServiceConfigs.isEmpty()) {
+            for (RangerServiceConfig cfg : rangerServiceConfigs) {
+                BaseRangerService service = ConversionServerMain.createRangerService(cfg);
+                rangerServiceList.add(service);
+                adapterRegistry.put(cfg.getServiceType(), service.createAdapter(awsContext));
+            }
+        } else {
+            // Default: lakeformation service when no rangerServices list is configured
+            RangerServiceAdapter lfAdapter = new RangerServiceAdapter(awsContext);
+            adapterRegistry.put("lakeformation", lfAdapter);
+        }
 
         RangerToCedarConverter rangerToCedarConverter = new RangerToCedarConverter(
                 adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider);
@@ -210,16 +229,19 @@ public class SyncServiceMain {
         BufferedWriter deadLetterWriter = new BufferedWriter(new FileWriter(deadLetterPath, true));
         DeadLetterLogger deadLetterLogger = new DeadLetterLogger(deadLetterWriter);
 
-        // Create plugin and sync service
-        RangerPlugin plugin = new RangerPlugin();
+        S3AccessGrantsClient s3AgClient = config.getS3AccessGrants() != null
+                ? new S3AccessGrantsClient(config.getS3AccessGrants(), deadLetterLogger)
+                : null;
+
+        // Create sync service in multi-service mode
         String checkpointPath = config.getCheckpointPath() != null
                 ? config.getCheckpointPath()
                 : "./checkpoint/sync-checkpoint.json";
         CheckpointStore checkpointStore = new CheckpointStore(
                 Path.of(checkpointPath), new ObjectMapper());
         SyncService syncService = new SyncService(
-                plugin, rangerToCedarConverter, cedarToLFConverter,
-                lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore);
+                rangerServiceList, rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore, s3AgClient);
 
         // Register shutdown hook for graceful termination
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -239,10 +261,13 @@ public class SyncServiceMain {
             LOG.info("Sync Service shutdown complete");
         }));
 
-        // Initialize the plugin (registers with Ranger Admin)
-        LOG.info("Initializing LakeFormation plugin and registering with Ranger Admin");
-        plugin.setRangerAdminUrl(config.getRangerConfig().getRangerAdminUrl());
-        plugin.init();
+        // Initialize all Ranger plugins (registers with Ranger Admin)
+        LOG.info("Initializing Ranger plugin(s) and registering with Ranger Admin");
+        for (BaseRangerService service : rangerServiceList) {
+            LOG.info("Initializing Ranger plugin: serviceType={}, instanceName={}",
+                    service.getServiceType(), service.getServiceInstanceName());
+            service.init();
+        }
 
         // Start the sync service (begins listening for policy updates)
         syncService.start(config);
