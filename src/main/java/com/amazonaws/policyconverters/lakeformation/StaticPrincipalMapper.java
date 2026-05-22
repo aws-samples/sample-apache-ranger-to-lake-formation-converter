@@ -70,6 +70,19 @@ public class StaticPrincipalMapper implements PrincipalMapper {
      * @throws IOException if the file cannot be read or parsed
      */
     public static StaticPrincipalMapper fromFile(String filePath) throws IOException {
+        return fromFile(filePath, null);
+    }
+
+    /**
+     * Create a StaticPrincipalMapper by loading mappings from a JSON or properties file,
+     * with an optional {@link MetricsEmitter} for recording unmapped principal events.
+     *
+     * @param filePath       path to the JSON or properties file
+     * @param metricsEmitter optional emitter for metrics; may be {@code null}
+     * @return a StaticPrincipalMapper loaded from the file
+     * @throws IOException if the file cannot be read or parsed
+     */
+    public static StaticPrincipalMapper fromFile(String filePath, MetricsEmitter metricsEmitter) throws IOException {
         if (filePath == null || filePath.trim().isEmpty()) {
             throw new IllegalArgumentException("File path must not be null or empty");
         }
@@ -79,9 +92,9 @@ public class StaticPrincipalMapper implements PrincipalMapper {
         }
 
         if (filePath.endsWith(".json")) {
-            return loadFromJson(file);
+            return loadFromJson(file, metricsEmitter);
         } else if (filePath.endsWith(".properties")) {
-            return loadFromProperties(file);
+            return loadFromProperties(file, metricsEmitter);
         } else {
             throw new IOException("Unsupported file format. Expected .json or .properties: " + filePath);
         }
@@ -136,13 +149,13 @@ public class StaticPrincipalMapper implements PrincipalMapper {
         return Optional.of(arn);
     }
 
-    private static StaticPrincipalMapper loadFromJson(File file) throws IOException {
+    private static StaticPrincipalMapper loadFromJson(File file, MetricsEmitter metricsEmitter) throws IOException {
         ObjectMapper objectMapper = new ObjectMapper();
         PrincipalMappingConfig config = objectMapper.readValue(file, PrincipalMappingConfig.class);
-        return fromConfig(config, null);
+        return fromConfig(config, metricsEmitter);
     }
 
-    private static StaticPrincipalMapper loadFromProperties(File file) throws IOException {
+    private static StaticPrincipalMapper loadFromProperties(File file, MetricsEmitter metricsEmitter) throws IOException {
         Properties props = new Properties();
         try (FileInputStream fis = new FileInputStream(file)) {
             props.load(fis);
@@ -165,6 +178,6 @@ public class StaticPrincipalMapper implements PrincipalMapper {
             }
         }
 
-        return new StaticPrincipalMapper(userMappings, groupMappings, roleMappings, null);
+        return new StaticPrincipalMapper(userMappings, groupMappings, roleMappings, metricsEmitter);
     }
 }

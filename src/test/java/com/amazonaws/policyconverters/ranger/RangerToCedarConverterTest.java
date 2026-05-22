@@ -10,6 +10,7 @@ import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.reporting.GapReporter;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItem;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItemAccess;
@@ -50,8 +51,8 @@ class RangerToCedarConverterTest {
 
         Map<String, String> userMap = new HashMap<>();
         userMap.put("alice", "arn:aws:iam::123456789012:user/alice");
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         gapReporter = new GapReporter();

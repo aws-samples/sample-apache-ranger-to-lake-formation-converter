@@ -14,6 +14,7 @@ import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.ranger.RangerServiceAdapter;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import net.jqwik.api.*;
 import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItem;
@@ -80,8 +81,8 @@ class PipelineGapAggregationPropertyTest {
 
         Map<String, String> userMap = new HashMap<>();
         userMap.put(USER, USER_ARN);
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
 

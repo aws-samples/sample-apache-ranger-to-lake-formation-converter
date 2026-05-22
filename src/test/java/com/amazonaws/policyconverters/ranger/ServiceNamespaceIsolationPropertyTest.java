@@ -10,6 +10,7 @@ import com.amazonaws.policyconverters.lakeformation.LFPermission;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
 import com.amazonaws.policyconverters.lakeformation.LFResource;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import com.amazonaws.policyconverters.reporting.GapReporter;
 import net.jqwik.api.*;
 import org.apache.ranger.plugin.model.RangerPolicy;
@@ -227,8 +228,8 @@ class ServiceNamespaceIsolationPropertyTest {
         userMap.put("alice", "arn:aws:iam::123456789012:user/alice");
         userMap.put("bob", "arn:aws:iam::123456789012:user/bob");
         userMap.put("charlie", "arn:aws:iam::123456789012:user/charlie");
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         GapReporter gapReporter = new GapReporter();

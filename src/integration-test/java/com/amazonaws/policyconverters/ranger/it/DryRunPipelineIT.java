@@ -13,6 +13,7 @@ import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.ranger.RangerServiceAdapter;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import com.amazonaws.policyconverters.ranger.RangerPlugin;
 import com.amazonaws.policyconverters.sync.SyncService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -170,7 +171,7 @@ public abstract class DryRunPipelineIT {
         userMappings.put("viewer", "arn:aws:iam::" + TEST_ACCOUNT_ID + ":role/viewer");
         PrincipalMappingConfig principalConfig = new PrincipalMappingConfig(
                 userMappings, Collections.emptyMap(), Collections.emptyMap());
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(principalConfig);
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(principalConfig, null);
 
         // Passthrough CatalogResolver — returns input as-is (no wildcard expansion needed)
         CatalogResolver catalogResolver = new CatalogResolver(null) {

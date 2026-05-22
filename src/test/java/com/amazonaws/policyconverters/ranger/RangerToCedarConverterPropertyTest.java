@@ -10,6 +10,7 @@ import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.reporting.GapReporter;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import net.jqwik.api.*;
 import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItem;
@@ -52,8 +53,8 @@ class RangerToCedarConverterPropertyTest {
 
         Map<String, String> userMap = new HashMap<>();
         userMap.put("testuser", "arn:aws:iam::123456789012:user/testuser");
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         GapReporter gapReporter = new GapReporter();
@@ -143,8 +144,8 @@ class RangerToCedarConverterPropertyTest {
         for (String p : principals) {
             userMap.put(p, "arn:aws:iam::123456789012:user/" + p);
         }
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         GapReporter gapReporter = new GapReporter();
@@ -215,8 +216,8 @@ class RangerToCedarConverterPropertyTest {
 
         Map<String, String> userMap = new HashMap<>();
         userMap.put("user1", "arn:aws:iam::123456789012:user/user1");
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         GapReporter gapReporter = new GapReporter();
@@ -277,8 +278,8 @@ class RangerToCedarConverterPropertyTest {
 
         Map<String, String> userMap = new HashMap<>();
         userMap.put("denyuser", "arn:aws:iam::123456789012:user/denyuser");
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         GapReporter gapReporter = new GapReporter();
@@ -332,8 +333,8 @@ class RangerToCedarConverterPropertyTest {
 
         Map<String, String> userMap = new HashMap<>();
         userMap.put("annotuser", "arn:aws:iam::123456789012:user/annotuser");
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         GapReporter gapReporter = new GapReporter();
@@ -384,8 +385,8 @@ class RangerToCedarConverterPropertyTest {
 
         Map<String, String> userMap = new HashMap<>();
         userMap.put("gapuser", "arn:aws:iam::123456789012:user/gapuser");
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         GapReporter gapReporter = new GapReporter();
@@ -465,8 +466,8 @@ class RangerToCedarConverterPropertyTest {
 
         Map<String, String> userMap = new HashMap<>();
         userMap.put("validuser", "arn:aws:iam::123456789012:user/validuser");
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         GapReporter gapReporter = new GapReporter();

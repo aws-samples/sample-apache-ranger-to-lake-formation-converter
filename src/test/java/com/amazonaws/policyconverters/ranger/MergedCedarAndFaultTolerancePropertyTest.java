@@ -6,6 +6,7 @@ import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
 import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
 import com.amazonaws.policyconverters.reporting.GapReporter;
 import net.jqwik.api.*;
@@ -293,8 +294,8 @@ class MergedCedarAndFaultTolerancePropertyTest {
         userMap.put("alice", "arn:aws:iam::123456789012:user/alice");
         userMap.put("bob", "arn:aws:iam::123456789012:user/bob");
         userMap.put("charlie", "arn:aws:iam::123456789012:user/charlie");
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()));
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, Collections.emptyMap(), Collections.emptyMap()), null);
 
         CatalogResolver catalogResolver = mockPassthroughResolver();
         GapReporter gapReporter = new GapReporter();

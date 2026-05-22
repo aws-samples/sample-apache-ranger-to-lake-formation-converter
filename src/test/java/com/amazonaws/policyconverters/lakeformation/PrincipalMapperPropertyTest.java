@@ -3,6 +3,7 @@ package com.amazonaws.policyconverters.lakeformation;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.jqwik.api.*;
 import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 
 import java.util.*;
 
@@ -39,7 +40,7 @@ class PrincipalMapperPropertyTest {
             @ForAll("principalMappingConfigs") PrincipalMappingConfig config,
             @ForAll("unmappedNames") Set<String> unmappedNames
     ) {
-        PrincipalMapper mapper = PrincipalMapper.fromConfig(config);
+        PrincipalMapper mapper = StaticPrincipalMapper.fromConfig(config, null);
 
         // Verify mapped users return the correct ARN
         for (Map.Entry<String, String> entry : config.getUserMappings().entrySet()) {

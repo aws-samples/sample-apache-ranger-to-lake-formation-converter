@@ -3,6 +3,7 @@ package com.amazonaws.policyconverters.ranger;
 import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import com.amazonaws.policyconverters.lakeformation.*;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapEntry.GapType;
@@ -286,9 +287,9 @@ class PolicyConverterTest {
     private static PrincipalMapper buildMapper(String userName, String arn) {
         Map<String, String> userMap = new HashMap<>();
         userMap.put(userName, arn);
-        return PrincipalMapper.fromConfig(
+        return StaticPrincipalMapper.fromConfig(
                 new PrincipalMappingConfig(userMap, Collections.<String, String>emptyMap(),
-                        Collections.<String, String>emptyMap()));
+                        Collections.<String, String>emptyMap()), null);
     }
 
     private static CatalogResolver mockPassthroughResolver() {
