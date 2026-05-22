@@ -43,3 +43,19 @@ namespace DataCatalog {
     action "DATA_LOCATION_ACCESS"
         appliesTo { principal: [Principal], resource: [DataLocation] };
 }
+
+namespace S3 {
+    entity Object;
+
+    action "s3:GetObject"
+        appliesTo { principal: [DataCatalog::Principal], resource: [Object] };
+
+    action "s3:PutObject"
+        appliesTo { principal: [DataCatalog::Principal], resource: [Object] };
+
+    action "s3:ListObjects"
+        appliesTo { principal: [DataCatalog::Principal], resource: [Object] };
+
+    action "s3:DeleteObject"
+        appliesTo { principal: [DataCatalog::Principal], resource: [Object] };
+}

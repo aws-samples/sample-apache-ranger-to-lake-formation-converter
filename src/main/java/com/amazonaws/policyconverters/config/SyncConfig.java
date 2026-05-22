@@ -88,6 +88,26 @@ public class SyncConfig {
                 wildcardRefreshIntervalSeconds, rangerServices, null, null);
     }
 
+    /**
+     * Backward-compatible constructor without s3AccessGrants.
+     */
+    public SyncConfig(
+            RangerConnectionConfig rangerConfig,
+            AwsConfig awsConfig,
+            PrincipalMappingConfig principalMapping,
+            Long policyRefreshIntervalMs,
+            Integer maxLfRetries,
+            Long lfRetryBackoffMs,
+            String deadLetterLogPath,
+            String checkpointPath,
+            Integer wildcardRefreshIntervalSeconds,
+            List<RangerServiceConfig> rangerServices,
+            TagSyncConfig tagSync) {
+        this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
+                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
+                wildcardRefreshIntervalSeconds, rangerServices, tagSync, null);
+    }
+
     @JsonCreator
     public SyncConfig(
             @JsonProperty("rangerConfig") RangerConnectionConfig rangerConfig,
