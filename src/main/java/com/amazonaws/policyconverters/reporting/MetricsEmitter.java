@@ -259,6 +259,30 @@ public class MetricsEmitter {
         publish(metrics);
     }
 
+    /**
+     * Records a metric when a Ranger principal cannot be mapped to an AWS principal ARN.
+     * Publishes UnmappedPrincipal count with a PrincipalType dimension
+     * so alarms can be configured in CloudWatch.
+     *
+     * @param principalType the principal type that could not be mapped (e.g., "user", "group", "role")
+     */
+    public void recordUnmappedPrincipal(String principalType) {
+        Dimension serviceDimension = serviceDimension();
+        Dimension principalTypeDimension = Dimension.builder()
+                .name("PrincipalType")
+                .value(principalType != null ? principalType : "null")
+                .build();
+        List<MetricDatum> metrics = List.of(
+                MetricDatum.builder()
+                        .metricName("UnmappedPrincipal")
+                        .value(1.0)
+                        .unit(StandardUnit.COUNT)
+                        .dimensions(serviceDimension, principalTypeDimension)
+                        .build()
+        );
+        publish(metrics);
+    }
+
     private static MetricDatum datum(String name, double value, StandardUnit unit, Dimension... dimensions) {
         return MetricDatum.builder()
                 .metricName(name)
