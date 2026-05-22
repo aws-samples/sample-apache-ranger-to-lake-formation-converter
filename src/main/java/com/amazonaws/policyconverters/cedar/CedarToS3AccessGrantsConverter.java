@@ -48,7 +48,7 @@ public class CedarToS3AccessGrantsConverter {
     private static final Pattern ACTION_PATTERN = Pattern.compile(
             "action\\s*==\\s*DataCatalog::Action::\"([^\"]+)\"");
     private static final Pattern RESOURCE_PATTERN = Pattern.compile(
-            "resource\\s*==\\s*(\\S+?)::\\s*\"([^\"]+)\"");
+            "resource\\s*==\\s*([\\w:]+)::\"([^\"]+)\"");
 
     private static final Set<String> S3_READ_ACTIONS;
     private static final Set<String> S3_WRITE_ACTIONS;
