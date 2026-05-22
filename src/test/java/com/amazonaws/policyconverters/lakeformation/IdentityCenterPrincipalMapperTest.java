@@ -137,6 +137,7 @@ class IdentityCenterPrincipalMapperTest {
         Optional<String> result = mapper().resolveRole(null);
 
         assertEquals(Optional.empty(), result);
+        verifyNoInteractions(identityStoreClient);
         verifyNoInteractions(metricsEmitter);
     }
 
