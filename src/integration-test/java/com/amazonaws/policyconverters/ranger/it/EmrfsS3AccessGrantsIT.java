@@ -22,10 +22,8 @@ import org.apache.ranger.plugin.model.RangerPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
-import org.junit.jupiter.api.TestMethodOrder;
 import org.mockito.ArgumentCaptor;
 import software.amazon.awssdk.services.s3control.S3ControlClient;
 import software.amazon.awssdk.services.s3control.model.CreateAccessGrantRequest;
@@ -88,7 +86,6 @@ import static org.mockito.Mockito.*;
  *       {@code CreateAccessGrant} call and writes a dead-letter entry.</li>
  * </ol>
  */
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class EmrfsS3AccessGrantsIT {
 
     // ---- Configuration ----
@@ -286,6 +283,16 @@ public class EmrfsS3AccessGrantsIT {
         // GetObject (READ) + PutObject (WRITE) must aggregate to READWRITE
         assertEquals(Permission.READWRITE, matched.permission(),
                 "GetObject + PutObject should produce READWRITE permission");
+
+        // The grant must reference the registered location ID returned by listAccessGrantsLocations
+        assertEquals(REGISTERED_LOCATION_ID, matched.accessGrantsLocationId(),
+                "accessGrantsLocationId must match the location ID from the registered location");
+
+        // The sub-prefix is the path component after stripping the registered location prefix
+        // Policy resource: test-emrfs-bucket/data → s3://test-emrfs-bucket/data
+        // Registered location: s3://test-emrfs-bucket/  → sub-prefix = "data"
+        assertEquals("data", matched.accessGrantsLocationConfiguration().s3SubPrefix(),
+                "s3SubPrefix must be the path component after the registered location prefix");
 
         // Account ID must be propagated
         assertEquals(TEST_ACCOUNT_ID, matched.accountId(),
