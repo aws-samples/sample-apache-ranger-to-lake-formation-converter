@@ -29,6 +29,24 @@ public class DeadLetterLogger {
     }
 
     /**
+     * Write a pre-serialised JSON line to the dead-letter log.
+     *
+     * <p>Used by components (e.g. S3 Access Grants) whose operation types are not
+     * {@link LFPermissionOperation} and therefore cannot use {@link #logFailedOperation}.
+     *
+     * @param jsonLine a single JSON string (must not contain embedded newlines)
+     */
+    public synchronized void logEntry(String jsonLine) {
+        try {
+            writer.write(jsonLine);
+            writer.newLine();
+            writer.flush();
+        } catch (IOException e) {
+            LOG.error("Failed to write entry to dead-letter log: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
      * Log a failed operation to the dead-letter log.
      *
      * @param op         the operation that failed

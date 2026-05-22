@@ -94,7 +94,7 @@ public class CheckpointStore {
         SyncCheckpoint base = existing.orElse(
                 new SyncCheckpoint(policyVersion, null, Instant.now().toString(), ""));
         SyncCheckpoint updated = new SyncCheckpoint(
-                base.getPolicyVersion(),
+                policyVersion,
                 base.getServiceVersions(),
                 base.getTimestamp(),
                 base.getCedarPolicyText(),

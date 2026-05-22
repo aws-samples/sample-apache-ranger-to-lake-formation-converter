@@ -2,11 +2,14 @@ package com.amazonaws.policyconverters.s3accessgrants;
 
 import com.amazonaws.policyconverters.config.S3AccessGrantsConfig;
 import com.amazonaws.policyconverters.sync.DeadLetterLogger;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.services.s3control.S3ControlClient;
 import software.amazon.awssdk.services.s3control.model.AccessGrantsLocationConfiguration;
+import software.amazon.awssdk.services.s3control.model.CreateAccessGrantRequest;
 import software.amazon.awssdk.services.s3control.model.CreateAccessGrantResponse;
 import software.amazon.awssdk.services.s3control.model.Grantee;
 import software.amazon.awssdk.services.s3control.model.GranteeType;
@@ -38,8 +41,11 @@ public class S3AccessGrantsClient {
 
     private static final Logger LOG = LoggerFactory.getLogger(S3AccessGrantsClient.class);
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private final S3ControlClient s3control;
     private final String accountId;
+    private final String instanceArn;
     private final DeadLetterLogger deadLetterLogger;
 
     /** Cached registered location scopes; cleared at the start of each applyBatch call. */
@@ -53,6 +59,7 @@ public class S3AccessGrantsClient {
      */
     public S3AccessGrantsClient(S3AccessGrantsConfig config, DeadLetterLogger deadLetterLogger) {
         this.accountId = config.accountId();
+        this.instanceArn = config.instanceArn();
         this.deadLetterLogger = deadLetterLogger;
         this.s3control = S3ControlClient.builder()
                 .credentialsProvider(DefaultCredentialsProvider.create())
@@ -65,6 +72,7 @@ public class S3AccessGrantsClient {
     S3AccessGrantsClient(S3AccessGrantsConfig config, S3ControlClient s3control,
                          DeadLetterLogger deadLetterLogger) {
         this.accountId = config.accountId();
+        this.instanceArn = config.instanceArn();
         this.s3control = s3control;
         this.deadLetterLogger = deadLetterLogger;
     }
@@ -138,15 +146,18 @@ public class S3AccessGrantsClient {
         String subPrefix = resolveSubPrefix(op.s3Prefix(), matchedLocation);
         String locationId = resolveLocationId(op.s3Prefix(), locations);
 
-        CreateAccessGrantResponse response = s3control.createAccessGrant(r -> r
+        CreateAccessGrantRequest.Builder rb = CreateAccessGrantRequest.builder()
                 .accountId(accountId)
                 .grantee(buildGrantee(op.principalArn()))
                 .accessGrantsLocationId(locationId)
-                .accessGrantsLocationConfiguration(
-                        subPrefix != null && !subPrefix.isEmpty()
-                                ? AccessGrantsLocationConfiguration.builder().s3SubPrefix(subPrefix).build()
-                                : (AccessGrantsLocationConfiguration) null)
-                .permission(toSdkPermission(op.permission())));
+                .permission(toSdkPermission(op.permission()));
+        if (subPrefix != null && !subPrefix.isEmpty()) {
+            rb.accessGrantsLocationConfiguration(
+                    AccessGrantsLocationConfiguration.builder().s3SubPrefix(subPrefix).build());
+        }
+        // Note: instanceArn is not a parameter accepted by the S3Control createAccessGrant API;
+        // it is implicitly associated with the account.
+        CreateAccessGrantResponse response = s3control.createAccessGrant(rb.build());
 
         String grantId = response.accessGrantId();
         LOG.info("Created S3 Access Grant: grantId={}, principal={}, prefix={}, permission={}",
@@ -457,14 +468,30 @@ public class S3AccessGrantsClient {
     }
 
     /**
-     * Write a failed operation to the dead-letter log if a logger is configured.
+     * Write a failed S3 Access Grants operation to the dead-letter log if a logger is configured.
+     *
+     * <p>{@link DeadLetterLogger#logFailedOperation} is typed to {@code LFPermissionOperation} and
+     * cannot be called directly with an {@code S3AccessGrantOperation}. Instead, we build a JSON
+     * entry that mirrors the dead-letter format and write it via the logger's underlying writer
+     * using {@link DeadLetterLogger#logS3AgFailure}.
      */
     private void writeDeadLetter(S3AccessGrantOperation op, String errorMessage) {
+        LOG.warn("DEAD_LETTER principal={} s3Prefix={} permission={} error={}",
+                op.principalArn(), op.s3Prefix(), op.permission(), errorMessage);
         if (deadLetterLogger != null) {
-            // DeadLetterLogger is typed to LFPermissionOperation; we log as a structured warning
-            // instead, since S3 operations have a different shape.
-            LOG.warn("DEAD_LETTER principal={} s3Prefix={} permission={} error={}",
-                    op.principalArn(), op.s3Prefix(), op.permission(), errorMessage);
+            try {
+                ObjectNode entry = MAPPER.createObjectNode();
+                entry.put("timestamp", java.time.Instant.now().toString());
+                entry.put("type", "S3_ACCESS_GRANT");
+                entry.put("operation", op.type() != null ? op.type().name() : "UNKNOWN");
+                entry.put("principal", op.principalArn());
+                entry.put("s3Prefix", op.s3Prefix());
+                entry.put("permission", op.permission() != null ? op.permission().name() : "UNKNOWN");
+                entry.put("error", errorMessage);
+                deadLetterLogger.logEntry(MAPPER.writeValueAsString(entry));
+            } catch (Exception e) {
+                LOG.error("Failed to write S3AG dead-letter entry: {}", e.getMessage(), e);
+            }
         }
     }
 
