@@ -175,6 +175,10 @@ public class IdentityCenterPrincipalMapper implements PrincipalMapper {
      */
     @Override
     public Optional<String> resolveRole(String rangerRole) {
+        if (rangerRole == null) {
+            LOG.warn("Attempted to resolve null role principal, returning empty");
+            return Optional.empty();
+        }
         LOG.warn("Identity Center does not support role principals; role '{}' will be skipped", rangerRole);
         if (metricsEmitter != null) {
             metricsEmitter.recordUnmappedPrincipal("role");

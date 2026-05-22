@@ -59,6 +59,10 @@ public class PrincipalMapperFactory {
                 throw new IllegalArgumentException(
                         "idcConfig.accountId must not be blank");
             }
+            if (identityStoreClient == null) {
+                throw new IllegalArgumentException(
+                        "identityStoreClient must not be null when type is IDENTITY_CENTER");
+            }
             return new IdentityCenterPrincipalMapper(idcConfig, identityStoreClient, metricsEmitter);
         }
 
