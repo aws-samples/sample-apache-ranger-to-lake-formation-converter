@@ -94,13 +94,12 @@ public class AssessmentRunner {
         List<LFPermissionOperation> ops = lfConverter.convert(cedarPolicySet);
 
         // S3 Access Grants gap assessment
-        CedarToS3AccessGrantsConverter s3AgConverter = new CedarToS3AccessGrantsConverter();
-        List<S3AccessGrantOperation> s3AgOps = s3AgConverter.convert(cedarPolicySet);
+        List<S3AccessGrantOperation> s3AgOps = convertToS3AgOps(cedarPolicySet);
 
         if (!s3AgOps.isEmpty()) {
             if (config.getS3AccessGrants() != null) {
                 // Check location coverage
-                S3AccessGrantsClient s3agClient = new S3AccessGrantsClient(config.getS3AccessGrants(), null /* no dead-letter in assessment */);
+                S3AccessGrantsClient s3agClient = createS3AccessGrantsClient(config.getS3AccessGrants());
                 Set<String> registeredLocations = s3agClient.listRegisteredLocations();
                 for (S3AccessGrantOperation op : s3AgOps) {
                     boolean covered = registeredLocations.stream()
@@ -139,6 +138,22 @@ public class AssessmentRunner {
                 counts[2],
                 ops.size(),
                 gapReport);
+    }
+
+    /**
+     * Converts the Cedar PolicySet to S3 Access Grants operations.
+     * Overridable in tests to inject pre-built operations without the full Ranger pipeline.
+     */
+    protected List<S3AccessGrantOperation> convertToS3AgOps(CedarPolicySet cedarPolicySet) {
+        return new CedarToS3AccessGrantsConverter().convert(cedarPolicySet);
+    }
+
+    /**
+     * Factory method for {@link S3AccessGrantsClient}. Overridable in tests to inject a mock.
+     */
+    protected S3AccessGrantsClient createS3AccessGrantsClient(
+            com.amazonaws.policyconverters.config.S3AccessGrantsConfig s3Config) {
+        return new S3AccessGrantsClient(s3Config, null /* no dead-letter in assessment */);
     }
 
     protected List<RangerPolicy> fetchPolicies(AssessmentConfig config) {
