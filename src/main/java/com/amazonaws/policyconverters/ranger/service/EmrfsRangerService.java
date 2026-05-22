@@ -28,6 +28,6 @@ public class EmrfsRangerService extends BaseRangerService {
 
     @Override
     public String getServiceDefinitionResourcePath() {
-        return "ranger-servicedef-amazon-emr-emrfs.json";
+        return "/ranger-servicedef-amazon-emr-emrfs.json";
     }
 }

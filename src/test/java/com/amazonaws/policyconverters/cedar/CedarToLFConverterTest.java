@@ -141,6 +141,28 @@ class CedarToLFConverterTest {
     }
 
     @Test
+    void s3ActionIsSilentlySkippedWithNoGap() throws Exception {
+        String cedarText = """
+                @source("99")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"s3:GetObject",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/mydb/orders"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(0, ops.size(), "s3: action should produce zero LFPermissionOperation objects");
+
+        long unsupportedGaps = gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
+                .count();
+        assertEquals(0, unsupportedGaps, "s3: action should be silently skipped with no UNSUPPORTED_ACTION gap");
+    }
+
+    @Test
     void unsupportedActionProducesGap() throws Exception {
         String cedarText = """
                 @source("46")
