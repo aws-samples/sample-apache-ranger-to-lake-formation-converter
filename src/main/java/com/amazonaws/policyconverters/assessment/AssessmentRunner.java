@@ -9,6 +9,7 @@ import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapReport;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
@@ -55,7 +56,7 @@ public class AssessmentRunner {
 
         GapReporter gapReporter = new GapReporter();
         CedarSchemaProvider schemaProvider = new CedarSchemaProvider();
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(config.getPrincipalMapping());
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(config.getPrincipalMapping(), null);
         CatalogResolver catalogResolver = buildCatalogResolver(config);
 
         Map<String, SourcePolicyAdapter> adapterRegistry = buildAdapterRegistry(config);

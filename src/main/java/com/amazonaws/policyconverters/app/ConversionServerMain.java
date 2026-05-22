@@ -39,6 +39,7 @@ import com.amazonaws.policyconverters.ranger.RangerServiceAdapter;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
 import com.amazonaws.policyconverters.config.ConfigValidator;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import com.amazonaws.policyconverters.ranger.RangerPlugin;
 import com.amazonaws.policyconverters.sync.SyncService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -196,7 +197,7 @@ public class ConversionServerMain {
                 .build();
 
         // Build application components (reuse wiring from SyncServiceMain)
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(syncConfig.getPrincipalMapping());
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(syncConfig.getPrincipalMapping(), null);
         CatalogResolver catalogResolver = new CatalogResolver(glueClient);
         GapReporter gapReporter = new GapReporter();
         CedarSchemaProvider cedarSchemaProvider = new CedarSchemaProvider();

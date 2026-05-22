@@ -33,7 +33,7 @@ class PrincipalMapperTest {
         Map<String, String> roles = Collections.singletonMap("admin", "arn:aws:iam::123:role/AdminRole");
         PrincipalMappingConfig config = new PrincipalMappingConfig(users, groups, roles);
 
-        PrincipalMapper mapper = PrincipalMapper.fromConfig(config);
+        PrincipalMapper mapper = StaticPrincipalMapper.fromConfig(config, null);
 
         assertEquals(Optional.of("arn:aws:iam::123:user/alice"), mapper.resolveUser("alice"));
         assertEquals(Optional.of("arn:aws:iam::123:role/AnalystRole"), mapper.resolveGroup("analysts"));
@@ -42,13 +42,13 @@ class PrincipalMapperTest {
 
     @Test
     void fromConfigWithNullThrows() {
-        assertThrows(IllegalArgumentException.class, () -> PrincipalMapper.fromConfig(null));
+        assertThrows(IllegalArgumentException.class, () -> StaticPrincipalMapper.fromConfig(null, null));
     }
 
     @Test
     void fromConfigWithEmptyMappings() {
         PrincipalMappingConfig config = new PrincipalMappingConfig(null, null, null);
-        PrincipalMapper mapper = PrincipalMapper.fromConfig(config);
+        PrincipalMapper mapper = StaticPrincipalMapper.fromConfig(config, null);
 
         assertEquals(Optional.empty(), mapper.resolveUser("alice"));
         assertEquals(Optional.empty(), mapper.resolveGroup("analysts"));
@@ -61,7 +61,7 @@ class PrincipalMapperTest {
     void unmappedUserReturnsEmpty() {
         PrincipalMappingConfig config = new PrincipalMappingConfig(
                 Collections.singletonMap("alice", "arn:aws:iam::123:user/alice"), null, null);
-        PrincipalMapper mapper = PrincipalMapper.fromConfig(config);
+        PrincipalMapper mapper = StaticPrincipalMapper.fromConfig(config, null);
 
         assertEquals(Optional.empty(), mapper.resolveUser("unknown_user"));
     }
@@ -69,7 +69,7 @@ class PrincipalMapperTest {
     @Test
     void unmappedGroupReturnsEmpty() {
         PrincipalMappingConfig config = new PrincipalMappingConfig(null, null, null);
-        PrincipalMapper mapper = PrincipalMapper.fromConfig(config);
+        PrincipalMapper mapper = StaticPrincipalMapper.fromConfig(config, null);
 
         assertEquals(Optional.empty(), mapper.resolveGroup("unknown_group"));
     }
@@ -77,7 +77,7 @@ class PrincipalMapperTest {
     @Test
     void unmappedRoleReturnsEmpty() {
         PrincipalMappingConfig config = new PrincipalMappingConfig(null, null, null);
-        PrincipalMapper mapper = PrincipalMapper.fromConfig(config);
+        PrincipalMapper mapper = StaticPrincipalMapper.fromConfig(config, null);
 
         assertEquals(Optional.empty(), mapper.resolveRole("unknown_role"));
     }
@@ -85,7 +85,7 @@ class PrincipalMapperTest {
     @Test
     void nullPrincipalNameReturnsEmpty() {
         PrincipalMappingConfig config = new PrincipalMappingConfig(null, null, null);
-        PrincipalMapper mapper = PrincipalMapper.fromConfig(config);
+        PrincipalMapper mapper = StaticPrincipalMapper.fromConfig(config, null);
 
         assertEquals(Optional.empty(), mapper.resolveUser(null));
         assertEquals(Optional.empty(), mapper.resolveGroup(null));
@@ -106,7 +106,7 @@ class PrincipalMapperTest {
         File jsonFile = tempDir.resolve("mappings.json").toFile();
         objectMapper.writeValue(jsonFile, config);
 
-        PrincipalMapper mapper = PrincipalMapper.fromFile(jsonFile.getAbsolutePath());
+        PrincipalMapper mapper = StaticPrincipalMapper.fromFile(jsonFile.getAbsolutePath());
 
         assertEquals(Optional.of("arn:aws:iam::123:user/alice"), mapper.resolveUser("alice"));
         assertEquals(Optional.of("arn:aws:iam::123:user/bob"), mapper.resolveUser("bob"));
@@ -120,7 +120,7 @@ class PrincipalMapperTest {
         File jsonFile = tempDir.resolve("empty.json").toFile();
         objectMapper.writeValue(jsonFile, config);
 
-        PrincipalMapper mapper = PrincipalMapper.fromFile(jsonFile.getAbsolutePath());
+        PrincipalMapper mapper = StaticPrincipalMapper.fromFile(jsonFile.getAbsolutePath());
 
         assertEquals(Optional.empty(), mapper.resolveUser("anyone"));
     }
@@ -140,7 +140,7 @@ class PrincipalMapperTest {
             props.store(fos, null);
         }
 
-        PrincipalMapper mapper = PrincipalMapper.fromFile(propsFile.getAbsolutePath());
+        PrincipalMapper mapper = StaticPrincipalMapper.fromFile(propsFile.getAbsolutePath());
 
         assertEquals(Optional.of("arn:aws:iam::123:user/alice"), mapper.resolveUser("alice"));
         assertEquals(Optional.of("arn:aws:iam::123:user/bob"), mapper.resolveUser("bob"));
@@ -159,7 +159,7 @@ class PrincipalMapperTest {
             props.store(fos, null);
         }
 
-        PrincipalMapper mapper = PrincipalMapper.fromFile(propsFile.getAbsolutePath());
+        PrincipalMapper mapper = StaticPrincipalMapper.fromFile(propsFile.getAbsolutePath());
 
         assertEquals(Optional.of("arn:aws:iam::123:user/alice"), mapper.resolveUser("alice"));
     }
@@ -172,7 +172,7 @@ class PrincipalMapperTest {
             props.store(fos, null);
         }
 
-        PrincipalMapper mapper = PrincipalMapper.fromFile(propsFile.getAbsolutePath());
+        PrincipalMapper mapper = StaticPrincipalMapper.fromFile(propsFile.getAbsolutePath());
 
         assertEquals(Optional.empty(), mapper.resolveUser("anyone"));
     }
@@ -181,17 +181,17 @@ class PrincipalMapperTest {
 
     @Test
     void fromFileWithNullPathThrows() {
-        assertThrows(IllegalArgumentException.class, () -> PrincipalMapper.fromFile(null));
+        assertThrows(IllegalArgumentException.class, () -> StaticPrincipalMapper.fromFile(null));
     }
 
     @Test
     void fromFileWithEmptyPathThrows() {
-        assertThrows(IllegalArgumentException.class, () -> PrincipalMapper.fromFile("  "));
+        assertThrows(IllegalArgumentException.class, () -> StaticPrincipalMapper.fromFile("  "));
     }
 
     @Test
     void fromFileWithNonExistentFileThrows() {
-        assertThrows(IOException.class, () -> PrincipalMapper.fromFile("/nonexistent/path/mappings.json"));
+        assertThrows(IOException.class, () -> StaticPrincipalMapper.fromFile("/nonexistent/path/mappings.json"));
     }
 
     @Test
@@ -199,6 +199,6 @@ class PrincipalMapperTest {
         File xmlFile = tempDir.resolve("mappings.xml").toFile();
         xmlFile.createNewFile();
 
-        assertThrows(IOException.class, () -> PrincipalMapper.fromFile(xmlFile.getAbsolutePath()));
+        assertThrows(IOException.class, () -> StaticPrincipalMapper.fromFile(xmlFile.getAbsolutePath()));
     }
 }

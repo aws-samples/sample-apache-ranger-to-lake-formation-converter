@@ -13,6 +13,7 @@ import com.amazonaws.policyconverters.lakeformation.LakeFormationClient;
 import com.amazonaws.policyconverters.config.ConfigLoader;
 import com.amazonaws.policyconverters.config.ConfigValidator;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import com.amazonaws.policyconverters.config.AwsConfig;
 import com.amazonaws.policyconverters.config.RetryConfig;
 import com.amazonaws.policyconverters.config.SyncConfig;
@@ -141,7 +142,7 @@ public class SyncServiceMain {
                         .build();
 
         // Build application components
-        PrincipalMapper principalMapper = PrincipalMapper.fromConfig(config.getPrincipalMapping());
+        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(config.getPrincipalMapping(), null);
         CatalogResolver catalogResolver = new CatalogResolver(glueClient);
         GapReporter gapReporter = new GapReporter();
 
