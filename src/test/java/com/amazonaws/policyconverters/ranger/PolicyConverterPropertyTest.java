@@ -4,6 +4,7 @@ import net.jqwik.api.*;
 import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
 import com.amazonaws.policyconverters.lakeformation.*;
 import com.amazonaws.policyconverters.model.GapEntry.GapType;
 import com.amazonaws.policyconverters.model.GapReport;
@@ -186,8 +187,8 @@ class PolicyConverterPropertyTest {
         } else {
             roleMap.put(principalName, expectedArn);
         }
-        PrincipalMapper mapper = PrincipalMapper.fromConfig(
-                new PrincipalMappingConfig(userMap, groupMap, roleMap));
+        PrincipalMapper mapper = StaticPrincipalMapper.fromConfig(
+                new PrincipalMappingConfig(userMap, groupMap, roleMap), null);
 
         CatalogResolver resolver = mockPassthroughResolver();
         GapReporter reporter = new GapReporter();
@@ -561,9 +562,9 @@ class PolicyConverterPropertyTest {
     private static PrincipalMapper buildMapper(String userName, String arn) {
         Map<String, String> userMap = new HashMap<>();
         userMap.put(userName, arn);
-        return PrincipalMapper.fromConfig(
+        return StaticPrincipalMapper.fromConfig(
                 new PrincipalMappingConfig(userMap, Collections.<String, String>emptyMap(),
-                        Collections.<String, String>emptyMap()));
+                        Collections.<String, String>emptyMap()), null);
     }
 
     /**

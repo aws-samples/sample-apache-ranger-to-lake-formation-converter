@@ -35,11 +35,11 @@ public class PrincipalMappingConfig {
     // New canonical @JsonCreator
     @JsonCreator
     public PrincipalMappingConfig(
-            @JsonProperty("userMappings")  Map<String, String> userMappings,
+            @JsonProperty("userMappings") Map<String, String> userMappings,
             @JsonProperty("groupMappings") Map<String, String> groupMappings,
-            @JsonProperty("roleMappings")  Map<String, String> roleMappings,
-            @JsonProperty("type")          PrincipalMapperType type,
-            @JsonProperty("idcConfig")     IdentityCenterConfig idcConfig) {
+            @JsonProperty("roleMappings") Map<String, String> roleMappings,
+            @JsonProperty("type") PrincipalMapperType type,
+            @JsonProperty("idcConfig") IdentityCenterConfig idcConfig) {
         this.userMappings = userMappings != null
                 ? Collections.unmodifiableMap(new HashMap<>(userMappings))
                 : Collections.<String, String>emptyMap();

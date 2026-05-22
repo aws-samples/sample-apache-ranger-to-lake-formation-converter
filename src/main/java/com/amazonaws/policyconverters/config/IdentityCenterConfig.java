@@ -11,6 +11,8 @@ import java.util.Objects;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class IdentityCenterConfig {
 
+    private static final int DEFAULT_CACHE_TTL_MINUTES = 60;
+
     private final String identityStoreId;
     private final String region;
     private final String accountId;
@@ -25,7 +27,7 @@ public class IdentityCenterConfig {
         this.identityStoreId = identityStoreId;
         this.region = region;
         this.accountId = accountId;
-        this.cacheTtlMinutes = cacheTtlMinutes != null ? cacheTtlMinutes : 60;
+        this.cacheTtlMinutes = cacheTtlMinutes != null ? cacheTtlMinutes : DEFAULT_CACHE_TTL_MINUTES;
     }
 
     public String getIdentityStoreId() {
