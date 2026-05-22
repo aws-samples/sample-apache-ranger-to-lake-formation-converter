@@ -297,7 +297,7 @@ public class ConversionServerMain {
 
             syncService = new SyncService(
                     rangerServices, rangerToCedarConverter, cedarToLFConverter,
-                    lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore);
+                    lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore, null);
 
             // Initialize all plugins (Req 6.3)
             for (BaseRangerService service : rangerServices) {

@@ -2,6 +2,7 @@ package com.amazonaws.policyconverters.sync;
 
 import com.amazonaws.policyconverters.cedar.CedarPolicySet;
 import com.amazonaws.policyconverters.cedar.CedarToLFConverter;
+import com.amazonaws.policyconverters.cedar.CedarToS3AccessGrantsConverter;
 import com.amazonaws.policyconverters.lakeformation.BatchResult;
 import com.amazonaws.policyconverters.lakeformation.TagMetadataSyncer;
 import com.amazonaws.policyconverters.sync.DeadLetterLogger;
@@ -21,6 +22,8 @@ import com.amazonaws.policyconverters.ranger.RangerPlugin;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
 import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
 import com.amazonaws.policyconverters.ranger.service.RangerTagService;
+import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantOperation;
+import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantsClient;
 import org.apache.ranger.plugin.util.ServiceTags;
 import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.util.ServicePolicies;
@@ -86,6 +89,9 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     private final GapReporter gapReporter;
     private final DeadLetterLogger deadLetterLogger;
     private final CheckpointStore checkpointStore;
+    private final S3AccessGrantsClient s3AccessGrantsClient;  // nullable
+    private final CedarToS3AccessGrantsConverter s3AgConverter; // null when client is null
+    private volatile List<S3AccessGrantOperation> previousS3AgOperations = Collections.emptyList();
 
     /**
      * Tracks which services have completed at least one successful policy fetch.
@@ -159,6 +165,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         this.gapReporter = gapReporter;
         this.deadLetterLogger = deadLetterLogger;
         this.checkpointStore = checkpointStore;
+        this.s3AccessGrantsClient = null;
+        this.s3AgConverter = null;
     }
 
     // ---------------------------------------------------------------
@@ -176,6 +184,7 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
      * @param gapReporter            the gap reporter
      * @param deadLetterLogger       the dead letter logger
      * @param checkpointStore        the checkpoint store (nullable)
+     * @param s3AccessGrantsClient   the S3 Access Grants client (nullable)
      */
     public SyncService(
             List<BaseRangerService> rangerServices,
@@ -184,7 +193,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             LakeFormationClient lakeFormationClient,
             GapReporter gapReporter,
             DeadLetterLogger deadLetterLogger,
-            CheckpointStore checkpointStore) {
+            CheckpointStore checkpointStore,
+            S3AccessGrantsClient s3AccessGrantsClient) {
         this.plugin = null;
         this.rangerServices = rangerServices != null
                 ? Collections.unmodifiableList(new ArrayList<>(rangerServices))
@@ -195,6 +205,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         this.gapReporter = gapReporter;
         this.deadLetterLogger = deadLetterLogger;
         this.checkpointStore = checkpointStore;
+        this.s3AccessGrantsClient = s3AccessGrantsClient;
+        this.s3AgConverter = s3AccessGrantsClient != null ? new CedarToS3AccessGrantsConverter() : null;
     }
 
     /**
@@ -260,6 +272,10 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
                 if (restoredVersions != null) {
                     serviceVersions.putAll(restoredVersions);
                     LOG.info("Restored per-service versions from checkpoint: {}", serviceVersions);
+                }
+
+                if (s3AccessGrantsClient != null) {
+                    previousS3AgOperations = checkpoint.getS3AgOperations();
                 }
             });
         }
@@ -525,6 +541,21 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         // Persist checkpoint with per-service version map (Req 10.1, 10.2)
         if (checkpointStore != null) {
             checkpointStore.save(new HashMap<>(serviceVersions), lastCedarPolicyText);
+        }
+
+        if (s3AccessGrantsClient != null) {
+            List<S3AccessGrantOperation> currentS3AgOps = s3AgConverter.convert(cedarPolicySet);
+            S3AgDiff s3AgDiff = computeS3AgDiff(previousS3AgOperations, currentS3AgOps);
+            List<S3AccessGrantOperation> opsToApply = new ArrayList<>();
+            opsToApply.addAll(s3AgDiff.newGrants());
+            opsToApply.addAll(s3AgDiff.revocations());
+            if (!opsToApply.isEmpty()) {
+                s3AccessGrantsClient.applyBatch(opsToApply, syncConfig.getMaxLfRetries(), syncConfig.getLfRetryBackoffMs());
+            }
+            previousS3AgOperations = currentS3AgOps;
+            if (checkpointStore != null) {
+                checkpointStore.saveS3AgOperations(lastPolicyVersion, currentS3AgOps);
+            }
         }
 
         // Tag metadata sync runs after policy sync; failure does not affect policy sync result
@@ -904,6 +935,68 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     }
 
     /**
+     * Compute the diff between two sets of S3 Access Grant operations.
+     * <p>
+     * The diff identifies:
+     * <ul>
+     *   <li>New grants: operations in current but not in previous</li>
+     *   <li>Revocations: operations in previous but not in current (as REVOKE ops)</li>
+     * </ul>
+     * <p>
+     * Comparison is based on the grant "identity" — the combination of
+     * principalArn, s3Prefix, and permission — ignoring grantId and type.
+     *
+     * @param previous the previous set of operations
+     * @param current  the current set of operations
+     * @return the computed S3AG diff
+     */
+    static S3AgDiff computeS3AgDiff(
+            List<S3AccessGrantOperation> previous,
+            List<S3AccessGrantOperation> current) {
+
+        // Key: (principalArn, s3Prefix, permission) — ignore grantId and type
+        record S3AgKey(String principalArn, String s3Prefix, com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantPermission permission) {}
+
+        Map<S3AgKey, S3AccessGrantOperation> previousMap = new HashMap<>();
+        for (S3AccessGrantOperation op : previous) {
+            previousMap.put(new S3AgKey(op.principalArn(), op.s3Prefix(), op.permission()), op);
+        }
+
+        Map<S3AgKey, S3AccessGrantOperation> currentMap = new HashMap<>();
+        for (S3AccessGrantOperation op : current) {
+            currentMap.put(new S3AgKey(op.principalArn(), op.s3Prefix(), op.permission()), op);
+        }
+
+        List<S3AccessGrantOperation> newGrants = new ArrayList<>();
+        List<S3AccessGrantOperation> revocations = new ArrayList<>();
+
+        // Find new grants: in current but not in previous
+        for (Map.Entry<S3AgKey, S3AccessGrantOperation> entry : currentMap.entrySet()) {
+            if (!previousMap.containsKey(entry.getKey())) {
+                S3AccessGrantOperation op = entry.getValue();
+                if (op.type() != com.amazonaws.policyconverters.s3accessgrants.OperationType.GRANT) {
+                    op = new S3AccessGrantOperation(
+                            com.amazonaws.policyconverters.s3accessgrants.OperationType.GRANT,
+                            op.principalArn(), op.s3Prefix(), op.permission(), op.grantId());
+                }
+                newGrants.add(op);
+            }
+        }
+
+        // Find revocations: in previous but not in current
+        for (Map.Entry<S3AgKey, S3AccessGrantOperation> entry : previousMap.entrySet()) {
+            if (!currentMap.containsKey(entry.getKey())) {
+                S3AccessGrantOperation op = entry.getValue();
+                revocations.add(new S3AccessGrantOperation(
+                        com.amazonaws.policyconverters.s3accessgrants.OperationType.REVOKE,
+                        op.principalArn(), op.s3Prefix(), op.permission(), op.grantId()));
+            }
+        }
+
+        return new S3AgDiff(newGrants, revocations);
+    }
+
+    /**
      * Build a map from permission identity keys to operations.
      * If duplicate keys exist, the last one wins.
      */
@@ -1028,6 +1121,14 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             return Objects.hash(principalArn, resource, permissions, grantable);
         }
     }
+
+    /**
+     * Represents the diff between two S3 Access Grants operation snapshots.
+     */
+    private record S3AgDiff(
+        List<S3AccessGrantOperation> newGrants,
+        List<S3AccessGrantOperation> revocations
+    ) {}
 
     /**
      * Represents the diff between two policy snapshots.
