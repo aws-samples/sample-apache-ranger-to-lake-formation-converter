@@ -78,6 +78,10 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>identitystore</artifactId>
         </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3control</artifactId>
+        </dependency>
 
         <!-- Jackson for JSON/YAML -->
         <dependency>
@@ -170,6 +174,7 @@
                     <include>ranger-servicedef-hive.json</include>
                     <include>ranger-servicedef-presto.json</include>
                     <include>ranger-servicedef-trino.json</include>
+                    <include>ranger-servicedef-amazon-emr-emrfs.json</include>
                     <include>ranger-lakeformation-security.xml</include>
                     <include>ranger-lakeformation-audit.xml</include>
                     <include>ranger-lakeformation-policymgr-ssl.xml</include>
@@ -187,6 +192,7 @@
                     <include>ranger-servicedef-hive.json</include>
                     <include>ranger-servicedef-presto.json</include>
                     <include>ranger-servicedef-trino.json</include>
+                    <include>ranger-servicedef-amazon-emr-emrfs.json</include>
                 </includes>
             </testResource>
         </testResources>
