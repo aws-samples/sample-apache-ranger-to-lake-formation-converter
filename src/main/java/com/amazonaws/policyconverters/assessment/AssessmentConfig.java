@@ -3,6 +3,7 @@ package com.amazonaws.policyconverters.assessment;
 import com.amazonaws.policyconverters.config.AwsConfig;
 import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.config.RangerServiceConfig;
+import com.amazonaws.policyconverters.config.S3AccessGrantsConfig;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -23,6 +24,7 @@ public class AssessmentConfig {
     private final PrincipalMappingConfig principalMapping;
     private final Path outputDir;
     private final boolean consoleOnly;
+    private final S3AccessGrantsConfig s3AccessGrants;
 
     private AssessmentConfig(Builder builder) {
         this.rangerAdminUrl = builder.rangerAdminUrl;
@@ -33,6 +35,7 @@ public class AssessmentConfig {
         this.principalMapping = builder.principalMapping;
         this.outputDir = builder.outputDir;
         this.consoleOnly = builder.consoleOnly;
+        this.s3AccessGrants = builder.s3AccessGrants;
     }
 
     public String getRangerAdminUrl() {
@@ -67,6 +70,10 @@ public class AssessmentConfig {
         return consoleOnly;
     }
 
+    public S3AccessGrantsConfig getS3AccessGrants() {
+        return s3AccessGrants;
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -80,6 +87,7 @@ public class AssessmentConfig {
         private PrincipalMappingConfig principalMapping = new PrincipalMappingConfig(null, null, null);
         private Path outputDir = Paths.get(".");
         private boolean consoleOnly = false;
+        private S3AccessGrantsConfig s3AccessGrants = null;
 
         public Builder rangerAdminUrl(String rangerAdminUrl) {
             this.rangerAdminUrl = rangerAdminUrl;
@@ -120,6 +128,11 @@ public class AssessmentConfig {
 
         public Builder consoleOnly(boolean consoleOnly) {
             this.consoleOnly = consoleOnly;
+            return this;
+        }
+
+        public Builder s3AccessGrants(S3AccessGrantsConfig s3AccessGrants) {
+            this.s3AccessGrants = s3AccessGrants;
             return this;
         }
 

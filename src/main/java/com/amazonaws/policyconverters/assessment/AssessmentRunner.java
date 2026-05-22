@@ -4,6 +4,7 @@ import com.amazonaws.policyconverters.app.ConversionServerMain;
 import com.amazonaws.policyconverters.cedar.CedarPolicySet;
 import com.amazonaws.policyconverters.cedar.CedarSchemaProvider;
 import com.amazonaws.policyconverters.cedar.CedarToLFConverter;
+import com.amazonaws.policyconverters.cedar.CedarToS3AccessGrantsConverter;
 import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
 import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
@@ -11,6 +12,9 @@ import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
 import com.amazonaws.policyconverters.config.PrincipalMapperType;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapperFactory;
+import com.amazonaws.policyconverters.model.GapEntry.GapType;
+import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantOperation;
+import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantsClient;
 import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapReport;
@@ -88,6 +92,42 @@ public class AssessmentRunner {
         LOG.info("Assessment: converting {} policies", allPolicies.size());
         CedarPolicySet cedarPolicySet = rangerConverter.convert(allPolicies);
         List<LFPermissionOperation> ops = lfConverter.convert(cedarPolicySet);
+
+        // S3 Access Grants gap assessment
+        CedarToS3AccessGrantsConverter s3AgConverter = new CedarToS3AccessGrantsConverter();
+        List<S3AccessGrantOperation> s3AgOps = s3AgConverter.convert(cedarPolicySet);
+
+        if (!s3AgOps.isEmpty()) {
+            if (config.getS3AccessGrants() != null) {
+                // Check location coverage
+                S3AccessGrantsClient s3agClient = new S3AccessGrantsClient(config.getS3AccessGrants(), null /* no dead-letter in assessment */);
+                Set<String> registeredLocations = s3agClient.listRegisteredLocations();
+                for (S3AccessGrantOperation op : s3AgOps) {
+                    boolean covered = registeredLocations.stream()
+                            .anyMatch(loc -> op.s3Prefix().startsWith(loc));
+                    if (!covered) {
+                        gapReporter.recordGap(new GapEntry(
+                                null,
+                                null,
+                                GapType.UNREGISTERED_S3_LOCATION,
+                                op.s3Prefix(),
+                                "Prefix " + op.s3Prefix() + " is not covered by any registered S3 Access Grants location",
+                                null));
+                    }
+                }
+            } else {
+                // No S3AG config — cannot validate
+                for (S3AccessGrantOperation op : s3AgOps) {
+                    gapReporter.recordGap(new GapEntry(
+                            null,
+                            null,
+                            GapType.CANNOT_VALIDATE_S3_LOCATION,
+                            op.s3Prefix(),
+                            "No s3AccessGrants config provided; cannot check location registration for " + op.s3Prefix(),
+                            null));
+                }
+            }
+        }
 
         GapReport gapReport = gapReporter.getReport();
         int[] counts = computeConvertibilityCounts(allPolicies, ops, gapReport);
