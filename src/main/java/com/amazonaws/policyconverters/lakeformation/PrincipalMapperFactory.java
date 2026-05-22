@@ -4,7 +4,7 @@ import com.amazonaws.policyconverters.config.IdentityCenterConfig;
 import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.config.PrincipalMapperType;
 import com.amazonaws.policyconverters.reporting.MetricsEmitter;
-import software.amazon.awssdk.services.identitystore.IdentityStoreClient;
+import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 
 /**
  * Factory for creating {@link PrincipalMapper} instances based on a {@link PrincipalMappingConfig}.
@@ -34,7 +34,7 @@ public class PrincipalMapperFactory {
      */
     public static PrincipalMapper create(
             PrincipalMappingConfig config,
-            IdentityStoreClient identityStoreClient,
+            IdentitystoreClient identityStoreClient,
             MetricsEmitter metricsEmitter) {
 
         if (config == null) {
