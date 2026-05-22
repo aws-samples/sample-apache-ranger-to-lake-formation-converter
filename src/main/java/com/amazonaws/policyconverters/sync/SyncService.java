@@ -554,7 +554,9 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             }
             previousS3AgOperations = currentS3AgOps;
             if (checkpointStore != null) {
-                checkpointStore.saveS3AgOperations(lastPolicyVersion, currentS3AgOps);
+                long s3AgVersion = serviceVersions.values().stream()
+                        .mapToLong(Long::longValue).max().orElse(0L);
+                checkpointStore.saveS3AgOperations(s3AgVersion, currentS3AgOps);
             }
         }
 
@@ -1125,7 +1127,7 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     /**
      * Represents the diff between two S3 Access Grants operation snapshots.
      */
-    private record S3AgDiff(
+    record S3AgDiff(
         List<S3AccessGrantOperation> newGrants,
         List<S3AccessGrantOperation> revocations
     ) {}
