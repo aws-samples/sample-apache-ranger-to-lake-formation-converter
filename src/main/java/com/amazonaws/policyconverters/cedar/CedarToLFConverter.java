@@ -171,6 +171,10 @@ public class CedarToLFConverter {
             // Map Cedar action to LFPermission
             LFPermission lfPermission = ACTION_TO_PERMISSION.get(permit.action);
             if (lfPermission == null) {
+                if (permit.action != null && permit.action.startsWith("s3:")) {
+                    LOG.debug("Skipping s3: action '{}' — not a Lake Formation action", permit.action);
+                    continue;
+                }
                 gapReporter.recordGap(new GapEntry(
                         permit.sourcePolicyId, null, GapType.UNSUPPORTED_ACTION,
                         permit.resourceId,
