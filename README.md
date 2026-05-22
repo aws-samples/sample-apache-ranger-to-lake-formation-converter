@@ -20,7 +20,7 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 - **Gap Reporting**: Produces a structured JSON report of Ranger features that have no Lake Formation equivalent (data masking, deny policies, etc.).
 - **Pre-Migration Assessment**: A one-time CLI tool that connects to Ranger Admin, runs the full conversion pipeline in read-only mode, and reports how many policies will convert cleanly, partially, or not at all — with projected Lake Formation grant counts and a per-gap-type breakdown. No AWS credentials or Lake Formation access required.
 - **Dead-Letter Log**: Failed operations that exhaust retries are written to a JSON-lines file for manual remediation.
-- **Principal Mapping**: Configurable mapping from Ranger users/groups/roles to AWS IAM principal ARNs.
+- **Principal Mapping**: Configurable mapping from Ranger users/groups/roles to AWS principal ARNs. Supports a static file-based mapper and an AWS IAM Identity Center mapper that resolves directory identities to IDC principals at runtime via the IdentityStore API.
 - **Structured Logging**: JSON-formatted logs to stdout/stderr for container log collection (e.g., Fluent Bit to CloudWatch Logs).
 - **CloudWatch Metrics**: Publishes operational metrics (sync cycle success/failure, duration, grants/revocations applied, error counts) to a configurable CloudWatch namespace.
 - **Dry-Run Mode**: Serializes LF operations to JSON files instead of calling AWS APIs, for testing and human review.
@@ -43,6 +43,7 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 - Apache Ranger 2.4+ (compatible with 2.4, 2.6, 2.7, 2.8)
 - AWS account with Lake Formation and Glue Data Catalog access
 - IAM credentials with permissions for `lakeformation:GrantPermissions`, `lakeformation:RevokePermissions`, `lakeformation:ListPermissions`, `glue:GetDatabases`, `glue:GetTables`, `glue:GetTable`
+- (IDC mapper only) `identitystore:GetUserId`, `identitystore:GetGroupId`
 
 ## Building
 
@@ -368,24 +369,34 @@ All configuration values can be overridden via environment variables. Environmen
 
 ### Principal Mapping
 
-The principal mapping maps Ranger identities to AWS IAM ARNs:
+Two mapper types are supported, selected via the `type` field. When `type` is absent the static mapper is used for backward compatibility.
 
-```json
-{
-  "userMappings": {
-    "analyst": "arn:aws:iam::123456789012:role/AnalystRole",
-    "etl_user": "arn:aws:iam::123456789012:role/ETLRole"
-  },
-  "groupMappings": {
-    "data_engineers": "arn:aws:iam::123456789012:role/DataEngineerRole"
-  },
-  "roleMappings": {
-    "admin_role": "arn:aws:iam::123456789012:role/AdminRole"
-  }
-}
+**Static mapper (default)** — mappings maintained in the config file:
+
+```yaml
+principalMapping:
+  userMappings:
+    analyst: "arn:aws:iam::123456789012:role/AnalystRole"
+    etl_user: "arn:aws:iam::123456789012:role/ETLRole"
+  groupMappings:
+    data_engineers: "arn:aws:iam::123456789012:role/DataEngineerRole"
+  roleMappings:
+    admin_role: "arn:aws:iam::123456789012:role/AdminRole"
 ```
 
-Principals with no configured mapping are skipped with a warning log.
+**Identity Center mapper** — resolves Ranger users and groups to IDC principals at runtime via the AWS IdentityStore API. Produces ARNs of the form `arn:aws:identitystore::<accountId>:user/<UUID>` / `:group/<UUID>`, suitable for Lake Formation grants targeting IDC-synced identities. Lookups are cached with a configurable TTL (default 60 minutes):
+
+```yaml
+principalMapping:
+  type: IDENTITY_CENTER
+  idcConfig:
+    identityStoreId: "d-1234567890"   # required — Identity Store ID
+    region: "us-east-1"               # required — IdentityStore API region
+    accountId: "123456789012"         # required — used in principal ARN construction
+    cacheTtlMinutes: 60               # optional, default 60
+```
+
+Roles are not represented in Identity Center; role principals always produce an empty mapping. Principals with no configured or discoverable mapping are skipped with a warning log and an `UnmappedPrincipal` CloudWatch metric.
 
 ## Multi-Service Ranger Support
 
@@ -804,6 +815,7 @@ The conversion server publishes operational metrics to a configurable CloudWatch
 | `WildcardRefreshDuration` | Milliseconds | Wildcard refresh cycle completes |
 | `WildcardRefreshDeltaOperations` | Count | Wildcard refresh cycle completes |
 | `UnmappedAccessType` | Count (1) | Unknown access type encountered |
+| `UnmappedPrincipal` | Count (1) | Principal cannot be resolved (includes `PrincipalType=user\|group\|role` dimension) |
 
 ## License
 
