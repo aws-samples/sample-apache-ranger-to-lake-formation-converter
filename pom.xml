@@ -81,6 +81,8 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3control</artifactId>
+            <!-- Access Grants API requires s3control >= 2.21; override BOM version -->
+            <version>2.29.52</version>
         </dependency>
 
         <!-- Jackson for JSON/YAML -->
