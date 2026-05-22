@@ -199,8 +199,11 @@ public class ConversionServerMain {
                 .credentialsProvider(credentialsProvider)
                 .build();
 
+        // Build MetricsEmitter early so it can be wired into PrincipalMapperFactory
+        MetricsEmitter metricsEmitter = new MetricsEmitter(cloudWatchClient, serverConfig);
+
         // Build IdentitystoreClient only when needed
-        IdentitystoreClient identityStoreClient = null;
+        final IdentitystoreClient identityStoreClient;
         PrincipalMappingConfig principalMappingConfig = syncConfig.getPrincipalMapping();
         if (principalMappingConfig != null
                 && principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
@@ -208,6 +211,8 @@ public class ConversionServerMain {
                     .region(Region.of(principalMappingConfig.getIdcConfig().getRegion()))
                     .credentialsProvider(credentialsProvider)
                     .build();
+        } else {
+            identityStoreClient = null;
         }
         if (principalMappingConfig == null) {
             principalMappingConfig = new PrincipalMappingConfig(null, null, null);
@@ -215,7 +220,7 @@ public class ConversionServerMain {
 
         // Build application components (reuse wiring from SyncServiceMain)
         PrincipalMapper principalMapper = PrincipalMapperFactory.create(
-                principalMappingConfig, identityStoreClient, null);
+                principalMappingConfig, identityStoreClient, metricsEmitter);
         CatalogResolver catalogResolver = new CatalogResolver(glueClient);
         GapReporter gapReporter = new GapReporter();
         CedarSchemaProvider cedarSchemaProvider = new CedarSchemaProvider();
@@ -372,9 +377,6 @@ public class ConversionServerMain {
                     rangerAdminUrl, rangerUsername, rangerPassword);
         }
 
-        // Create MetricsEmitter and ServerLifecycle
-        MetricsEmitter metricsEmitter = new MetricsEmitter(cloudWatchClient, serverConfig);
-
         // Wire MetricsEmitter into all adapters and the static AccessTypeMapper
         for (SourcePolicyAdapter adapter : allAdapters) {
             if (adapter instanceof RangerServiceAdapter) {
@@ -418,6 +420,9 @@ public class ConversionServerMain {
             glueClient.close();
             lfSdkClient.close();
             cloudWatchClient.close();
+            if (identityStoreClient != null) {
+                identityStoreClient.close();
+            }
             if (!completed) {
                 LOG.warn("Shutdown timeout exceeded, forcing exit");
             } else {

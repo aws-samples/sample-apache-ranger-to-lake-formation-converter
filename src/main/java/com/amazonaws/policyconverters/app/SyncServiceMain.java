@@ -145,7 +145,7 @@ public class SyncServiceMain {
                         .build();
 
         // Build IdentitystoreClient only when needed
-        IdentitystoreClient identityStoreClient = null;
+        final IdentitystoreClient identityStoreClient;
         PrincipalMappingConfig principalMappingConfig = config.getPrincipalMapping();
         if (principalMappingConfig != null
                 && principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
@@ -153,12 +153,15 @@ public class SyncServiceMain {
                     .region(Region.of(principalMappingConfig.getIdcConfig().getRegion()))
                     .credentialsProvider(credentialsProvider)
                     .build();
+        } else {
+            identityStoreClient = null;
         }
         if (principalMappingConfig == null) {
             principalMappingConfig = new PrincipalMappingConfig(null, null, null);
         }
 
-        // Build application components
+        // SyncServiceMain has no CloudWatchClient or ServerConfig, so MetricsEmitter is null here.
+        // Metrics will not be emitted from the principal mapper in this entry point.
         PrincipalMapper principalMapper = PrincipalMapperFactory.create(
                 principalMappingConfig, identityStoreClient, null);
         CatalogResolver catalogResolver = new CatalogResolver(glueClient);
@@ -229,6 +232,9 @@ public class SyncServiceMain {
             }
             glueClient.close();
             lfSdkClient.close();
+            if (identityStoreClient != null) {
+                identityStoreClient.close();
+            }
             KEEP_ALIVE_LATCH.countDown();
             LOG.info("Sync Service shutdown complete");
         }));

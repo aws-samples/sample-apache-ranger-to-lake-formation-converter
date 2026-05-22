@@ -133,6 +133,26 @@ class IdentityCenterPrincipalMapperTest {
     }
 
     @Test
+    void resolveGroup_nullInput_returnsEmpty_noApiCall_noMetric() {
+        Optional<String> result = mapper().resolveGroup(null);
+
+        assertEquals(Optional.empty(), result);
+        verifyNoInteractions(identityStoreClient);
+        verifyNoInteractions(metricsEmitter);
+    }
+
+    @Test
+    void resolveGroup_sdkException_returnsEmptyAndEmitsMetric() {
+        when(identityStoreClient.getGroupId(any(GetGroupIdRequest.class)))
+                .thenThrow(SdkException.builder().message("network error").build());
+
+        Optional<String> result = mapper().resolveGroup("analysts");
+
+        assertEquals(Optional.empty(), result);
+        verify(metricsEmitter, times(1)).recordUnmappedPrincipal("group");
+    }
+
+    @Test
     void resolveRole_nullInput_returnsEmpty_noMetric() {
         Optional<String> result = mapper().resolveRole(null);
 
