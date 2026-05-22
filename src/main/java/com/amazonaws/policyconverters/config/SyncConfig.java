@@ -33,6 +33,7 @@ public class SyncConfig {
     private final int wildcardRefreshIntervalSeconds;
     private final List<RangerServiceConfig> rangerServices;
     private final TagSyncConfig tagSync;
+    private final S3AccessGrantsConfig s3AccessGrants;
 
     /**
      * Backward-compatible constructor without checkpointPath, wildcardRefreshIntervalSeconds,
@@ -47,7 +48,7 @@ public class SyncConfig {
             Long lfRetryBackoffMs,
             String deadLetterLogPath) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
-                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, null, null, null, null);
+                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, null, null, null, null, null);
     }
 
     /**
@@ -65,7 +66,7 @@ public class SyncConfig {
             Integer wildcardRefreshIntervalSeconds) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
                 maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
-                wildcardRefreshIntervalSeconds, null, null);
+                wildcardRefreshIntervalSeconds, null, null, null);
     }
 
     /**
@@ -84,7 +85,7 @@ public class SyncConfig {
             List<RangerServiceConfig> rangerServices) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
                 maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
-                wildcardRefreshIntervalSeconds, rangerServices, null);
+                wildcardRefreshIntervalSeconds, rangerServices, null, null);
     }
 
     @JsonCreator
@@ -99,7 +100,8 @@ public class SyncConfig {
             @JsonProperty("checkpointPath") String checkpointPath,
             @JsonProperty("wildcardRefreshIntervalSeconds") Integer wildcardRefreshIntervalSeconds,
             @JsonProperty("rangerServices") List<RangerServiceConfig> rangerServices,
-            @JsonProperty("tagSync") TagSyncConfig tagSync) {
+            @JsonProperty("tagSync") TagSyncConfig tagSync,
+            @JsonProperty("s3AccessGrants") S3AccessGrantsConfig s3AccessGrants) {
         this.rangerConfig = rangerConfig;
         this.awsConfig = awsConfig;
         this.principalMapping = principalMapping;
@@ -115,6 +117,7 @@ public class SyncConfig {
                 ? wildcardRefreshIntervalSeconds : DEFAULT_WILDCARD_REFRESH_INTERVAL_SECONDS;
         this.rangerServices = rangerServices;
         this.tagSync = tagSync != null ? tagSync : new TagSyncConfig(false, null, 0L);
+        this.s3AccessGrants = s3AccessGrants;
     }
 
     public RangerConnectionConfig getRangerConfig() {
@@ -161,6 +164,10 @@ public class SyncConfig {
         return tagSync;
     }
 
+    public S3AccessGrantsConfig getS3AccessGrants() {
+        return s3AccessGrants;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -176,7 +183,8 @@ public class SyncConfig {
                 && Objects.equals(deadLetterLogPath, that.deadLetterLogPath)
                 && Objects.equals(checkpointPath, that.checkpointPath)
                 && Objects.equals(rangerServices, that.rangerServices)
-                && Objects.equals(tagSync, that.tagSync);
+                && Objects.equals(tagSync, that.tagSync)
+                && Objects.equals(s3AccessGrants, that.s3AccessGrants);
     }
 
     @Override
@@ -184,7 +192,7 @@ public class SyncConfig {
         return Objects.hash(rangerConfig, awsConfig, principalMapping,
                 policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs,
                 deadLetterLogPath, checkpointPath, wildcardRefreshIntervalSeconds,
-                rangerServices, tagSync);
+                rangerServices, tagSync, s3AccessGrants);
     }
 
     @Override
@@ -201,6 +209,7 @@ public class SyncConfig {
                 ", wildcardRefreshIntervalSeconds=" + wildcardRefreshIntervalSeconds +
                 ", rangerServices=" + rangerServices +
                 ", tagSync=" + tagSync +
+                ", s3AccessGrants=" + s3AccessGrants +
                 '}';
     }
 }
