@@ -13,8 +13,11 @@ import com.amazonaws.policyconverters.lakeformation.LakeFormationClient;
 import com.amazonaws.policyconverters.config.ConfigLoader;
 import com.amazonaws.policyconverters.config.ConfigValidator;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
-import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.PrincipalMapperFactory;
 import com.amazonaws.policyconverters.config.AwsConfig;
+import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
+import com.amazonaws.policyconverters.config.PrincipalMapperType;
+import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 import com.amazonaws.policyconverters.config.RetryConfig;
 import com.amazonaws.policyconverters.config.SyncConfig;
 import com.amazonaws.policyconverters.reporting.GapReporter;
@@ -141,8 +144,23 @@ public class SyncServiceMain {
                         .credentialsProvider(credentialsProvider)
                         .build();
 
+        // Build IdentitystoreClient only when needed
+        IdentitystoreClient identityStoreClient = null;
+        PrincipalMappingConfig principalMappingConfig = config.getPrincipalMapping();
+        if (principalMappingConfig != null
+                && principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
+            identityStoreClient = IdentitystoreClient.builder()
+                    .region(Region.of(principalMappingConfig.getIdcConfig().getRegion()))
+                    .credentialsProvider(credentialsProvider)
+                    .build();
+        }
+        if (principalMappingConfig == null) {
+            principalMappingConfig = new PrincipalMappingConfig(null, null, null);
+        }
+
         // Build application components
-        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(config.getPrincipalMapping(), null);
+        PrincipalMapper principalMapper = PrincipalMapperFactory.create(
+                principalMappingConfig, identityStoreClient, null);
         CatalogResolver catalogResolver = new CatalogResolver(glueClient);
         GapReporter gapReporter = new GapReporter();
 

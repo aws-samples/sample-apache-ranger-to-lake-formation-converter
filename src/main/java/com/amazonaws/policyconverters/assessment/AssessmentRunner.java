@@ -8,8 +8,10 @@ import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
 import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
+import com.amazonaws.policyconverters.config.PrincipalMapperType;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
-import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.PrincipalMapperFactory;
+import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapReport;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
@@ -56,7 +58,23 @@ public class AssessmentRunner {
 
         GapReporter gapReporter = new GapReporter();
         CedarSchemaProvider schemaProvider = new CedarSchemaProvider();
-        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(config.getPrincipalMapping(), null);
+
+        // Build IdentitystoreClient only when needed
+        IdentitystoreClient identityStoreClient = null;
+        com.amazonaws.policyconverters.config.PrincipalMappingConfig principalMappingConfig =
+                config.getPrincipalMapping();
+        if (principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
+            identityStoreClient = config.getAwsConfig().map(awsConfig -> {
+                software.amazon.awssdk.auth.credentials.AwsCredentialsProvider credentials =
+                        ConversionServerMain.buildCredentialsProvider(awsConfig);
+                return IdentitystoreClient.builder()
+                        .region(Region.of(principalMappingConfig.getIdcConfig().getRegion()))
+                        .credentialsProvider(credentials)
+                        .build();
+            }).orElse(null);
+        }
+        PrincipalMapper principalMapper = PrincipalMapperFactory.create(
+                principalMappingConfig, identityStoreClient, null);
         CatalogResolver catalogResolver = buildCatalogResolver(config);
 
         Map<String, SourcePolicyAdapter> adapterRegistry = buildAdapterRegistry(config);

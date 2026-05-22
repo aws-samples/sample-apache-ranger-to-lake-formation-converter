@@ -39,8 +39,11 @@ import com.amazonaws.policyconverters.ranger.RangerServiceAdapter;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
 import com.amazonaws.policyconverters.config.ConfigValidator;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
-import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.PrincipalMapperFactory;
+import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
+import com.amazonaws.policyconverters.config.PrincipalMapperType;
 import com.amazonaws.policyconverters.ranger.RangerPlugin;
+import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 import com.amazonaws.policyconverters.sync.SyncService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -196,8 +199,23 @@ public class ConversionServerMain {
                 .credentialsProvider(credentialsProvider)
                 .build();
 
+        // Build IdentitystoreClient only when needed
+        IdentitystoreClient identityStoreClient = null;
+        PrincipalMappingConfig principalMappingConfig = syncConfig.getPrincipalMapping();
+        if (principalMappingConfig != null
+                && principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
+            identityStoreClient = IdentitystoreClient.builder()
+                    .region(Region.of(principalMappingConfig.getIdcConfig().getRegion()))
+                    .credentialsProvider(credentialsProvider)
+                    .build();
+        }
+        if (principalMappingConfig == null) {
+            principalMappingConfig = new PrincipalMappingConfig(null, null, null);
+        }
+
         // Build application components (reuse wiring from SyncServiceMain)
-        PrincipalMapper principalMapper = StaticPrincipalMapper.fromConfig(syncConfig.getPrincipalMapping(), null);
+        PrincipalMapper principalMapper = PrincipalMapperFactory.create(
+                principalMappingConfig, identityStoreClient, null);
         CatalogResolver catalogResolver = new CatalogResolver(glueClient);
         GapReporter gapReporter = new GapReporter();
         CedarSchemaProvider cedarSchemaProvider = new CedarSchemaProvider();
