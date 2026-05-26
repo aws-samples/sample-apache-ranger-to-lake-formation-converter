@@ -105,10 +105,24 @@ simulator/
       Phase2CorrectnessValidator.java
       ExpectedPermissionsComputer.java   ← ZERO imports from main conversion pipeline
                                            output type is SimulatorPermission, not LFPermissionOperation
-      SimulatorPermission.java           ← internal value type: principalArn, resourcePath, permissionSet, isGrantable
+      SimulatorPermission.java           ← internal value type:
+                                             principalArn: String
+                                             database: String
+                                             table: String
+                                             columnNames: Set<String>   (empty = table-level or wildcard)
+                                             columnWildcard: boolean    (true = TableWithColumnsResource+ColumnWildcard)
+                                             rowFilterExpression: String (nullable)
+                                             permissionSet: Set<String>
+                                             isGrantable: boolean
+                                           This structure distinguishes table grants, named-column grants,
+                                           column-wildcard grants, and row-filtered grants — all of which
+                                           produce different actual data access
       LFPermissionsFetcher.java          ← new independent implementation using AWS SDK v2 directly
                                            does NOT wrap production LFPermissionFetcher
-                                           normalizes results to SimulatorPermission for comparison
+                                           normalizes TableResource, TableWithColumnsResource (named columns),
+                                           and TableWithColumnsResource (ColumnWildcard) to SimulatorPermission
+                                           separately — does NOT collapse ColumnWildcard to table-level
+                                           populates rowFilterExpression from SDK RowFilter field
       ValidationResult.java
     remediation/
       RemediationRunner.java
@@ -134,13 +148,13 @@ Lightweight HTTP endpoint (added to existing HTTP server or new embedded server)
 GET /status
 → {
     "lastCompletedCycle": <long>,
-    "wildcardRefreshActive": <boolean>,
+    "lastCompletedWildcardRefreshCycle": <long>,
     "state": "running"
   }
 ```
 
 - `lastCompletedCycle`: monotonic counter, incremented at the end of each successful `SyncService.runCycle()` call
-- `wildcardRefreshActive`: flag set/cleared by `WildcardRefreshScheduler` around active refresh execution
+- `lastCompletedWildcardRefreshCycle`: monotonic counter, incremented in the `finally` block of each `WildcardRefreshScheduler.executeWildcardRefresh()` call
 
 #### Modify: `SyncService.java`
 - Add `AtomicLong lastCompletedCycle` field
@@ -225,9 +239,9 @@ GET /status
 Before beginning the mutation loop, `SimulatorMain` must verify the environment is clean:
 
 1. Assert Ranger Admin has zero policies for the sync service's configured plugin names (hard error if not — operator must clean up manually)
-2. Assert LF has zero permissions for all principals in the IAM pool (hard error if not)
+2. Assert LF has zero permissions for **the entire catalog** (all resources, all principals) — not just the IAM pool. Scoping to only pool principals would miss permissions assigned to unexpected ARNs due to a `PrincipalMapper` bug, which is exactly the kind of over-grant the simulator is designed to catch. If this assertion fails, log `DIRTY_STARTUP` and exit — operator must run `SimulatorCleanup` or manually revoke all catalog permissions before restarting.
 3. Wait for the sync service to complete one full cycle (`CycleWaiter` with `lastCompletedCycle > 0`)
-4. Re-assert LF has zero permissions (confirms sync service did not apply stale state)
+4. Re-assert LF has zero permissions for the entire catalog (confirms sync service did not apply stale state from a prior run's checkpoint)
 5. Only then begin the mutation loop
 
 If the simulator crashes mid-run and is restarted, it re-runs this startup phase. If the assertions fail (Ranger and/or LF are in a non-empty state), it logs `DIRTY_STARTUP` and exits — the operator must run `SimulatorCleanup` before restarting. There is no automatic resume from a partial state.
