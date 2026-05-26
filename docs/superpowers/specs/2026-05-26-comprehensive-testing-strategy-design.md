@@ -67,7 +67,7 @@ All new integration tests follow the existing `DryRunPipelineIT` pattern: in-pro
 
 ### Overview
 
-A long-running process (days) in a **dedicated AWS account** that:
+A configurable-duration process in a **dedicated AWS account** that:
 1. Continuously generates and applies realistic Ranger policy mutations
 2. Waits for the sync service to process each mutation
 3. Validates that actual LF permissions match expected state
@@ -94,15 +94,16 @@ simulator/
       SimulatorMain.java             — runs startup assertions before mutation loop
       SimulatorCleanup.java          — standalone cleanup main: delete all simulator Ranger policies,
                                        wait for sync, assert LF empty, revoke any residue
-      SimulatorConfig.java
+      SimulatorConfig.java           — includes: runDurationMs (default: 1h for smoke; set to Long.MAX_VALUE for unbounded)
       MutationDriver.java
       RangerPolicyClient.java
     status/
       SyncServiceStatusClient.java
       CycleWaiter.java
     validator/
-      Phase1DriftValidator.java
-      Phase2CorrectnessValidator.java
+      Phase1DriftValidator.java      — LF: ListPermissions vs. sync checkpoint
+                                       S3AG: ListAccessGrants vs. S3AG checkpoint
+      Phase2CorrectnessValidator.java — covers both LF and S3AG paths independently
       ExpectedPermissionsComputer.java   ← ZERO imports from main conversion pipeline
                                            output type is SimulatorPermission, not LFPermissionOperation
       SimulatorPermission.java           ← internal value type:
@@ -225,9 +226,14 @@ GET /status
 | Delete policy | 10% | Full revocation |
 
 **Policy type mix:**
-- ~70% Hive/Trino (database, table, column grants)
-- ~20% Data location / EMRFS S3 Access Grants
-- ~10% Tag-based (always produces gaps, never LF grants)
+- ~60% Hive/Trino (database, table, column grants)
+- ~15% Data location (Ranger `url` resource type → LF `DATA_LOCATION_ACCESS` on S3 URL — controls where Glue tables/databases can be registered, validated against LF)
+- ~15% EMRFS (Ranger HDFS-style plugin → S3 Access Grants — controls direct S3 storage access, validated against S3 Access Grants API, not LF)
+- ~10% Tag-based (always produces gaps, never LF or S3AG grants)
+
+**Validation split for policy types:**
+- Hive/Trino + Data location policies → validated by Phase 1 (LF checkpoint drift) and Phase 2 (independent LF expected-permission computation)
+- EMRFS policies → validated separately via S3 Access Grants API (`ListAccessGrants`), not `ListPermissions` — Phase 1 checks S3AG checkpoint vs. actual S3AG state; Phase 2 independently computes expected S3AG grants from EMRFS Ranger policies
 
 **Negative case injection (within create operations):**
 - ~20% of creates are deny policies alongside allows on the same resource
@@ -311,7 +317,7 @@ Written to `reproduction-bundles/<ISO-timestamp>/`:
 - **Smoke run (1 hour)**: simulator completes 20+ cycles, zero persistent violations, at least 2 transient violations self-heal and produce reproduction bundles with correct contents
 - **Fault injection — over-grant**: manually grant an extra LF permission out-of-band → validator detects over-grant within one cycle, remediation re-run clears it, TRANSIENT_VIOLATION bundle written
 - **Fault injection — under-grant**: manually revoke a permission the sync service should maintain → PERSISTENT_VIOLATION detected if sync service does not re-grant it within one cycle
-- **Multi-day run**: simulator runs 72+ hours with mixed workload, zero persistent violations
+- **Extended run**: simulator runs for a configurable duration (`--run-duration`); recommended progression: 1h smoke → 24h soak → 72h+ pre-release. Zero persistent violations expected at each stage.
 - **Cleanup**: `SimulatorCleanup` runs after every session (normal and abnormal termination), asserts LF permissions for the IAM pool are zero after completion
 
 ### Implementation Order
