@@ -292,6 +292,63 @@ class PolicyConverterTest {
                         Collections.<String, String>emptyMap()), null);
     }
 
+    // -----------------------------------------------------------------------
+    // Test 8: Deny-only policy → zero LF grants AND gap record
+    // -----------------------------------------------------------------------
+    @Test
+    @DisplayName("deny-only policy produces zero LFPermissionOperations and records a gap")
+    void denyOnlyPolicyProducesZeroGrantsAndRecordsGap() {
+        // A Ranger policy with ONLY deny items must produce no LF grants.
+        // Lake Formation has no deny model — deny items become gap records only.
+        RangerPolicy policy = buildDenyOnlyPolicy(99L, "analytics", "events",
+                new HashSet<>(Collections.singletonList("select")), "analyst");
+        List<LFPermissionOperation> ops = converter.convert(
+                policy, principalMapper, catalogResolver, gapReporter);
+
+        assertEquals(0, ops.size(),
+                "A deny-only Ranger policy must produce zero LFPermissionOperations. " +
+                "Deny semantics are not enforceable via LF — they must be recorded as a gap only.");
+
+        // Gap must be recorded so the operator knows deny policies are not being enforced
+        assertFalse(gapReporter.getReport().getEntries().isEmpty(),
+                "A deny-only policy must produce at least one gap record");
+    }
+
+    private static RangerPolicy buildDenyOnlyPolicy(long id, String db, String table,
+                                                     Set<String> accessTypes, String userName) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(id);
+        policy.setName("deny-policy-" + id);
+        policy.setService("lakeformation");
+        policy.setIsEnabled(true);
+
+        // Resource
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource dbRes = new RangerPolicyResource();
+        dbRes.setValues(Collections.singletonList(db));
+        resources.put("database", dbRes);
+        RangerPolicyResource tableRes = new RangerPolicyResource();
+        tableRes.setValues(Collections.singletonList(table));
+        resources.put("table", tableRes);
+        policy.setResources(resources);
+
+        // Deny item only — no allow items
+        RangerPolicyItem denyItem = new RangerPolicyItem();
+        denyItem.setUsers(Collections.singletonList(userName));
+        List<RangerPolicyItemAccess> accesses = new ArrayList<>();
+        for (String at : accessTypes) {
+            RangerPolicyItemAccess a = new RangerPolicyItemAccess();
+            a.setType(at);
+            a.setIsAllowed(true);
+            accesses.add(a);
+        }
+        denyItem.setAccesses(accesses);
+        policy.setDenyPolicyItems(Collections.singletonList(denyItem));
+        policy.setPolicyItems(Collections.<RangerPolicyItem>emptyList());  // no allow items
+
+        return policy;
+    }
+
     private static CatalogResolver mockPassthroughResolver() {
         CatalogResolver resolver = mock(CatalogResolver.class);
         when(resolver.expandDatabases(anyString())).thenAnswer(invocation -> {
