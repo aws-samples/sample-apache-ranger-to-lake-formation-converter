@@ -319,7 +319,7 @@ class PolicyConverterTest {
         RangerPolicy policy = new RangerPolicy();
         policy.setId(id);
         policy.setName("deny-policy-" + id);
-        policy.setService("lakeformation");
+        policy.setService("hive");
         policy.setIsEnabled(true);
 
         // Resource
