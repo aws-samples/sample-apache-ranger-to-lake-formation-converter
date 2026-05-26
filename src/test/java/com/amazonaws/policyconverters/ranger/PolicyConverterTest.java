@@ -349,6 +349,45 @@ class PolicyConverterTest {
         return policy;
     }
 
+    // -----------------------------------------------------------------------
+    // Test 9: delegateAdmin=true → isGrantable=true
+    // -----------------------------------------------------------------------
+    @Test
+    @DisplayName("policy item with delegateAdmin=true produces isGrantable=true on LFPermissionOperation")
+    void delegateAdminFlagProducesGrantableOperation() {
+        RangerPolicy policy = buildPolicy(10L, "analytics", "events",
+                Collections.singleton("select"), "analyst");
+        policy.getPolicyItems().get(0).setDelegateAdmin(true);
+
+        List<LFPermissionOperation> ops = converter.convert(
+                policy, principalMapper, catalogResolver, gapReporter);
+
+        assertEquals(1, ops.size());
+        assertTrue(ops.get(0).isGrantable(),
+                "A policy item with isDelegateAdmin=true must produce isGrantable=true. " +
+                "Failing this means no principal ever gets GRANT OPTION, breaking delegated admin.");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 10: delegateAdmin not set → isGrantable=false (no privilege escalation)
+    // -----------------------------------------------------------------------
+    @Test
+    @DisplayName("policy item without delegateAdmin produces isGrantable=false on LFPermissionOperation")
+    void missingDelegateAdminFlagProducesNonGrantableOperation() {
+        RangerPolicy policy = buildPolicy(11L, "analytics", "events",
+                Collections.singleton("select"), "analyst");
+        // Do NOT set delegateAdmin — default must be false
+
+        List<LFPermissionOperation> ops = converter.convert(
+                policy, principalMapper, catalogResolver, gapReporter);
+
+        assertEquals(1, ops.size());
+        assertFalse(ops.get(0).isGrantable(),
+                "A policy item without isDelegateAdmin must produce isGrantable=false. " +
+                "Failing this means every principal silently gets GRANT OPTION, " +
+                "a privilege escalation vulnerability.");
+    }
+
     private static CatalogResolver mockPassthroughResolver() {
         CatalogResolver resolver = mock(CatalogResolver.class);
         when(resolver.expandDatabases(anyString())).thenAnswer(invocation -> {
