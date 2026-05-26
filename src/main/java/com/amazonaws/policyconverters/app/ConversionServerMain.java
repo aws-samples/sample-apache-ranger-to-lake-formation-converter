@@ -413,9 +413,17 @@ public class ConversionServerMain {
             wildcardRefreshScheduler.start(wildcardRefreshInterval);
         }
 
+        // Start the status HTTP endpoint
+        StatusEndpoint statusEndpoint = new StatusEndpoint(
+                18080,
+                syncService.getLastCompletedCycle(),
+                wildcardRefreshScheduler.getLastCompletedWildcardRefreshCycle());
+        statusEndpoint.start();
+
         // Register SIGTERM shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.info("SIGTERM received, initiating graceful shutdown");
+            statusEndpoint.stop();
             wildcardRefreshScheduler.shutdown(serverConfig.getShutdownTimeoutSeconds());
             boolean completed = serverLifecycle.shutdown();
             try {

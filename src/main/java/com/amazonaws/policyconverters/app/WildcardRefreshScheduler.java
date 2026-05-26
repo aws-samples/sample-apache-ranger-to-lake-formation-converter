@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -26,6 +27,9 @@ public class WildcardRefreshScheduler {
     private final MetricsEmitter metricsEmitter;
     private final ReentrantLock cycleLock;
     private ScheduledExecutorService scheduler;
+
+    /** Monotonic counter incremented after each fully completed wildcard refresh cycle. */
+    private final AtomicLong lastCompletedWildcardRefreshCycle = new AtomicLong(0);
 
     public WildcardRefreshScheduler(SyncService syncService,
                                     MetricsEmitter metricsEmitter,
@@ -73,12 +77,20 @@ public class WildcardRefreshScheduler {
             try {
                 WildcardRefreshResult result = syncService.executeWildcardRefresh();
                 metricsEmitter.recordWildcardRefresh(result);
+                lastCompletedWildcardRefreshCycle.incrementAndGet();
             } finally {
                 cycleLock.unlock();
             }
         } catch (Exception e) {
             LOG.error("Wildcard refresh cycle failed unexpectedly: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Returns the monotonic counter of fully completed wildcard refresh cycles.
+     */
+    public AtomicLong getLastCompletedWildcardRefreshCycle() {
+        return lastCompletedWildcardRefreshCycle;
     }
 
     /**

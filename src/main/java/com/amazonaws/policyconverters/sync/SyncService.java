@@ -39,6 +39,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Orchestrates the real-time synchronization of Ranger policies to Lake Formation.
@@ -133,6 +134,9 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     private volatile List<RangerPolicy> lastKnownPolicies = Collections.emptyList();
 
     private volatile boolean running = false;
+
+    /** Monotonic counter incremented after each fully completed {@link #executeSyncCycle()}. */
+    private final AtomicLong lastCompletedCycle = new AtomicLong(0);
 
     // ---------------------------------------------------------------
     // Single-plugin constructors (backward compatible)
@@ -562,6 +566,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
 
         // Tag metadata sync runs after policy sync; failure does not affect policy sync result
         executeTagMetadataSync();
+
+        lastCompletedCycle.incrementAndGet();
     }
 
     /**
@@ -1055,6 +1061,13 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
      */
     Map<String, Long> getServiceVersions() {
         return Collections.unmodifiableMap(new HashMap<>(serviceVersions));
+    }
+
+    /**
+     * Returns the monotonic counter of fully completed {@link #executeSyncCycle()} calls.
+     */
+    public AtomicLong getLastCompletedCycle() {
+        return lastCompletedCycle;
     }
 
     /**
