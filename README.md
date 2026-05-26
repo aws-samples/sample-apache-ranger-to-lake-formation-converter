@@ -27,7 +27,7 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 
 ## Features not yet implemented
 
-- **Tags**: Tags within Apache Ranger is not yet supported but is planned to be implemented. Due to how tagging works in both systems being vastly different, this has a lot of complexity that needs to be thoroughly thought through, implemented and tested. Also, tagging usually requires the integration of a Tagging service, such as Apache Atlas which increases the complexity.
+- **Tag-Based Policy Conversion**: Ranger tag-based policies (services whose name contains `"tag"`) are currently **detected and skipped** — the gap is recorded in the gap report as `TAG_BASED_POLICY` — but no conversion to Lake Formation LF-Tag permissions is performed. Converting Ranger tag policies to LF-Tag-based access control is planned but not yet implemented. Note that LF-Tags and Ranger tags are structurally different, and a full implementation typically requires integration with a tagging service such as Apache Atlas.
 
 ## Features not planned to be implemented
 
@@ -505,7 +505,7 @@ The following Ranger features have no direct equivalent in Lake Formation. When 
 | Ranger Feature | Status | Details |
 |---------------|--------|---------|
 | Data masking policies | Not supported | LF does not support native data masking. Consider column-level permissions or external masking solutions. |
-| Tag-based policies | Not supported | Ranger tags are structurally different from LF-Tags. Requires manual mapping. |
+| Tag-based policies | Detected, not converted | Detected via service name heuristic (`name.contains("tag")`). The entire policy is skipped; a `TAG_BASED_POLICY` gap entry is recorded. Converting to LF-Tag permissions is planned but not yet implemented. |
 | Deny policies | Not supported | LF uses a grant-only model. Deny rules cannot be represented. |
 | Deny exceptions | Not supported | LF uses a grant-only model. |
 | Validity schedules (time-bound policies) | Not supported | LF does not support temporal policy constraints. |
@@ -513,6 +513,9 @@ The following Ranger features have no direct equivalent in Lake Formation. When 
 | Security zones | Not supported | LF has no equivalent concept. |
 | Delegated admin | Partial | Recorded in gap report. LF uses a different admin delegation model (`WITH GRANT OPTION`). |
 | Policy deltas from Ranger Admin | Not yet handled | The plugin currently processes only full policy snapshots. Delta updates from Ranger Admin (Ranger 2.0+) are not yet supported and may cause incorrect behavior. This is a known issue planned for a future release. |
+| LF tag-policy resources in reverse sync | Silently skipped | `LFPermissionFetcher` drops `CatalogResource` and `LFTagPolicyResource` entries returned by `ListPermissions` with only a log warning — no gap entry is recorded. Out-of-band LF-Tag grants will not be detected or corrected by reverse sync. |
+| `WILDCARD_PATTERN` gap not emitted at runtime | Known gap | The `WILDCARD_PATTERN` gap type is defined and documented but is never triggered at runtime. Wildcard expansion failures (when no AWS credentials are available) produce only a log warning; no gap entry is recorded. |
+| IDC mapper does not support roles | Limitation | When using the Identity Center principal mapper, Ranger role principals always produce an empty mapping and are silently skipped with an `UnmappedPrincipal` metric. Use the static mapper if you need role-to-IAM-ARN mappings. |
 
 ## Gap Report
 
@@ -671,19 +674,21 @@ Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
 
 | Gap Type | Description |
 |----------|-------------|
-| `DATA_MASKING` | Policy type 1 (data masking). LF has no native column masking. |
-| `TAG_BASED_POLICY` | Service name contains "tag". Ranger tag-based policies have no LF equivalent. |
-| `DENY_POLICY` | Policy has deny items. LF uses a grant-only model. |
-| `DENY_EXCEPTION` | Policy has deny exceptions. LF uses a grant-only model. |
-| `VALIDITY_SCHEDULE` | Policy has time-based validity schedules. LF does not support temporal constraints. |
-| `CUSTOM_CONDITION` | Policy has attribute-based conditions. LF has no conditional permission model. |
-| `SECURITY_ZONE` | Policy is scoped to a Ranger Security Zone. LF has no equivalent. |
-| `DELEGATED_ADMIN` | Policy item has `delegateAdmin=true`. Partially supported via `WITH GRANT OPTION`. |
-| `WILDCARD_PATTERN` | Resource pattern contains wildcards and could not be expanded (no AWS credentials). |
-| `UNSUPPORTED_SERVICE_TYPE` | No adapter registered for this Ranger service type. |
-| `UNSUPPORTED_ACTION` | One or more access types have no LF permission mapping. |
-| `UNMAPPED_RESOURCE` | Resource ID is not an ARN and cannot be mapped to an LF resource. |
-| `SCHEMA_VALIDATION_FAILURE` | A Cedar statement failed schema validation and was excluded. |
+| `DATA_MASKING` | Policy type 1 (data masking). The entire policy is skipped — LF has no native column masking. |
+| `TAG_BASED_POLICY` | Service name contains `"tag"`. The entire policy is skipped — conversion to LF-Tag permissions is not yet implemented. Detection relies on a service-name heuristic, not a structural `policyType` check. |
+| `DENY_POLICY` | Policy has deny items. Deny items are converted to Cedar `forbid` statements but cannot be expressed in LF (grant-only model). |
+| `DENY_EXCEPTION` | Policy has deny exceptions. Converted to Cedar `permit @denyException` statements but not enforceable in LF. |
+| `VALIDITY_SCHEDULE` | Policy has time-based validity schedules. LF does not support temporal constraints; schedules are dropped. |
+| `CUSTOM_CONDITION` | Policy has attribute-based conditions. LF has no conditional permission model; conditions are dropped. |
+| `SECURITY_ZONE` | Policy is scoped to a Ranger Security Zone. LF has no equivalent; the zone attribute is ignored. |
+| `DELEGATED_ADMIN` | Policy item has `delegateAdmin=true`. Partially supported — the flag is recorded but no `WITH GRANT OPTION` is applied to the resulting LF grants. |
+| `WILDCARD_PATTERN` | Resource pattern contains wildcards and could not be expanded (no AWS credentials). **Note:** this gap type is defined but is not currently emitted at runtime — wildcard expansion failures produce a log warning only. |
+| `UNSUPPORTED_SERVICE_TYPE` | No adapter registered for this Ranger service type. The entire policy is skipped. |
+| `UNSUPPORTED_ACTION` | One or more access types have no LF permission mapping. The unsupported action is dropped; other actions in the policy continue. |
+| `UNMAPPED_RESOURCE` | Resource ID cannot be mapped to an LF resource. The resource is skipped. |
+| `SCHEMA_VALIDATION_FAILURE` | A Cedar statement failed schema validation and was excluded. Valid statements in the same policy are retained. |
+| `UNREGISTERED_S3_LOCATION` | An S3 prefix referenced by the policy is not covered by a registered Lake Formation data location. Reported by the assessment tool when S3 Access Grants validation is enabled. |
+| `CANNOT_VALIDATE_S3_LOCATION` | S3 location validation was requested but no S3 Access Grants configuration is present. Reported by the assessment tool. |
 
 ### Architecture Note
 
