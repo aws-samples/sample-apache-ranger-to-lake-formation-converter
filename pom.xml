@@ -7,7 +7,7 @@
     <groupId>com.example.ranger.lakeformation</groupId>
     <artifactId>ranger-lakeformation-plugin</artifactId>
     <version>1.0.0-SNAPSHOT</version>
-    <packaging>pom</packaging>
+    <packaging>jar</packaging>
 
     <name>Ranger Lake Formation Sync Plugin</name>
     <description>Bridges Apache Ranger policies to AWS Lake Formation permissions</description>
