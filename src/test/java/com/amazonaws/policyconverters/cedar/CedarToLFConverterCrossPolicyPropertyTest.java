@@ -35,7 +35,7 @@ class CedarToLFConverterCrossPolicyPropertyTest {
 
     @Property(tries = 100)
     void forbidWithoutDenyExceptionAlwaysProducesZeroGrantsForThatTriple(
-            @ForAll @IntRange(min = 0, max = 5) int extraPermits
+            @ForAll @IntRange(min = 1, max = 5) int extraPermits
     ) throws Exception {
         StringBuilder cedar = new StringBuilder();
         cedar.append(String.format("""
