@@ -35,8 +35,9 @@ public class StatusEndpoint {
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, bytes.length);
-            exchange.getResponseBody().write(bytes);
-            exchange.getResponseBody().close();
+            try (java.io.OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
         });
         server.start();
         LOG.info("StatusEndpoint started on port {}", port);
@@ -44,7 +45,7 @@ public class StatusEndpoint {
 
     public void stop() {
         if (server != null) {
-            server.stop(0);
+            server.stop(1);
         }
     }
 }

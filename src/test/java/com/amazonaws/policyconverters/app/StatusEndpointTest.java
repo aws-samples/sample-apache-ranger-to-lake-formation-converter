@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -25,7 +26,7 @@ class StatusEndpointTest {
     void setUp() throws IOException {
         cycleCounter = new AtomicLong(0);
         wildcardRefreshCounter = new AtomicLong(0);
-        port = 18080;
+        try (ServerSocket s = new ServerSocket(0)) { port = s.getLocalPort(); }
         endpoint = new StatusEndpoint(port, cycleCounter, wildcardRefreshCounter);
         endpoint.start();
         httpClient = HttpClient.newHttpClient();

@@ -19,6 +19,7 @@ public class ServerConfig {
     private static final int DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 30;
     private static final String DEFAULT_LOG_LEVEL = "INFO";
     private static final String DEFAULT_METRICS_NAMESPACE = "RangerLFSync";
+    private static final int DEFAULT_STATUS_PORT = 18080;
 
     private static final Set<String> ALLOWED_LOG_LEVELS = Set.of(
             "TRACE", "DEBUG", "INFO", "WARN", "ERROR"
@@ -27,17 +28,24 @@ public class ServerConfig {
     private final int shutdownTimeoutSeconds;
     private final String logLevel;
     private final String metricsNamespace;
+    private final int statusPort;
+
+    public ServerConfig(Integer shutdownTimeoutSeconds, String logLevel, String metricsNamespace) {
+        this(shutdownTimeoutSeconds, logLevel, metricsNamespace, null);
+    }
 
     @JsonCreator
     public ServerConfig(
             @JsonProperty("shutdownTimeoutSeconds") Integer shutdownTimeoutSeconds,
             @JsonProperty("logLevel") String logLevel,
-            @JsonProperty("metricsNamespace") String metricsNamespace) {
+            @JsonProperty("metricsNamespace") String metricsNamespace,
+            @JsonProperty("statusPort") Integer statusPort) {
         this.shutdownTimeoutSeconds = shutdownTimeoutSeconds != null
                 ? shutdownTimeoutSeconds : DEFAULT_SHUTDOWN_TIMEOUT_SECONDS;
         this.logLevel = validateLogLevel(logLevel);
         this.metricsNamespace = metricsNamespace != null
                 ? metricsNamespace : DEFAULT_METRICS_NAMESPACE;
+        this.statusPort = statusPort != null ? statusPort : DEFAULT_STATUS_PORT;
     }
 
     private static String validateLogLevel(String logLevel) {
@@ -64,19 +72,24 @@ public class ServerConfig {
         return metricsNamespace;
     }
 
+    public int getStatusPort() {
+        return statusPort;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         ServerConfig that = (ServerConfig) o;
         return shutdownTimeoutSeconds == that.shutdownTimeoutSeconds
+                && statusPort == that.statusPort
                 && Objects.equals(logLevel, that.logLevel)
                 && Objects.equals(metricsNamespace, that.metricsNamespace);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(shutdownTimeoutSeconds, logLevel, metricsNamespace);
+        return Objects.hash(shutdownTimeoutSeconds, logLevel, metricsNamespace, statusPort);
     }
 
     @Override
@@ -85,6 +98,7 @@ public class ServerConfig {
                 "shutdownTimeoutSeconds=" + shutdownTimeoutSeconds +
                 ", logLevel='" + logLevel + '\'' +
                 ", metricsNamespace='" + metricsNamespace + '\'' +
+                ", statusPort=" + statusPort +
                 '}';
     }
 }

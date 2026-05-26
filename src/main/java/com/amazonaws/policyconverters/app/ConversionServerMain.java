@@ -415,7 +415,7 @@ public class ConversionServerMain {
 
         // Start the status HTTP endpoint
         StatusEndpoint statusEndpoint = new StatusEndpoint(
-                18080,
+                serverConfig.getStatusPort(),
                 syncService.getLastCompletedCycle(),
                 wildcardRefreshScheduler.getLastCompletedWildcardRefreshCycle());
         statusEndpoint.start();
