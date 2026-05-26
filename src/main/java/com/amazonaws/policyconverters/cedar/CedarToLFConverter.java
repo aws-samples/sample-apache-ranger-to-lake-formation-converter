@@ -60,7 +60,7 @@ public class CedarToLFConverter {
     private static final Pattern DENY_EXCEPTION_PATTERN = Pattern.compile(
             "@denyException\\(\"true\"\\)");
     private static final Pattern ROW_FILTER_PATTERN = Pattern.compile(
-            "resource\\.rowFilter\\s*==\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+            "resource\\.rowFilter\\s*==\\s*\"((?>[^\"\\\\]|\\\\.)*)\"");
 
     /** Maps Cedar action names to LFPermission values. */
     private static final Map<String, LFPermission> ACTION_TO_PERMISSION;
