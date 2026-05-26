@@ -317,7 +317,7 @@ Written to `reproduction-bundles/<ISO-timestamp>/`:
 ### Implementation Order
 1. Track 1 unit/property tests
 2. Track 1 integration tests
-3. Sync service `StatusEndpoint` + `lastCompletedCycle` + `wildcardRefreshActive`
+3. Sync service `StatusEndpoint` + `lastCompletedCycle` + `lastCompletedWildcardRefreshCycle`
 4. Simulator `workload/` + `driver/` (smoke-runnable without validators)
 5. Phase 1 drift validator
 6. Phase 2 correctness validator + `ExpectedPermissionsComputer`
