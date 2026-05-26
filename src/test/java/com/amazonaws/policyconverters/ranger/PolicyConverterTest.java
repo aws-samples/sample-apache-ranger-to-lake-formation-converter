@@ -363,7 +363,10 @@ class PolicyConverterTest {
                 policy, principalMapper, catalogResolver, gapReporter);
 
         assertEquals(1, ops.size());
-        assertTrue(ops.get(0).isGrantable(),
+        LFPermissionOperation grantableOp = ops.get(0);
+        assertEquals(OperationType.GRANT, grantableOp.getOperationType());
+        assertEquals(EnumSet.of(LFPermission.SELECT), grantableOp.getPermissions());
+        assertTrue(grantableOp.isGrantable(),
                 "A policy item with isDelegateAdmin=true must produce isGrantable=true. " +
                 "Failing this means no principal ever gets GRANT OPTION, breaking delegated admin.");
     }
@@ -382,7 +385,10 @@ class PolicyConverterTest {
                 policy, principalMapper, catalogResolver, gapReporter);
 
         assertEquals(1, ops.size());
-        assertFalse(ops.get(0).isGrantable(),
+        LFPermissionOperation nonGrantableOp = ops.get(0);
+        assertEquals(OperationType.GRANT, nonGrantableOp.getOperationType());
+        assertEquals(EnumSet.of(LFPermission.SELECT), nonGrantableOp.getPermissions());
+        assertFalse(nonGrantableOp.isGrantable(),
                 "A policy item without isDelegateAdmin must produce isGrantable=false. " +
                 "Failing this means every principal silently gets GRANT OPTION, " +
                 "a privilege escalation vulnerability.");
