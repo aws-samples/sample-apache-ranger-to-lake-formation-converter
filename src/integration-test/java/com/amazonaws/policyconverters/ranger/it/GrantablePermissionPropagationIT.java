@@ -6,7 +6,6 @@ import com.amazonaws.policyconverters.model.DryRunOutput;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -16,6 +15,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * and that delegateAdmin=false does NOT produce a grantable operation.
  */
 public class GrantablePermissionPropagationIT extends DryRunPipelineIT {
+
+    private static final String DATA_ADMIN_ARN =
+            "arn:aws:iam::" + TEST_ACCOUNT_ID + ":role/data_admin";
+    private static final String ANALYST_ARN =
+            "arn:aws:iam::" + TEST_ACCOUNT_ID + ":role/analyst";
 
     @Test
     void delegateAdminPolicyProducesGrantableOperation() throws Exception {
@@ -46,10 +50,10 @@ public class GrantablePermissionPropagationIT extends DryRunPipelineIT {
         List<LFPermissionOperation> grantableOps = outputs.stream()
                 .flatMap(o -> o.getOperations().stream())
                 .filter(op -> op.getOperationType() == OperationType.GRANT)
-                .filter(op -> op.getPrincipalArn().contains("data_admin"))
+                .filter(op -> DATA_ADMIN_ARN.equals(op.getPrincipalArn()))
                 .filter(op -> "grantable_db".equals(op.getResource().getDatabaseName()))
                 .filter(LFPermissionOperation::isGrantable)
-                .collect(Collectors.toList());
+                .toList();
 
         assertFalse(grantableOps.isEmpty(),
                 "A policy with delegateAdmin=true must produce at least one operation with " +
@@ -83,13 +87,22 @@ public class GrantablePermissionPropagationIT extends DryRunPipelineIT {
         triggerSync();
 
         List<DryRunOutput> outputs = readDryRunOutputs();
-        List<LFPermissionOperation> wronglyGrantableOps = outputs.stream()
+
+        // Precondition: the pipeline must have produced at least one GRANT for analyst —
+        // otherwise the negative assertion below passes vacuously on a silent pipeline bug.
+        List<LFPermissionOperation> analystGrants = outputs.stream()
                 .flatMap(o -> o.getOperations().stream())
                 .filter(op -> op.getOperationType() == OperationType.GRANT)
-                .filter(op -> op.getPrincipalArn().contains("analyst"))
+                .filter(op -> ANALYST_ARN.equals(op.getPrincipalArn()))
                 .filter(op -> "nongrantable_db".equals(op.getResource().getDatabaseName()))
+                .toList();
+        assertFalse(analystGrants.isEmpty(),
+                "Precondition: analyst must have at least one GRANT on nongrantable_db. " +
+                "If zero grants exist, the privilege-escalation guard below is vacuously true.");
+
+        List<LFPermissionOperation> wronglyGrantableOps = analystGrants.stream()
                 .filter(LFPermissionOperation::isGrantable)
-                .collect(Collectors.toList());
+                .toList();
 
         assertTrue(wronglyGrantableOps.isEmpty(),
                 "A policy without delegateAdmin must NOT produce any grantable operation. " +

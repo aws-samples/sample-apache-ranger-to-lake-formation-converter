@@ -131,7 +131,7 @@ public class WildcardRevocationOnTableRemovalIT extends DryRunPipelineIT {
     }
 
     private void rewireWithCustomCatalogResolver(CatalogResolver resolver) throws Exception {
-        if (syncService != null && syncService.isRunning()) {
+        if (syncService != null) {
             syncService.stop();
         }
 
