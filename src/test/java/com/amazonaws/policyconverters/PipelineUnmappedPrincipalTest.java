@@ -109,10 +109,12 @@ class PipelineUnmappedPrincipalTest {
                 policy, partialMapper, passthroughResolver, gapReporter);
 
         assertEquals(1, ops.size(),
-                "Only the mapped user should produce a grant");
+                "Only the mapped user should produce a grant — unmapped_user must be skipped");
         assertEquals("arn:aws:iam::123456789012:role/MappedRole",
                 ops.get(0).getPrincipalArn(),
                 "The single grant must target the mapped user's ARN");
+        assertTrue(ops.stream().allMatch(op -> "arn:aws:iam::123456789012:role/MappedRole".equals(op.getPrincipalArn())),
+                "No operation may target an unmapped principal — privilege escalation if violated");
     }
 
     // -----------------------------------------------------------------------
