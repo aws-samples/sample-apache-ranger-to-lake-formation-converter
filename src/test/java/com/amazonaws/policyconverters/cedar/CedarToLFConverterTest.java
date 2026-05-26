@@ -231,4 +231,83 @@ class CedarToLFConverterTest {
 
         assertEquals(0, ops.size(), "Empty effective grants should produce zero operations");
     }
+
+    @Test
+    void forbidFromOnePolicySuppressesPermitFromAnotherPolicy() throws Exception {
+        // Policy A: forbid analyst SELECT on db.orders
+        // Policy B: permit analyst SELECT on db.orders
+        // Result: zero grants — the forbid from policy A suppresses policy B's permit
+        String cedarText = """
+                @source("policy-A")
+                forbid(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/testdb/orders"
+                );
+                @source("policy-B")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/testdb/orders"
+                );
+                """;
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+        assertEquals(0, ops.size(),
+                "A forbid from any policy must suppress a permit for the same (principal, action, resource)");
+    }
+
+    @Test
+    void denyExceptionForOneActionDoesNotRestorePermitForDifferentAction() throws Exception {
+        // forbid: analyst SELECT on db.orders  (no exception — SELECT must NOT be granted)
+        // forbid: analyst INSERT on db.orders  (has denyException — INSERT MUST be granted)
+        // permit @denyException: analyst INSERT on db.orders
+        // permit: analyst SELECT on db.orders
+        // Result: INSERT is granted (deny-exception overrides the INSERT forbid),
+        //         SELECT is NOT granted (forbid with no exception)
+        String cedarText = """
+                @source("policy-forbid-select")
+                forbid(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/testdb/orders"
+                );
+                @source("policy-forbid-insert")
+                forbid(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"INSERT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/testdb/orders"
+                );
+                @source("policy-exception")
+                @denyException("true")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"INSERT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/testdb/orders"
+                );
+                @source("policy-select")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/testdb/orders"
+                );
+                """;
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        // INSERT must be granted (deny-exception present for INSERT)
+        long insertGrants = ops.stream()
+                .filter(op -> op.getOperationType() == OperationType.GRANT)
+                .filter(op -> op.getPermissions().contains(LFPermission.INSERT))
+                .count();
+        assertEquals(1, insertGrants, "INSERT should be granted — it has a deny-exception");
+
+        // SELECT must NOT be granted (forbid present, no deny-exception for SELECT)
+        long selectGrants = ops.stream()
+                .filter(op -> op.getOperationType() == OperationType.GRANT)
+                .filter(op -> op.getPermissions().contains(LFPermission.SELECT))
+                .count();
+        assertEquals(0, selectGrants,
+                "SELECT must NOT be granted — a deny-exception for a different action must not restore it");
+    }
 }
