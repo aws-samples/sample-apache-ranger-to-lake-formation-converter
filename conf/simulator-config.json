@@ -1,0 +1,20 @@
+{
+  "cycleIntervalSeconds": 30,
+  "awsRegion": "us-west-2",
+  "awsAccountId": "427250191192",
+  "rangerAdminUrl": "http://localhost:6080",
+  "rangerAdminUser": "admin",
+  "rangerAdminPassword": "rangerR0cks!",
+  "rangerServiceName": "lakeformation",
+  "principalPool": ["analyst", "etl_user", "data_admin", "viewer"],
+  "principalMappings": {
+    "analyst":    "arn:aws:iam::427250191192:role/ranger-sim-analyst",
+    "etl_user":   "arn:aws:iam::427250191192:role/ranger-sim-etl_user",
+    "data_admin": "arn:aws:iam::427250191192:role/ranger-sim-data_admin",
+    "viewer":     "arn:aws:iam::427250191192:role/ranger-sim-viewer"
+  },
+  "cycleWaitTimeoutSeconds": 120,
+  "statusHost": "localhost",
+  "statusPort": 18080,
+  "reproductionBundleDir": "/tmp/ranger-sim/bundles"
+}

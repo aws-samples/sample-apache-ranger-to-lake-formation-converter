@@ -86,8 +86,15 @@ public class ExpectedPermissionsComputer {
             Set<String> finalPerms = spec.isColumn() ? withoutDescribe(permissions) : permissions;
             if (finalPerms.isEmpty()) continue;
             for (String arn : arns) {
+                // LF models SELECT on a table as TABLE_WITH_COLUMNS (all columns).
+                // Non-SELECT table permissions stay as TABLE.
+                // Mirror that split so the expected set matches LF actual.
                 for (String perm : finalPerms) {
-                    result.add(new SimulatorPermission(arn, spec.resourceType(), spec.resourceId(), perm, grantable));
+                    String resourceType = spec.resourceType();
+                    if ("TABLE".equals(resourceType) && "SELECT".equals(perm)) {
+                        resourceType = "TABLE_WITH_COLUMNS";
+                    }
+                    result.add(new SimulatorPermission(arn, resourceType, spec.resourceId(), perm, grantable));
                 }
             }
         }
@@ -160,9 +167,6 @@ public class ExpectedPermissionsComputer {
     }
 
     private List<String> resolveTablePattern(String db, String pattern) {
-        if ("*".equals(pattern)) {
-            return List.of("*");  // bare wildcard — don't expand, use db.*
-        }
         if (pattern.contains("*") || pattern.contains("?")) {
             return tableExpander.expand(db, pattern);
         }

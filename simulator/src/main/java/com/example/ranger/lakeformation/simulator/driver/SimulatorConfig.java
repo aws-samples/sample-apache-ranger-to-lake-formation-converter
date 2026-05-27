@@ -21,11 +21,14 @@ public class SimulatorConfig {
     private final String rangerAdminUrl;        // e.g. "http://ranger-admin:6080"
     private final String rangerAdminUser;       // basic auth username
     private final String rangerAdminPassword;   // basic auth password (read from env in practice)
-    private final List<String> principalPool;   // IAM role ARNs for the principal pool
-    private final int cycleWaitTimeoutSeconds;  // max wait for sync to complete per cycle
-    private final int statusPort;               // port of StatusEndpoint on sync service
-    private final String statusHost;            // host of StatusEndpoint on sync service
-    private final String reproductionBundleDir; // directory to write reproduction bundles
+    private final List<String> principalPool;             // Ranger user names (keys in principalMappings)
+    private final java.util.Map<String, String> principalMappings; // Ranger name → IAM ARN
+    private final String rangerServiceName;               // Ranger service name for Hive/LF policies
+    private final String awsAccountId;                    // AWS account ID for LF
+    private final int cycleWaitTimeoutSeconds;
+    private final int statusPort;
+    private final String statusHost;
+    private final String reproductionBundleDir;
 
     @JsonCreator
     public SimulatorConfig(
@@ -35,6 +38,9 @@ public class SimulatorConfig {
             @JsonProperty("rangerAdminUser") String rangerAdminUser,
             @JsonProperty("rangerAdminPassword") String rangerAdminPassword,
             @JsonProperty("principalPool") List<String> principalPool,
+            @JsonProperty("principalMappings") java.util.Map<String, String> principalMappings,
+            @JsonProperty("rangerServiceName") String rangerServiceName,
+            @JsonProperty("awsAccountId") String awsAccountId,
             @JsonProperty("cycleWaitTimeoutSeconds") Integer cycleWaitTimeoutSeconds,
             @JsonProperty("statusPort") Integer statusPort,
             @JsonProperty("statusHost") String statusHost,
@@ -45,6 +51,9 @@ public class SimulatorConfig {
         this.rangerAdminUser = rangerAdminUser;
         this.rangerAdminPassword = rangerAdminPassword;
         this.principalPool = principalPool != null ? List.copyOf(principalPool) : List.of();
+        this.principalMappings = principalMappings != null ? java.util.Map.copyOf(principalMappings) : java.util.Map.of();
+        this.rangerServiceName = rangerServiceName != null ? rangerServiceName : "lakeformation";
+        this.awsAccountId = awsAccountId != null ? awsAccountId : "unknown";
         this.cycleWaitTimeoutSeconds = cycleWaitTimeoutSeconds != null ? cycleWaitTimeoutSeconds : DEFAULT_CYCLE_WAIT_TIMEOUT_SECONDS;
         this.statusPort = statusPort != null ? statusPort : DEFAULT_STATUS_PORT;
         this.statusHost = statusHost != null ? statusHost : DEFAULT_STATUS_HOST;
@@ -57,6 +66,9 @@ public class SimulatorConfig {
     public String getRangerAdminUser() { return rangerAdminUser; }
     public String getRangerAdminPassword() { return rangerAdminPassword; }
     public List<String> getPrincipalPool() { return principalPool; }
+    public java.util.Map<String, String> getPrincipalMappings() { return principalMappings; }
+    public String getRangerServiceName() { return rangerServiceName; }
+    public String getAwsAccountId() { return awsAccountId; }
     public int getCycleWaitTimeoutSeconds() { return cycleWaitTimeoutSeconds; }
     public int getStatusPort() { return statusPort; }
     public String getStatusHost() { return statusHost; }

@@ -7,6 +7,7 @@ import software.amazon.awssdk.services.s3control.model.Grantee;
 import software.amazon.awssdk.services.s3control.model.ListAccessGrantEntry;
 import software.amazon.awssdk.services.s3control.model.ListAccessGrantsRequest;
 import software.amazon.awssdk.services.s3control.model.ListAccessGrantsResponse;
+import software.amazon.awssdk.services.s3control.model.S3ControlException;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -30,6 +31,7 @@ public class S3AgPermissionsFetcher {
 
     /**
      * List all grants from the Access Grants instance and return as SimulatorPermissions.
+     * Returns empty set if no S3 Access Grants instance exists (404).
      */
     public Set<SimulatorPermission> fetchAll() {
         Set<SimulatorPermission> result = new HashSet<>();
@@ -43,7 +45,16 @@ public class S3AgPermissionsFetcher {
             if (continuationToken != null) {
                 builder.nextToken(continuationToken);
             }
-            ListAccessGrantsResponse response = s3ControlClient.listAccessGrants(builder.build());
+            ListAccessGrantsResponse response;
+            try {
+                response = s3ControlClient.listAccessGrants(builder.build());
+            } catch (S3ControlException e) {
+                if (e.statusCode() == 404) {
+                    LOG.debug("No S3 Access Grants instance in account {}; skipping S3AG validation", accountId);
+                    return result;
+                }
+                throw e;
+            }
 
             for (ListAccessGrantEntry entry : response.accessGrantsList()) {
                 String granteeArn = extractGranteeArn(entry.grantee());

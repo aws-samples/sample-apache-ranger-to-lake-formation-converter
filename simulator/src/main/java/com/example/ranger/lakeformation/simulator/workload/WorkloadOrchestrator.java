@@ -35,11 +35,18 @@ public class WorkloadOrchestrator {
     private final List<String> principalPool;
     private final List<String> existingPolicyIds;
     private final Random random;
+    private final HivePolicyGenerator policyGenerator;
 
     public WorkloadOrchestrator(List<String> principalPool, List<String> existingPolicyIds, Random random) {
         this.principalPool = List.copyOf(principalPool);
         this.existingPolicyIds = new ArrayList<>(existingPolicyIds);
         this.random = random;
+        this.policyGenerator = new HivePolicyGenerator(
+                List.of("analytics", "staging", "default_sim"),
+                List.of("events", "users", "orders", "products", "sessions"),
+                this.principalPool,
+                "lakeformation",
+                random);
     }
 
     /**
@@ -64,11 +71,11 @@ public class WorkloadOrchestrator {
         if (roll < WEIGHT_CREATE) {
             String newId = "sim-policy-" + System.nanoTime();
             existingPolicyIds.add(newId);
-            return new MutationOperation.CreatePolicy(now, newId, buildDummyPayload(newId));
+            return new MutationOperation.CreatePolicy(now, newId, policyGenerator.generateTablePolicy(newId));
         } else if (roll < WEIGHT_UPDATE) {
             if (existingPolicyIds.isEmpty()) return null;
             String id = randomFrom(existingPolicyIds);
-            return new MutationOperation.UpdatePolicy(now, id, buildDummyPayload(id));
+            return new MutationOperation.UpdatePolicy(now, id, policyGenerator.generateTablePolicy(id));
         } else if (roll < WEIGHT_DISABLE) {
             if (existingPolicyIds.isEmpty()) return null;
             return new MutationOperation.DisablePolicy(now, randomFrom(existingPolicyIds));
@@ -86,10 +93,6 @@ public class WorkloadOrchestrator {
 
     private String randomFrom(List<String> list) {
         return list.get(random.nextInt(list.size()));
-    }
-
-    private Map<String, Object> buildDummyPayload(String policyId) {
-        return Map.of("id", policyId, "principals", principalPool);
     }
 
     /** Expose current known policy IDs (after mutations from generated batches). */

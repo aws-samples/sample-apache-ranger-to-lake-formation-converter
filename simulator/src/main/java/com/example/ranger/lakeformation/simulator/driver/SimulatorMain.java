@@ -60,7 +60,10 @@ public class SimulatorMain {
         MutationLog mutationLog = new MutationLog(logPath);
 
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
-                config.getPrincipalPool(), new ArrayList<>(), new Random());
+                config.getPrincipalPool().isEmpty()
+                        ? new ArrayList<>(config.getPrincipalMappings().keySet())
+                        : config.getPrincipalPool(),
+                new ArrayList<>(), new Random());
 
         MutationDriver mutationDriver = new MutationDriver(rangerClient, mutationLog);
 
@@ -70,27 +73,33 @@ public class SimulatorMain {
                 Duration.ofSeconds(config.getCycleWaitTimeoutSeconds()));
         RemediationRunner remediationRunner = new RemediationRunner(cycleWaiter);
 
-        // Principal map — in a real deployment loaded from the sync service's principal mapping config.
-        // Here: identity mapping using config.getPrincipalPool() values as both key and value.
-        Map<String, String> principalMap = new LinkedHashMap<>();
-        for (String arn : config.getPrincipalPool()) {
-            principalMap.put(arn, arn);
-        }
+        // Principal map: Ranger name → IAM ARN (from config)
+        Map<String, String> principalMap = new LinkedHashMap<>(config.getPrincipalMappings());
 
-        // Determine S3 Access Grants instance ARN from environment (optional)
+        // S3 Access Grants instance ARN and account ID
         String s3AgInstanceArn = System.getenv("S3AG_INSTANCE_ARN");
-        String accountId = System.getenv("AWS_ACCOUNT_ID");
-        if (accountId == null) accountId = "unknown";
+        String accountId = config.getAwsAccountId();
 
         LFPermissionsFetcher lfFetcher = new LFPermissionsFetcher(lfClient, accountId);
         S3AgPermissionsFetcher s3AgFetcher = new S3AgPermissionsFetcher(s3ControlClient, accountId,
                 s3AgInstanceArn != null ? s3AgInstanceArn : "");
 
+        // Known tables per DB (mirrors HivePolicyGenerator config — used to expand wildcard policies)
+        Map<String, List<String>> knownTables = Map.of(
+                "analytics",  List.of("events", "users", "orders", "products", "sessions"),
+                "staging",    List.of("events", "users", "orders", "products", "sessions"),
+                "default_sim",List.of("events", "users", "orders", "products", "sessions")
+        );
         ExpectedPermissionsComputer expectedComputer = new ExpectedPermissionsComputer(
-                principalMap, (db, pattern) -> List.of(pattern)); // no Glue expansion in simulator loop
+                principalMap, (db, pattern) -> {
+                    List<String> tables = knownTables.getOrDefault(db, List.of());
+                    String regex = pattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
+                    return tables.stream().filter(t -> t.matches(regex)).toList();
+                });
 
         Phase1DriftValidator phase1 = new Phase1DriftValidator();
-        Phase2CorrectnessValidator phase2 = new Phase2CorrectnessValidator(expectedComputer);
+        Set<String> managedArns = new HashSet<>(principalMap.values());
+        Phase2CorrectnessValidator phase2 = new Phase2CorrectnessValidator(expectedComputer, managedArns);
 
         BundleWriter bundleWriter = new BundleWriter(Paths.get(config.getReproductionBundleDir()));
         AlertEmitter alertEmitter = new AlertEmitter.LogAlertEmitter();
@@ -110,6 +119,7 @@ public class SimulatorMain {
         }
     }
 
+    @SuppressWarnings("java:S107")
     private void runOneCycle(long cycleNumber, SimulatorConfig config,
                               RangerPolicyClient rangerClient, MutationLog mutationLog,
                               WorkloadOrchestrator orchestrator, MutationDriver mutationDriver,
@@ -138,10 +148,14 @@ public class SimulatorMain {
             return;
         }
 
-        // Step 4: Fetch actual permissions
+        // Step 4: Fetch actual permissions (filtered to managed principals only)
         Set<SimulatorPermission> lfActual = new HashSet<>();
         lfActual.addAll(lfFetcher.fetchAll());
         lfActual.addAll(s3AgFetcher.fetchAll());
+        Set<String> managedArns = new HashSet<>(config.getPrincipalMappings().values());
+        if (!managedArns.isEmpty()) {
+            lfActual.removeIf(p -> !managedArns.contains(p.principalArn()));
+        }
 
         // Step 5: Phase 1 drift check
         ValidationResult phase1Result = phase1.validate(lfActual);
@@ -152,7 +166,7 @@ public class SimulatorMain {
         // Step 6: Fetch Ranger policies and Phase 2 correctness check
         var rangerPolicies = new ArrayList<com.fasterxml.jackson.databind.JsonNode>();
         try {
-            var policiesNode = rangerClient.listPolicies(config.getRangerAdminUrl());
+            var policiesNode = rangerClient.listPolicies(config.getRangerServiceName());
             if (policiesNode.isArray()) {
                 policiesNode.forEach(rangerPolicies::add);
             }
@@ -173,7 +187,7 @@ public class SimulatorMain {
         ReproductionBundle bundle = new ReproductionBundle(
                 Instant.now(), syncCycleAfter, cycleNumber - 1 >= 0 ? cycleNumber - 1 : 0,
                 mutationLog.getEntries(), rangerSnapshotJson, lfActual,
-                new ExpectedPermissionsComputer(Map.of(), (d, p) -> List.of()).compute(rangerPolicies),
+                expectedComputer.compute(rangerPolicies),
                 phase2Result);
 
         bundleWriter.write(bundle);

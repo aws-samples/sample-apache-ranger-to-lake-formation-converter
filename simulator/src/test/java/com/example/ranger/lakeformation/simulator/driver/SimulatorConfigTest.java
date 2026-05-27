@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -13,7 +14,7 @@ class SimulatorConfigTest {
     @Test
     void nullFieldsResolveToDefaults() {
         SimulatorConfig config = new SimulatorConfig(
-                null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         assertEquals(60, config.getCycleIntervalSeconds());
         assertEquals("us-east-1", config.getAwsRegion());
@@ -23,11 +24,16 @@ class SimulatorConfigTest {
         assertEquals("reproduction-bundles", config.getReproductionBundleDir());
         assertNotNull(config.getPrincipalPool());
         assertTrue(config.getPrincipalPool().isEmpty());
+        assertNotNull(config.getPrincipalMappings());
+        assertTrue(config.getPrincipalMappings().isEmpty());
+        assertEquals("lakeformation", config.getRangerServiceName());
+        assertEquals("unknown", config.getAwsAccountId());
     }
 
     @Test
     void explicitValuesOverrideDefaults() {
         List<String> principals = List.of("arn:aws:iam::123456789012:role/MyRole");
+        Map<String, String> mappings = Map.of("alice", "arn:aws:iam::123456789012:role/MyRole");
         SimulatorConfig config = new SimulatorConfig(
                 120,
                 "eu-west-1",
@@ -35,6 +41,9 @@ class SimulatorConfigTest {
                 "admin",
                 "secret",
                 principals,
+                mappings,
+                "hive",
+                "123456789012",
                 600,
                 9090,
                 "my-host",
@@ -46,6 +55,9 @@ class SimulatorConfigTest {
         assertEquals("admin", config.getRangerAdminUser());
         assertEquals("secret", config.getRangerAdminPassword());
         assertEquals(List.of("arn:aws:iam::123456789012:role/MyRole"), config.getPrincipalPool());
+        assertEquals(mappings, config.getPrincipalMappings());
+        assertEquals("hive", config.getRangerServiceName());
+        assertEquals("123456789012", config.getAwsAccountId());
         assertEquals(600, config.getCycleWaitTimeoutSeconds());
         assertEquals(9090, config.getStatusPort());
         assertEquals("my-host", config.getStatusHost());
@@ -56,7 +68,7 @@ class SimulatorConfigTest {
     void principalPoolIsDefensivelyCopied() {
         List<String> mutable = new ArrayList<>(List.of("arn:aws:iam::111:role/A"));
         SimulatorConfig config = new SimulatorConfig(
-                null, null, null, null, null, mutable, null, null, null, null);
+                null, null, null, null, null, mutable, null, null, null, null, null, null, null);
 
         mutable.add("arn:aws:iam::222:role/B");
 
@@ -67,7 +79,7 @@ class SimulatorConfigTest {
     @Test
     void toStringContainsRangerAdminUrl() {
         SimulatorConfig config = new SimulatorConfig(
-                null, null, "http://ranger-admin:6080", null, null, null, null, null, null, null);
+                null, null, "http://ranger-admin:6080", null, null, null, null, null, null, null, null, null, null);
 
         assertTrue(config.toString().contains("rangerAdminUrl"),
                 "toString() should contain 'rangerAdminUrl' for logging diagnostics");
@@ -83,7 +95,10 @@ class SimulatorConfigTest {
                 + "\"rangerAdminUrl\": \"http://ranger:6080\","
                 + "\"rangerAdminUser\": \"admin\","
                 + "\"rangerAdminPassword\": \"pass\","
-                + "\"principalPool\": [\"arn:aws:iam::123:role/R1\"],"
+                + "\"principalPool\": [\"alice\"],"
+                + "\"principalMappings\": {\"alice\": \"arn:aws:iam::123:role/R1\"},"
+                + "\"rangerServiceName\": \"lakeformation\","
+                + "\"awsAccountId\": \"123456789012\","
                 + "\"cycleWaitTimeoutSeconds\": 120,"
                 + "\"statusPort\": 9999,"
                 + "\"statusHost\": \"sync-host\","
@@ -97,7 +112,10 @@ class SimulatorConfigTest {
         assertEquals("http://ranger:6080", config.getRangerAdminUrl());
         assertEquals("admin", config.getRangerAdminUser());
         assertEquals("pass", config.getRangerAdminPassword());
-        assertEquals(List.of("arn:aws:iam::123:role/R1"), config.getPrincipalPool());
+        assertEquals(List.of("alice"), config.getPrincipalPool());
+        assertEquals(Map.of("alice", "arn:aws:iam::123:role/R1"), config.getPrincipalMappings());
+        assertEquals("lakeformation", config.getRangerServiceName());
+        assertEquals("123456789012", config.getAwsAccountId());
         assertEquals(120, config.getCycleWaitTimeoutSeconds());
         assertEquals(9999, config.getStatusPort());
         assertEquals("sync-host", config.getStatusHost());

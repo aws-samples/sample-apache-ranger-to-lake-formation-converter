@@ -26,7 +26,7 @@ class Phase2CorrectnessValidatorTest {
     void setUp() {
         ExpectedPermissionsComputer computer = new ExpectedPermissionsComputer(
                 PRINCIPALS, (db, pattern) -> List.of(pattern));
-        validator = new Phase2CorrectnessValidator(computer);
+        validator = new Phase2CorrectnessValidator(computer, Set.of());
     }
 
     // -----------------------------------------------------------------------
@@ -80,9 +80,9 @@ class Phase2CorrectnessValidatorTest {
         return arr;
     }
 
-    // The expected permission produced by alice/select on mydb.events
+    // SELECT is stored as TABLE_WITH_COLUMNS in LF (all-column grant)
     private static final SimulatorPermission ALICE_SELECT_EVENTS = new SimulatorPermission(
-            "arn:aws:iam::123:role/alice", "TABLE", "mydb.events", "SELECT", false);
+            "arn:aws:iam::123:role/alice", "TABLE_WITH_COLUMNS", "mydb.events", "SELECT", false);
 
     // 1. actual equals expected → PASS
     @Test

@@ -1,0 +1,38 @@
+rangerConfig:
+  rangerAdminUrl: "http://localhost:6080"
+  username: "admin"
+  password: "rangerR0cks!"
+
+awsConfig:
+  region: "us-west-2"
+  catalogId: "427250191192"
+  roleArn: "arn:aws:iam::427250191192:role/RangerLFSyncRole"
+
+principalMapping:
+  userMappings:
+    "analyst": "arn:aws:iam::427250191192:role/ranger-sim-analyst"
+    "etl_user": "arn:aws:iam::427250191192:role/ranger-sim-etl_user"
+    "data_admin": "arn:aws:iam::427250191192:role/ranger-sim-data_admin"
+    "viewer": "arn:aws:iam::427250191192:role/ranger-sim-viewer"
+
+policyRefreshIntervalMs: 15000
+
+wildcardRefreshIntervalSeconds: 0
+
+maxLfRetries: 3
+lfRetryBackoffMs: 1000
+
+deadLetterLogPath: "/tmp/ranger-sim/dead-letter.jsonl"
+checkpointPath: "/tmp/ranger-sim/sync-checkpoint.json"
+
+server:
+  shutdownTimeoutSeconds: 30
+  logLevel: INFO
+  metricsNamespace: RangerSimTest
+  statusPort: 18080
+
+reverseSync:
+  enabled: false
+
+tagSync:
+  enabled: false

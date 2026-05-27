@@ -59,6 +59,22 @@ public class RangerPolicyClient {
     }
 
     /**
+     * Fetch a single policy by its numeric ID.
+     */
+    public JsonNode getPolicy(String policyId) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + POLICY_PATH + "/" + policyId))
+                .header("Authorization", authHeader)
+                .GET()
+                .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new IOException("getPolicy failed: HTTP " + response.statusCode() + " — " + response.body());
+        }
+        return mapper.readTree(response.body());
+    }
+
+    /**
      * Update an existing policy by ID.
      */
     public void updatePolicy(String policyId, Map<String, Object> policyJson) throws IOException, InterruptedException {

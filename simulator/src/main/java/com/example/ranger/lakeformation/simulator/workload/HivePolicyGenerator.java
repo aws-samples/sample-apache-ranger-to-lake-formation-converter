@@ -61,7 +61,6 @@ public class HivePolicyGenerator {
         resources.put("database", Map.of("values", List.of(db), "isExcludes", false));
 
         return Map.of(
-                "id", policyId,
                 "name", "sim-policy-" + policyId,
                 "service", hiveServiceName,
                 "isEnabled", true,
@@ -82,7 +81,6 @@ public class HivePolicyGenerator {
         }
 
         return Map.of(
-                "id", policyId,
                 "name", "sim-policy-" + policyId,
                 "service", hiveServiceName,
                 "isEnabled", true,

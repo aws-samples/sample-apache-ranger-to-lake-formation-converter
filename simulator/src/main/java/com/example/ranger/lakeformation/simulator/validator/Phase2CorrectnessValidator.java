@@ -16,13 +16,17 @@ public class Phase2CorrectnessValidator {
     private static final Logger LOG = LoggerFactory.getLogger(Phase2CorrectnessValidator.class);
 
     private final ExpectedPermissionsComputer computer;
+    private final Set<String> managedPrincipalArns;
 
-    public Phase2CorrectnessValidator(ExpectedPermissionsComputer computer) {
+    public Phase2CorrectnessValidator(ExpectedPermissionsComputer computer, Set<String> managedPrincipalArns) {
         this.computer = computer;
+        this.managedPrincipalArns = Set.copyOf(managedPrincipalArns);
     }
 
     /**
      * Validate actual permissions against the expected permissions computed from current Ranger policies.
+     * Only compares permissions for managed principals (those in the principal map) to exclude
+     * infrastructure grants (Admin role, sync role, etc.).
      *
      * @param actual         current LF permissions (from ListPermissions + S3AG scans)
      * @param rangerPolicies list of raw Ranger policy JSON nodes (from Ranger REST API)
@@ -30,6 +34,12 @@ public class Phase2CorrectnessValidator {
      */
     public ValidationResult validate(Set<SimulatorPermission> actual, List<JsonNode> rangerPolicies) {
         Set<SimulatorPermission> expected = computer.compute(rangerPolicies);
+        // Filter actual to only managed principals to exclude infrastructure grants
+        Set<SimulatorPermission> filteredActual = new HashSet<>(actual);
+        if (!managedPrincipalArns.isEmpty()) {
+            filteredActual.removeIf(p -> !managedPrincipalArns.contains(p.principalArn()));
+        }
+        actual = filteredActual;
 
         Set<SimulatorPermission> overGrants = new HashSet<>(actual);
         overGrants.removeAll(expected);

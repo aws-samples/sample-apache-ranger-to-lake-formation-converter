@@ -2,10 +2,13 @@ package com.example.ranger.lakeformation.simulator.driver;
 
 import com.example.ranger.lakeformation.simulator.workload.MutationLog;
 import com.example.ranger.lakeformation.simulator.workload.MutationOperation;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -18,6 +21,9 @@ public class MutationDriver {
 
     private final RangerPolicyClient rangerClient;
     private final MutationLog mutationLog;
+    private final ObjectMapper mapper = new ObjectMapper();
+    // Maps internal simulator IDs (sim-policy-{nanoTime}) to Ranger-assigned numeric IDs
+    private final Map<String, String> internalToRangerIdMap = new HashMap<>();
 
     public MutationDriver(RangerPolicyClient rangerClient, MutationLog mutationLog) {
         this.rangerClient = rangerClient;
@@ -43,28 +49,43 @@ public class MutationDriver {
     @SuppressWarnings("unchecked")
     private void applyOne(MutationOperation op) throws IOException, InterruptedException {
         if (op instanceof MutationOperation.CreatePolicy c) {
-            rangerClient.createPolicy((Map<String, Object>) c.policyPayload());
+            String rangerNumericId = rangerClient.createPolicy((Map<String, Object>) c.policyPayload());
+            internalToRangerIdMap.put(c.policyId(), rangerNumericId);
+            LOG.debug("Created policy {} → Ranger ID {}", c.policyId(), rangerNumericId);
         } else if (op instanceof MutationOperation.UpdatePolicy u) {
-            rangerClient.updatePolicy(u.policyId(), (Map<String, Object>) u.policyPayload());
+            String rangerNumericId = internalToRangerIdMap.getOrDefault(u.policyId(), u.policyId());
+            rangerClient.updatePolicy(rangerNumericId, (Map<String, Object>) u.policyPayload());
         } else if (op instanceof MutationOperation.DisablePolicy d) {
-            disablePolicy(d.policyId());
+            String rangerNumericId = internalToRangerIdMap.get(d.policyId());
+            if (rangerNumericId == null) {
+                LOG.warn("No Ranger ID mapped for internal ID {}; skipping disable", d.policyId());
+            } else {
+                togglePolicy(rangerNumericId, false);
+            }
         } else if (op instanceof MutationOperation.EnablePolicy e) {
-            enablePolicy(e.policyId());
+            String rangerNumericId = internalToRangerIdMap.get(e.policyId());
+            if (rangerNumericId == null) {
+                LOG.warn("No Ranger ID mapped for internal ID {}; skipping enable", e.policyId());
+            } else {
+                togglePolicy(rangerNumericId, true);
+            }
         } else if (op instanceof MutationOperation.DeletePolicy del) {
-            rangerClient.deletePolicy(del.policyId());
+            String rangerNumericId = internalToRangerIdMap.get(del.policyId());
+            if (rangerNumericId == null) {
+                LOG.warn("No Ranger ID mapped for internal ID {}; skipping delete", del.policyId());
+            } else {
+                rangerClient.deletePolicy(rangerNumericId);
+                internalToRangerIdMap.remove(del.policyId());
+            }
         }
     }
 
-    private void disablePolicy(String policyId) throws IOException, InterruptedException {
-        // Fetch-modify-update: get current policy, set isEnabled=false, update
-        var current = rangerClient.listPolicies("hive");   // simplified — in practice filter by ID
-        LOG.debug("Disabling policy {}", policyId);
-        // For the simulator, we'll PUT a minimal payload with isEnabled=false
-        rangerClient.setPolicyEnabled(policyId, false, Map.of("id", policyId, "isEnabled", true));
-    }
-
-    private void enablePolicy(String policyId) throws IOException, InterruptedException {
-        LOG.debug("Enabling policy {}", policyId);
-        rangerClient.setPolicyEnabled(policyId, true, Map.of("id", policyId, "isEnabled", false));
+    private void togglePolicy(String rangerNumericId, boolean enabled) throws IOException, InterruptedException {
+        JsonNode current = rangerClient.getPolicy(rangerNumericId);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> updated = mapper.convertValue(current, Map.class);
+        updated.put("isEnabled", enabled);
+        rangerClient.updatePolicy(rangerNumericId, updated);
+        LOG.debug("{} policy Ranger ID {}", enabled ? "Enabled" : "Disabled", rangerNumericId);
     }
 }

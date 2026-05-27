@@ -404,6 +404,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         if (checkpointStore != null) {
             checkpointStore.save(policyVersion, lastCedarPolicyText);
         }
+
+        lastCompletedCycle.incrementAndGet();
     }
 
     // ---------------------------------------------------------------

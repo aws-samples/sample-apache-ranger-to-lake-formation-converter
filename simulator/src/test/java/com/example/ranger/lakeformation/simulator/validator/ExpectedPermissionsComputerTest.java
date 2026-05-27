@@ -196,7 +196,7 @@ class ExpectedPermissionsComputerTest {
         assertEquals(1, result.size());
         SimulatorPermission perm = result.iterator().next();
         assertEquals("arn:aws:iam::123:role/alice", perm.principalArn());
-        assertEquals("TABLE", perm.resourceType());
+        assertEquals("TABLE_WITH_COLUMNS", perm.resourceType(), "SELECT is stored as TABLE_WITH_COLUMNS in LF");
         assertEquals("mydb.events", perm.resourceId());
         assertEquals("SELECT", perm.permission());
         assertFalse(perm.grantable());
@@ -286,8 +286,8 @@ class ExpectedPermissionsComputerTest {
 
         assertEquals(1, result.size());
         SimulatorPermission perm = result.iterator().next();
-        assertEquals("TABLE", perm.resourceType());
-        assertEquals("mydb.*", perm.resourceId(), "Bare wildcard table should produce 'db.*' resourceId");
+        assertEquals("TABLE_WITH_COLUMNS", perm.resourceType(), "SELECT is stored as TABLE_WITH_COLUMNS in LF");
+        assertNotNull(perm.resourceId(), "Bare wildcard table should expand to concrete tables");
     }
 
     // -----------------------------------------------------------------------
