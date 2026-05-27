@@ -23,7 +23,7 @@ The simulator catches sync bugs that unit and integration tests miss — things 
 
 Each simulator cycle:
 
-1. Generates a random batch of 1–5 policy mutations (CREATE, UPDATE, DISABLE, ENABLE, DELETE)
+1. Generates a random batch of 1–5 policy mutations (CREATE, UPDATE, DISABLE, ENABLE, DELETE) targeting databases and tables discovered from the Glue catalog at startup (or overridden via `databases` in config)
 2. Applies the mutations to Ranger Admin via REST API
 3. Polls the sync service `GET /status` endpoint until a new sync cycle completes
 4. **Phase 1 — Drift check**: compares the current LF `ListPermissions` snapshot against the previous cycle's snapshot to detect unexpected changes between cycles
@@ -316,6 +316,7 @@ tagSync:
 | `statusHost` | Hostname of the sync service status endpoint | `"localhost"` |
 | `statusPort` | Port of the sync service `GET /status` endpoint | `18080` |
 | `reproductionBundleDir` | Directory for violation bundles and mutation log | `"reproduction-bundles"` |
+| `databases` | Optional map of `db → [table, ...]`. When present, used directly instead of querying the Glue catalog. Useful for offline testing or restricting the simulator to a subset of tables. | `null` (Glue discovery) |
 
 ---
 
@@ -382,6 +383,17 @@ AWS_PROFILE=your-profile \
 
 echo "Simulator PID=$!"
 ```
+
+On startup the simulator queries the Glue catalog to build its list of databases and tables. You should see lines like:
+
+```
+Glue catalog discovery: found 3 databases
+  analytics: 5 tables
+  staging: 5 tables
+  default_sim: 5 tables
+```
+
+If discovery returns zero databases, check that `awsRegion` in the config matches where you created the Glue databases and that your AWS credentials have `glue:GetDatabases` / `glue:GetTables` permissions. You can also bypass discovery by adding a `databases` key to the config (see [Config field reference](#configuration)).
 
 ### Step 5 — Monitor
 
@@ -500,7 +512,7 @@ Each cycle generates 1–5 mutations. Each mutation is drawn independently with 
 
 ### Generated policy payload
 
-Each CREATE/UPDATE generates a single-item table-level allow policy:
+Each CREATE/UPDATE generates a single-item table-level allow policy. The database and table come from the Glue-discovered resource map, so every generated policy targets a table that actually exists:
 
 ```json
 {
@@ -508,8 +520,8 @@ Each CREATE/UPDATE generates a single-item table-level allow policy:
   "isEnabled": true,
   "policyType": 0,
   "resources": {
-    "database": {"values": ["<analytics | staging | default_sim>"]},
-    "table":    {"values": ["<events | users | orders | products | sessions>"]}
+    "database": {"values": ["<any discovered database>"]},
+    "table":    {"values": ["<a table that belongs to that database>"]}
   },
   "policyItems": [{
     "users":      ["<analyst | etl_user | data_admin | viewer>"],
@@ -520,9 +532,9 @@ Each CREATE/UPDATE generates a single-item table-level allow policy:
 }
 ```
 
-The full parameter space exercised:
+With the default 3-database, 5-tables-each setup:
 
-- **3 databases** × **5 tables** = 15 resource combinations
+- **3 databases** × **5 tables** = 15 resource combinations (always db-consistent: no cross-db table picks)
 - **4 principals**
 - **14 possible access subsets** (non-empty subsets of `{select, insert, delete, describe}` of size 1–3)
 - **5 operation types** across the policy lifecycle
