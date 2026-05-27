@@ -14,7 +14,7 @@ class SimulatorConfigTest {
     @Test
     void nullFieldsResolveToDefaults() {
         SimulatorConfig config = new SimulatorConfig(
-                null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         assertEquals(60, config.getCycleIntervalSeconds());
         assertEquals("us-east-1", config.getAwsRegion());
@@ -47,7 +47,8 @@ class SimulatorConfigTest {
                 600,
                 9090,
                 "my-host",
-                "/tmp/bundles");
+                "/tmp/bundles",
+                null);
 
         assertEquals(120, config.getCycleIntervalSeconds());
         assertEquals("eu-west-1", config.getAwsRegion());
@@ -68,7 +69,7 @@ class SimulatorConfigTest {
     void principalPoolIsDefensivelyCopied() {
         List<String> mutable = new ArrayList<>(List.of("arn:aws:iam::111:role/A"));
         SimulatorConfig config = new SimulatorConfig(
-                null, null, null, null, null, mutable, null, null, null, null, null, null, null);
+                null, null, null, null, null, mutable, null, null, null, null, null, null, null, null);
 
         mutable.add("arn:aws:iam::222:role/B");
 
@@ -79,7 +80,7 @@ class SimulatorConfigTest {
     @Test
     void toStringContainsRangerAdminUrl() {
         SimulatorConfig config = new SimulatorConfig(
-                null, null, "http://ranger-admin:6080", null, null, null, null, null, null, null, null, null, null);
+                null, null, "http://ranger-admin:6080", null, null, null, null, null, null, null, null, null, null, null);
 
         assertTrue(config.toString().contains("rangerAdminUrl"),
                 "toString() should contain 'rangerAdminUrl' for logging diagnostics");

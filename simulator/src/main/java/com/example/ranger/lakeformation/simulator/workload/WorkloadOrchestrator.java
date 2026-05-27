@@ -37,16 +37,13 @@ public class WorkloadOrchestrator {
     private final Random random;
     private final HivePolicyGenerator policyGenerator;
 
-    public WorkloadOrchestrator(List<String> principalPool, List<String> existingPolicyIds, Random random) {
+    public WorkloadOrchestrator(List<String> principalPool, List<String> existingPolicyIds,
+                                Map<String, List<String>> databaseTables,
+                                String hiveServiceName, Random random) {
         this.principalPool = List.copyOf(principalPool);
         this.existingPolicyIds = new ArrayList<>(existingPolicyIds);
         this.random = random;
-        this.policyGenerator = new HivePolicyGenerator(
-                List.of("analytics", "staging", "default_sim"),
-                List.of("events", "users", "orders", "products", "sessions"),
-                this.principalPool,
-                "lakeformation",
-                random);
+        this.policyGenerator = new HivePolicyGenerator(databaseTables, this.principalPool, hiveServiceName, random);
     }
 
     /**

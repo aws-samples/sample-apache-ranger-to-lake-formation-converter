@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.glue.GlueClient;
 import software.amazon.awssdk.services.lakeformation.LakeFormationClient;
 import software.amazon.awssdk.services.s3control.S3ControlClient;
 
@@ -43,13 +44,10 @@ public class SimulatorMain {
 
     public void run(SimulatorConfig config) throws Exception {
         // Wire AWS clients
-        LakeFormationClient lfClient = LakeFormationClient.builder()
-                .region(Region.of(config.getAwsRegion()))
-                .build();
-        // S3ControlClient requires account ID endpoint
-        S3ControlClient s3ControlClient = S3ControlClient.builder()
-                .region(Region.of(config.getAwsRegion()))
-                .build();
+        Region region = Region.of(config.getAwsRegion());
+        LakeFormationClient lfClient = LakeFormationClient.builder().region(region).build();
+        S3ControlClient s3ControlClient = S3ControlClient.builder().region(region).build();
+        GlueClient glueClient = GlueClient.builder().region(region).build();
 
         // Wire simulator components
         RangerPolicyClient rangerClient = new RangerPolicyClient(
@@ -59,11 +57,20 @@ public class SimulatorMain {
         Files.createDirectories(logPath.getParent());
         MutationLog mutationLog = new MutationLog(logPath);
 
+        // Single source of truth: config-provided map or Glue discovery
+        Map<String, List<String>> databaseTables = config.getDatabases() != null
+                ? config.getDatabases()
+                : new GlueCatalogDiscovery(glueClient).discover();
+        if (databaseTables.isEmpty()) {
+            LOG.warn("No databases found — check Glue catalog access and region ({})", config.getAwsRegion());
+        }
+
+        List<String> principals = config.getPrincipalPool().isEmpty()
+                ? new ArrayList<>(config.getPrincipalMappings().keySet())
+                : config.getPrincipalPool();
+
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
-                config.getPrincipalPool().isEmpty()
-                        ? new ArrayList<>(config.getPrincipalMappings().keySet())
-                        : config.getPrincipalPool(),
-                new ArrayList<>(), new Random());
+                principals, new ArrayList<>(), databaseTables, config.getRangerServiceName(), new Random());
 
         MutationDriver mutationDriver = new MutationDriver(rangerClient, mutationLog);
 
@@ -84,15 +91,10 @@ public class SimulatorMain {
         S3AgPermissionsFetcher s3AgFetcher = new S3AgPermissionsFetcher(s3ControlClient, accountId,
                 s3AgInstanceArn != null ? s3AgInstanceArn : "");
 
-        // Known tables per DB (mirrors HivePolicyGenerator config — used to expand wildcard policies)
-        Map<String, List<String>> knownTables = Map.of(
-                "analytics",  List.of("events", "users", "orders", "products", "sessions"),
-                "staging",    List.of("events", "users", "orders", "products", "sessions"),
-                "default_sim",List.of("events", "users", "orders", "products", "sessions")
-        );
+        // Use discovered/configured resource map for wildcard expansion in the independent validator
         ExpectedPermissionsComputer expectedComputer = new ExpectedPermissionsComputer(
                 principalMap, (db, pattern) -> {
-                    List<String> tables = knownTables.getOrDefault(db, List.of());
+                    List<String> tables = databaseTables.getOrDefault(db, List.of());
                     String regex = pattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
                     return tables.stream().filter(t -> t.matches(regex)).toList();
                 });

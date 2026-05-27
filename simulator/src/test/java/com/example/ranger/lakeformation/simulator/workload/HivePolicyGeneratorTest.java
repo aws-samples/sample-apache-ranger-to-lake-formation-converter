@@ -10,13 +10,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class HivePolicyGeneratorTest {
 
-    private static final List<String> DATABASES = List.of("db1", "db2");
-    private static final List<String> TABLES = List.of("table_a", "table_b", "table_c");
+    private static final Map<String, List<String>> DATABASE_TABLES = Map.of(
+            "db1", List.of("table_a", "table_b"),
+            "db2", List.of("table_c"));
     private static final List<String> PRINCIPALS = List.of("alice", "bob");
     private static final String SERVICE = "hive";
 
     private HivePolicyGenerator generator(long seed) {
-        return new HivePolicyGenerator(DATABASES, TABLES, PRINCIPALS, SERVICE, new Random(seed));
+        return new HivePolicyGenerator(DATABASE_TABLES, PRINCIPALS, SERVICE, new Random(seed));
     }
 
     // 1. generateTablePolicy() returns a non-null map with "policyItems", "resources", "service"

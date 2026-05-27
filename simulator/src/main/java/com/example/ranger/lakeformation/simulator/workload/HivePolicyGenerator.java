@@ -7,20 +7,18 @@ import java.util.*;
  * Produces policies that cover database, table, and column levels.
  */
 public class HivePolicyGenerator {
-    private static final List<String> DEFAULT_DATABASES = List.of("default", "analytics", "staging");
     private static final List<String> DEFAULT_ACCESS_TYPES = List.of("select", "insert", "delete", "describe");
-    private static final Random DEFAULT_RANDOM = new Random();
 
-    private final List<String> databases;
-    private final List<String> tablesPerDb;   // table names to use
-    private final List<String> principalNames; // Ranger user names (not ARNs)
+    private final Map<String, List<String>> databaseTables;  // db name → table names in that db
+    private final List<String> databases;                     // ordered key list for random selection
+    private final List<String> principalNames;                // Ranger user names (not ARNs)
     private final Random random;
-    private final String hiveServiceName;      // e.g. "hive" or "cm_hive"
+    private final String hiveServiceName;                     // e.g. "hive" or "lakeformation"
 
-    public HivePolicyGenerator(List<String> databases, List<String> tablesPerDb,
+    public HivePolicyGenerator(Map<String, List<String>> databaseTables,
                                List<String> principalNames, String hiveServiceName, Random random) {
-        this.databases = List.copyOf(databases);
-        this.tablesPerDb = List.copyOf(tablesPerDb);
+        this.databaseTables = Map.copyOf(databaseTables);
+        this.databases = List.copyOf(databaseTables.keySet());
         this.principalNames = List.copyOf(principalNames);
         this.random = random;
         this.hiveServiceName = hiveServiceName;
@@ -32,7 +30,8 @@ public class HivePolicyGenerator {
      */
     public Map<String, Object> generateTablePolicy(String policyId) {
         String db = randomFrom(databases);
-        String table = randomFrom(tablesPerDb);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
         String user = randomFrom(principalNames);
         List<String> accesses = randomSubset(DEFAULT_ACCESS_TYPES, 1 + random.nextInt(3));
 
@@ -44,7 +43,8 @@ public class HivePolicyGenerator {
      */
     public Map<String, Object> generateGrantableTablePolicy(String policyId) {
         String db = randomFrom(databases);
-        String table = randomFrom(tablesPerDb);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
         String user = randomFrom(principalNames);
 
         return buildPolicy(policyId, db, table, null, user, List.of("select"), true);
