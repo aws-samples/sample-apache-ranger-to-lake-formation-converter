@@ -779,6 +779,226 @@ The codebase is organized by responsibility:
                                 └──────────────────────┘
 ```
 
+## Real-World Simulator
+
+The simulator is a standalone long-running tool that continuously mutates Ranger policies at random, waits for the sync service to apply them to Lake Formation, and then independently validates that LF permissions are exactly correct. It is the primary tool for catching bugs in the sync pipeline before they affect production.
+
+### What It Does
+
+Each simulator cycle:
+
+1. Generates a random batch of 1–5 policy mutations (CREATE, UPDATE, DISABLE, ENABLE, DELETE)
+2. Applies the mutations to Ranger Admin via REST API
+3. Waits for the sync service to complete a full cycle
+4. **Phase 1 — Drift check**: compares the current LF `ListPermissions` snapshot against the previous cycle's snapshot to detect unexpected changes
+5. **Phase 2 — Correctness check**: independently recomputes the expected LF permissions from the current Ranger policies (using a zero-dependency reimplementation of the Ranger→LF mapping), then diffs against the actual LF state
+6. On a violation: writes a reproduction bundle to disk and waits for one more sync cycle (remediation). If it heals → `TRANSIENT_VIOLATION`. If it persists → `PERSISTENT_VIOLATION`
+
+### Building
+
+From the repository root:
+
+```bash
+cd simulator
+mvn package -DskipTests
+```
+
+This produces:
+
+```
+simulator/target/ranger-lakeformation-simulator-1.0.0-SNAPSHOT-jar-with-dependencies.jar
+```
+
+### Prerequisites
+
+Before running the simulator you need:
+
+1. **Ranger Admin** running and reachable (local Docker stack works — see [Running Tests](#running-tests))
+2. **Sync service** running, with its `GET /status` endpoint reachable (see [Start the Sync Service](#4-start-the-sync-service))
+3. **AWS credentials** with Lake Formation and Glue Data Catalog access
+4. **IAM roles** for each principal in your principal map, pre-provisioned in the target AWS account
+5. **Lake Formation in managed mode** — `CreateDatabaseDefaultPermissions` and `CreateTableDefaultPermissions` must be empty (no `IAM_ALLOWED_PRINCIPALS`). Run once:
+
+```bash
+aws lakeformation put-data-lake-settings --region <region> --data-lake-settings '{
+  "DataLakeAdmins": [{"DataLakePrincipalIdentifier":"arn:aws:iam::<account>:role/<SyncRole>"}],
+  "CreateDatabaseDefaultPermissions": [],
+  "CreateTableDefaultPermissions": []
+}'
+```
+
+6. **Glue databases and tables** pre-created for the databases and tables referenced in the simulator config
+
+### Configuration
+
+The simulator reads a JSON config file:
+
+```json
+{
+  "cycleIntervalSeconds": 30,
+  "awsRegion": "us-west-2",
+  "awsAccountId": "123456789012",
+  "rangerAdminUrl": "http://localhost:6080",
+  "rangerAdminUser": "admin",
+  "rangerAdminPassword": "rangerR0cks!",
+  "rangerServiceName": "lakeformation",
+  "principalPool": ["analyst", "etl_user", "data_admin", "viewer"],
+  "principalMappings": {
+    "analyst":    "arn:aws:iam::123456789012:role/ranger-sim-analyst",
+    "etl_user":   "arn:aws:iam::123456789012:role/ranger-sim-etl_user",
+    "data_admin": "arn:aws:iam::123456789012:role/ranger-sim-data_admin",
+    "viewer":     "arn:aws:iam::123456789012:role/ranger-sim-viewer"
+  },
+  "cycleWaitTimeoutSeconds": 120,
+  "statusHost": "localhost",
+  "statusPort": 18080,
+  "reproductionBundleDir": "/tmp/ranger-sim/bundles"
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `cycleIntervalSeconds` | How long to wait between simulator cycles | `30` |
+| `awsRegion` | AWS region for LF and Glue API calls | required |
+| `awsAccountId` | AWS account ID | required |
+| `rangerAdminUrl` | Ranger Admin base URL | required |
+| `rangerAdminUser` | Ranger Admin username | required |
+| `rangerAdminPassword` | Ranger Admin password | required |
+| `rangerServiceName` | Ranger service instance name to mutate | `"lakeformation"` |
+| `principalPool` | Ranger user names to include in generated policies | required |
+| `principalMappings` | Map of Ranger user name → IAM role ARN | required |
+| `cycleWaitTimeoutSeconds` | Max seconds to wait for a sync cycle to complete | `120` |
+| `statusHost` | Host where sync service status endpoint is reachable | `"localhost"` |
+| `statusPort` | Port for sync service `GET /status` | `18080` |
+| `reproductionBundleDir` | Directory for reproduction bundles and mutation log | required |
+
+`principalMappings` keys must be valid Ranger user names. The corresponding IAM roles must exist and be registered as Lake Formation principals in the target account. If `principalPool` is empty, the keys from `principalMappings` are used as the pool.
+
+The simulator generates Hive-style table policies targeting three databases (`analytics`, `staging`, `default_sim`) and five tables per database (`events`, `users`, `orders`, `products`, `sessions`). These must exist in the Glue Data Catalog and LF must have resources registered for them.
+
+### Running
+
+AWS credentials must be available via the standard SDK credential chain (environment variables, `~/.aws/credentials`, IAM instance profile, etc.). To use a named profile:
+
+```bash
+AWS_PROFILE=my-profile java -jar \
+  simulator/target/ranger-lakeformation-simulator-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
+  conf/simulator-config.json
+```
+
+The simulator runs indefinitely until killed. All output goes to stdout/stderr, so redirect to a file to keep logs:
+
+```bash
+AWS_PROFILE=my-profile java -jar \
+  simulator/target/ranger-lakeformation-simulator-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
+  conf/simulator-config.json \
+  > /tmp/simulator.log 2>&1 &
+```
+
+### Reading the Output
+
+A clean cycle looks like:
+
+```
+=== Simulator cycle 5 ===
+Applying batch of 3 mutations
+Created policy sim-policy-1234567890 → Ranger ID 42
+Cycle 5 complete — all permissions correct
+```
+
+A violation that self-heals:
+
+```
+Phase1 drift detected after cycle 12
+Violation bundle written for cycle 12
+Waiting for remediation cycle after cycle 12
+Remediation cycle 13 completed
+SIMULATOR ALERT [TRANSIENT_VIOLATION]: Self-healed after remediation cycle 13 — bundle: 2026-05-27T12:00:00Z
+```
+
+A persistent violation (indicates a real sync bug):
+
+```
+SIMULATOR ALERT [PERSISTENT_VIOLATION]: Persistent violation after remediation cycle 14 — bundle: 2026-05-27T12:05:00Z
+PERSISTENT VIOLATION detected after remediation cycle 14
+```
+
+### Reproduction Bundles
+
+Every violation writes a timestamped directory under `reproductionBundleDir`:
+
+```
+/tmp/ranger-sim/bundles/violation_2026-05-27_12-05-00/
+  mutations.json          — full mutation log for the current run
+  ranger-snapshot.json    — all Ranger policies at time of violation
+  lf-actual.json          — full ListPermissions output
+  lf-expected.json        — expected permissions from independent computation
+  diff.json               — structured diff: over-grants and under-grants
+  cycle-sequence.json     — { violationDetectedAfterCycle, lastSuccessfulCycle }
+  README.txt              — human-readable reproduction instructions
+```
+
+`diff.json` is the most useful file for debugging:
+
+```json
+{
+  "overGrants": [
+    {
+      "principalArn": "arn:aws:iam::123456789012:role/ranger-sim-analyst",
+      "resourceType": "TABLE_WITH_COLUMNS",
+      "resourceId": "analytics.events",
+      "permission": "SELECT",
+      "grantable": false
+    }
+  ],
+  "underGrants": [],
+  "description": "Phase2 mismatch: 1 over-grants (in LF but not expected), 0 under-grants (expected but not in LF)"
+}
+```
+
+### Sync Service Status Endpoint
+
+The sync service exposes a `GET /status` endpoint (default port `18080`) that the simulator polls to know when a sync cycle completes:
+
+```bash
+curl http://localhost:18080/status
+# → {"lastCompletedCycle":42,"lastCompletedWildcardRefreshCycle":3,"state":"running"}
+```
+
+Enable it in the sync service config:
+
+```yaml
+server:
+  statusPort: 18080
+```
+
+### Workload Distribution
+
+| Operation | Weight | Notes |
+|-----------|--------|-------|
+| CREATE new policy | 30% | Random resource + principals from pool |
+| UPDATE policy permissions | 20% | Generates new policy payload for existing ID |
+| DISABLE policy | 15% | Tests revocation on disable |
+| ENABLE policy | 15% | Tests re-grant on enable |
+| DELETE policy | 10% | Tests full revocation |
+| Reserved (no-op) | 10% | Keeps batch size variable |
+
+### Simulator Module Structure
+
+```
+simulator/
+  src/main/java/.../simulator/
+    driver/          — entry point (SimulatorMain), config, mutation driver, Ranger REST client
+    workload/        — policy generators, workload orchestrator, mutation operations, mutation log
+    status/          — sync service status client, cycle waiter
+    validator/       — Phase1 drift validator, Phase2 correctness validator,
+                       independent ExpectedPermissionsComputer, LF/S3AG permission fetchers
+    remediation/     — remediation runner, reproduction bundle model, bundle writer
+    alert/           — alert emitter (log, CloudWatch, SNS)
+```
+
+The `ExpectedPermissionsComputer` is a deliberate zero-import reimplementation of the Ranger→LF mapping. It shares no code with the production pipeline, so it acts as an independent oracle — if both agree, the sync is correct.
+
 ## Docker Container
 
 The project ships two Dockerfiles:
