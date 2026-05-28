@@ -25,6 +25,10 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 - **CloudWatch Metrics**: Publishes operational metrics (sync cycle success/failure, duration, grants/revocations applied, error counts) to a configurable CloudWatch namespace.
 - **Dry-Run Mode**: Serializes LF operations to JSON files instead of calling AWS APIs, for testing and human review.
 
+### Cross-Service Deny Semantics
+
+All configured Ranger services are merged into a single Cedar evaluation namespace. A `forbid` from any service suppresses a `permit` from any other service for the same principal, action, and resource. This means a Trino deny policy will suppress a Hive grant for the same resource. Scope deny policies carefully when using multiple Ranger services.
+
 ## Features not yet implemented
 
 - **Tag-Based Policy Conversion**: Ranger tag-based policies (services whose name contains `"tag"`) are currently **detected and skipped** — the gap is recorded in the gap report as `TAG_BASED_POLICY` — but no conversion to Lake Formation LF-Tag permissions is performed. Converting Ranger tag policies to LF-Tag-based access control is planned but not yet implemented. Note that LF-Tags and Ranger tags are structurally different, and a full implementation typically requires integration with a tagging service such as Apache Atlas.

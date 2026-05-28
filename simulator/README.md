@@ -9,6 +9,8 @@ The simulator catches sync bugs that unit and integration tests miss — things 
 ## Table of Contents
 
 - [How It Works](#how-it-works)
+- [Cross-Service Deny Semantics](#cross-service-deny-semantics)
+- [Generators](#generators)
 - [AWS Account Setup (Fresh Account)](#aws-account-setup-fresh-account)
 - [Configuration](#configuration)
 - [Running the Simulator](#running-the-simulator)
@@ -54,6 +56,34 @@ RangerPolicyClient ──── Ranger Admin ◄────────┤
                                       ValidationResult
                                    PASS / TRANSIENT / PERSISTENT
 ```
+
+---
+
+## Cross-Service Deny Semantics
+
+The sync service merges policies from **all configured Ranger services** into a single Cedar evaluation namespace before converting to Lake Formation permissions. Cedar's `forbid`-wins semantics apply **across service boundaries**:
+
+> A `forbid` from any service suppresses a `permit` from any other service for the same `(principal, action, resource)` triple.
+
+**Example:** Hive grants `analyst` SELECT on `analytics.events`. Trino denies `analyst` SELECT on `analytics.events`. Effective Lake Formation permission: **no grant** — the Trino deny wins even though the grant came from Hive.
+
+**Customer implication:** An explicit deny anywhere in any configured Ranger service will suppress access granted by any other service. Scope deny policies carefully to avoid unintended suppression across query engines.
+
+**Simulator behavior:** The `TrinoServiceGenerator` emits deny items in ~20% of generated Trino policies to continuously exercise this code path and ensure the validator catches regressions.
+
+---
+
+## Generators
+
+The simulator generates policies from five generators with weighted random selection:
+
+| Generator | Weight | Service | Notes |
+|-----------|--------|---------|-------|
+| `HivePolicyGenerator` | 45% | LakeFormation (Hive) | Table-level allow policies |
+| `TrinoServiceGenerator` | 25% | Trino | Uses `schema` key; ~20% include deny items |
+| `DataLocationPolicyGenerator` | 15% | LakeFormation | S3 prefix data-location policies |
+| `TagPolicyGenerator` | 10% | Tag service | Tag-based policies (recorded as coverage gaps) |
+| `EmrfsPolicyGenerator` | 5% | EMRFS | S3 Access Grants policies |
 
 ---
 
