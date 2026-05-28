@@ -69,12 +69,14 @@ public class SimulatorMain {
                 ? new ArrayList<>(config.getPrincipalMappings().keySet())
                 : config.getPrincipalPool();
 
+        // rng is used only on the main simulator loop thread — generators and orchestrator do not share threads.
         Random rng = new Random();
 
         HivePolicyGenerator hivePolicyGenerator = new HivePolicyGenerator(
                 databaseTables, principals, config.getRangerServiceName(), rng);
         TrinoServiceGenerator trinoServiceGenerator = new TrinoServiceGenerator(
                 databaseTables, principals, config.getTrinoServiceName(), rng);
+        // Data-location policies are registered under the primary LF service name — same service as Hive.
         DataLocationPolicyGenerator dataLocationGenerator = new DataLocationPolicyGenerator(
                 config.getS3Prefixes(), principals, config.getRangerServiceName(), rng);
         TagPolicyGenerator tagPolicyGenerator = new TagPolicyGenerator(
@@ -126,10 +128,12 @@ public class SimulatorMain {
         BundleWriter bundleWriter = new BundleWriter(Paths.get(config.getReproductionBundleDir()));
         AlertEmitter alertEmitter = new AlertEmitter.LogAlertEmitter();
 
+        List<String> allServiceNames = buildAllServiceNames(config);
+
         long cycleNumber = 0;
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                runOneCycle(cycleNumber, config, rangerClient, mutationLog, orchestrator, mutationDriver,
+                runOneCycle(cycleNumber, config, allServiceNames, rangerClient, mutationLog, orchestrator, mutationDriver,
                         statusClient, cycleWaiter, remediationRunner, lfFetcher, s3AgFetcher,
                         expectedComputer, phase1, phase2, bundleWriter, alertEmitter);
                 cycleNumber++;
@@ -142,16 +146,18 @@ public class SimulatorMain {
     }
 
     private static List<String> buildAllServiceNames(SimulatorConfig config) {
+        // All four service names have non-null defaults in SimulatorConfig.
         List<String> names = new ArrayList<>();
         names.add(config.getRangerServiceName());
-        if (config.getTrinoServiceName() != null) names.add(config.getTrinoServiceName());
-        if (config.getEmrfsServiceName()  != null) names.add(config.getEmrfsServiceName());
-        if (config.getTagServiceName()    != null) names.add(config.getTagServiceName());
+        names.add(config.getTrinoServiceName());
+        names.add(config.getEmrfsServiceName());
+        names.add(config.getTagServiceName());
         return names;
     }
 
     @SuppressWarnings("java:S107")
     private void runOneCycle(long cycleNumber, SimulatorConfig config,
+                              List<String> allServiceNames,
                               RangerPolicyClient rangerClient, MutationLog mutationLog,
                               WorkloadOrchestrator orchestrator, MutationDriver mutationDriver,
                               SyncServiceStatusClient statusClient, CycleWaiter cycleWaiter,
@@ -195,7 +201,6 @@ public class SimulatorMain {
         }
 
         // Step 6: Fetch Ranger policies and Phase 2 correctness check
-        List<String> allServiceNames = buildAllServiceNames(config);
         var rangerPolicies = new ArrayList<com.fasterxml.jackson.databind.JsonNode>();
         for (String svcName : allServiceNames) {
             try {
