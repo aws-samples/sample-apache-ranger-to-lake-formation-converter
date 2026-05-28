@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,6 +42,7 @@ class ExpectedPermissionsComputerTest {
         p.put("service", service);
         p.put("policyType", policyType);
         p.set("policyItems", policyItems);
+        p.set("denyPolicyItems", MAPPER.createArrayNode());
         p.set("resources", resources);
         return p;
     }
@@ -210,7 +212,7 @@ class ExpectedPermissionsComputerTest {
     void allAccessExpandsToMultiplePermissions() {
         JsonNode items = singleItemArray(buildItem("alice", "all", false));
         JsonNode resources = buildTableResources("mydb", "events");
-        JsonNode policy = buildPolicy(true, "hive", 0, items, resources);
+        JsonNode policy = buildPolicy(true, "lakeformation", 0, items, resources);
 
         Set<SimulatorPermission> result = computer.compute(List.of(policy));
 
@@ -261,7 +263,7 @@ class ExpectedPermissionsComputerTest {
     void databaseLevelPermission() {
         JsonNode items = singleItemArray(buildItem("alice", "create_database", false));
         JsonNode resources = buildDatabaseResources("mydb");
-        JsonNode policy = buildPolicy(true, "hive", 0, items, resources);
+        JsonNode policy = buildPolicy(true, "lakeformation", 0, items, resources);
 
         Set<SimulatorPermission> result = computer.compute(List.of(policy));
 
@@ -298,7 +300,7 @@ class ExpectedPermissionsComputerTest {
     void columnLevelGrantStripsDescribe() {
         JsonNode items = singleItemArray(buildItem("alice", "all", false));
         JsonNode resources = buildColumnResources("mydb", "events", "salary");
-        JsonNode policy = buildPolicy(true, "hive", 0, items, resources);
+        JsonNode policy = buildPolicy(true, "lakeformation", 0, items, resources);
 
         Set<SimulatorPermission> result = computer.compute(List.of(policy));
 
@@ -318,7 +320,7 @@ class ExpectedPermissionsComputerTest {
     void dataLocationPermission() {
         JsonNode items = singleItemArray(buildItem("alice", "datalocation", false));
         JsonNode resources = buildDataLocationResources("s3://my-bucket/path/");
-        JsonNode policy = buildPolicy(true, "hive", 0, items, resources);
+        JsonNode policy = buildPolicy(true, "lakeformation", 0, items, resources);
 
         Set<SimulatorPermission> result = computer.compute(List.of(policy));
 
@@ -327,5 +329,144 @@ class ExpectedPermissionsComputerTest {
         assertEquals("DATA_LOCATION", perm.resourceType());
         assertEquals("s3://my-bucket/path/", perm.resourceId());
         assertEquals("DATA_LOCATION_ACCESS", perm.permission());
+    }
+
+    // -----------------------------------------------------------------------
+    // Hive service tests
+    // -----------------------------------------------------------------------
+
+    @Test
+    void hiveSelect_mapsToSelectPermission() {
+        String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertFalse(result.isEmpty(), "hive select should produce a permission");
+        assertTrue(result.stream().anyMatch(p -> "SELECT".equals(p.permission())),
+                "hive select must map to SELECT");
+    }
+
+    @Test
+    void hiveAll_producesNoPermissions() {
+        // "all" in hive maps to SUPER which is not an LF permission — zero grants expected
+        String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"all\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertTrue(result.isEmpty(),
+                "hive 'all' maps to SUPER (not an LF permission) — must produce zero grants");
+    }
+
+    @Test
+    void hiveUpdate_mapsToInsertPermission() {
+        String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"update\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertTrue(result.stream().anyMatch(p -> "INSERT".equals(p.permission())),
+                "hive 'update' must map to INSERT");
+    }
+
+    // -----------------------------------------------------------------------
+    // Trino service tests
+    // -----------------------------------------------------------------------
+
+    @Test
+    void trinoUse_mapsToDescribePermission() {
+        String json = "{\"service\":\"trino\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"schema\":{\"values\":[\"mydb\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"use\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertTrue(result.stream().anyMatch(p -> "DESCRIBE".equals(p.permission())),
+                "trino 'use' must map to DESCRIBE");
+    }
+
+    @Test
+    void trinoSchemaKey_resolvesSameAsDatabaseKey() {
+        // Trino uses "schema" resource key; ExpectedPermissionsComputer must treat it as the database name
+        String json = "{\"service\":\"trino\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"schema\":{\"values\":[\"analytics\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"events\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertFalse(result.isEmpty(), "Trino schema key should produce permissions");
+        assertTrue(result.stream().anyMatch(p -> p.resourceId().startsWith("analytics.")),
+                "Resource id should use the schema name as the database component");
+    }
+
+    // -----------------------------------------------------------------------
+    // Cross-service forbid test
+    // -----------------------------------------------------------------------
+
+    @Test
+    void crossServiceForbid_trinoDeniesSuppressesHiveGrant() {
+        // Policy A: Hive grants alice SELECT on db1.t1
+        // Policy B: Trino denies alice SELECT on db1.t1 (same logical resource, different service)
+        // Expected: compute([A, B]) returns empty set — deny wins
+        String policyA = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        String policyB = "{\"service\":\"trino\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"schema\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[],"
+                + "\"denyPolicyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}]}";
+        Set<SimulatorPermission> result = computeFromJsonStrings(policyA, policyB);
+        assertTrue(result.isEmpty(),
+                "Trino deny must suppress Hive grant for same (principal, resource, permission)");
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers for the new tests
+    // -----------------------------------------------------------------------
+
+    // Single-policy convenience helper used by the new hive/trino tests
+    private Set<SimulatorPermission> compute(String json) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode policy = mapper.readTree(json);
+            return computer.compute(List.of(policy));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // Multi-policy helper used by the cross-service forbid test
+    private Set<SimulatorPermission> computeFromJsonStrings(String... jsonPolicies) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            List<JsonNode> nodes = new ArrayList<>();
+            for (String json : jsonPolicies) {
+                nodes.add(mapper.readTree(json));
+            }
+            return computer.compute(nodes);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 }

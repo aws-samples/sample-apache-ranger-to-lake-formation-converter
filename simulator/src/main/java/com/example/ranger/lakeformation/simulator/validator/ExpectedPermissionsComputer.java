@@ -14,7 +14,7 @@ import java.util.*;
 public class ExpectedPermissionsComputer {
     private static final Logger LOG = LoggerFactory.getLogger(ExpectedPermissionsComputer.class);
 
-    private static final Map<String, Set<String>> ACCESS_MAP = buildAccessMap();
+    private static final Map<String, Map<String, Set<String>>> SERVICE_ACCESS_MAPS = buildServiceAccessMaps();
 
     private final Map<String, String> principalMap;  // Ranger name → IAM ARN
     private final TableExpander tableExpander;
@@ -26,52 +26,58 @@ public class ExpectedPermissionsComputer {
 
     /**
      * Compute expected permissions from a list of raw Ranger policies.
+     * Two-pass: first collect all deny triples globally, then collect permits
+     * and subtract those matching any deny.
      *
      * @param policies array of Ranger policy JSON nodes (from Ranger REST API)
      * @return flat set of expected SimulatorPermissions
      */
     public Set<SimulatorPermission> compute(List<JsonNode> policies) {
-        Set<SimulatorPermission> result = new HashSet<>();
+        // Pass 1: collect all deny keys across all services
+        Set<DenyKey> globalDenySet = new HashSet<>();
         for (JsonNode policy : policies) {
-            processPolicyInto(policy, result);
+            if (!shouldProcess(policy)) continue;
+            collectDenies(policy, globalDenySet);
         }
-        return result;
+
+        // Pass 2: collect all permit entries
+        Set<SimulatorPermission> permits = new HashSet<>();
+        for (JsonNode policy : policies) {
+            if (!shouldProcess(policy)) continue;
+            processPermitsInto(policy, permits);
+        }
+
+        // Subtract any permit that is matched by a deny
+        permits.removeIf(p ->
+            globalDenySet.contains(new DenyKey(p.principalArn(), p.resourceId(), p.permission())));
+
+        return permits;
     }
 
-    private void processPolicyInto(JsonNode policy, Set<SimulatorPermission> result) {
-        // 1. Skip disabled
-        if (!policy.path("isEnabled").asBoolean(true)) {
-            LOG.debug("Skipping disabled policy {}", policy.path("id").asText());
-            return;
-        }
-        // 2. Skip tag-based (service name contains "tag")
-        String serviceName = policy.path("service").asText("");
-        if (serviceName.toLowerCase(Locale.ROOT).contains("tag")) {
-            LOG.debug("Skipping tag-based policy {}", policy.path("id").asText());
-            return;
-        }
-        // 3. Skip data masking
-        if (policy.path("policyType").asInt(0) == 1) {
-            LOG.debug("Skipping data masking policy {}", policy.path("id").asText());
-            return;
-        }
-        // 4. Determine resource context
+    private boolean shouldProcess(JsonNode policy) {
+        if (!policy.path("isEnabled").asBoolean(true)) return false;
+        String svc = policy.path("service").asText("").toLowerCase(Locale.ROOT);
+        if (svc.contains("tag")) return false;
+        if (policy.path("policyType").asInt(0) == 1) return false;
         JsonNode resources = policy.path("resources");
-        if (resources.isMissingNode() || resources.isEmpty()) {
-            LOG.debug("Skipping policy with no resources {}", policy.path("id").asText());
-            return;
-        }
-        // 5. Process only allow items (not deny items)
-        JsonNode policyItems = policy.path("policyItems");
-        if (!policyItems.isArray()) return;
-        for (JsonNode item : policyItems) {
-            processItemInto(item, resources, result);
+        if (resources.isMissingNode() || resources.isEmpty()) return false;
+        return true;
+    }
+
+    private void processPermitsInto(JsonNode policy, Set<SimulatorPermission> result) {
+        String serviceName = policy.path("service").asText(null);
+        Map<String, Set<String>> accessMap = accessMapForService(serviceName);
+        JsonNode resources = policy.path("resources");
+        for (JsonNode item : policy.path("policyItems")) {
+            processItemInto(item, resources, result, accessMap);
         }
     }
 
-    private void processItemInto(JsonNode item, JsonNode resources, Set<SimulatorPermission> result) {
+    private void processItemInto(JsonNode item, JsonNode resources,
+                                  Set<SimulatorPermission> result,
+                                  Map<String, Set<String>> accessMap) {
         // Resolve permissions from accesses
-        Set<String> permissions = extractPermissions(item.path("accesses"));
+        Set<String> permissions = extractPermissions(item.path("accesses"), accessMap);
         if (permissions.isEmpty()) return;
 
         // Resolve principals
@@ -100,13 +106,13 @@ public class ExpectedPermissionsComputer {
         }
     }
 
-    private Set<String> extractPermissions(JsonNode accesses) {
+    private Set<String> extractPermissions(JsonNode accesses, Map<String, Set<String>> accessMap) {
         Set<String> result = new LinkedHashSet<>();
         if (!accesses.isArray()) return result;
         for (JsonNode access : accesses) {
             if (!access.path("isAllowed").asBoolean(true)) continue;
             String type = access.path("type").asText("").toLowerCase(Locale.ROOT).trim();
-            Set<String> mapped = ACCESS_MAP.get(type);
+            Set<String> mapped = accessMap.get(type);
             if (mapped != null) result.addAll(mapped);
         }
         return result;
@@ -138,8 +144,11 @@ public class ExpectedPermissionsComputer {
             }
             return specs;
         }
-        // Database names
+        // Database names — also check "schema" key (used by Trino)
         List<String> databases = resourceValues(resources, "database");
+        if (databases.isEmpty()) {
+            databases = resourceValues(resources, "schema"); // Trino uses "schema" not "database"
+        }
         if (databases.isEmpty()) return specs;
 
         boolean hasTable = hasNonEmptyResource(resources, "table");
@@ -198,23 +207,87 @@ public class ExpectedPermissionsComputer {
 
     private record ResourceSpec(String resourceType, String resourceId, boolean isColumn) {}
 
-    private static Map<String, Set<String>> buildAccessMap() {
-        Map<String, Set<String>> m = new HashMap<>();
-        m.put("select",               Set.of("SELECT"));
-        m.put("insert",               Set.of("INSERT"));
-        m.put("delete",               Set.of("DELETE"));
-        m.put("describe",             Set.of("DESCRIBE"));
-        m.put("alter",                Set.of("ALTER"));
-        m.put("drop",                 Set.of("DROP"));
-        m.put("create_database",      Set.of("CREATE_DATABASE"));
-        m.put("create_table",         Set.of("CREATE_TABLE"));
-        m.put("update",               Set.of("INSERT"));           // legacy alias
-        m.put("create",               Set.of("CREATE_TABLE"));     // legacy alias
-        m.put("read",                 Set.of("SELECT"));           // legacy alias
-        m.put("write",                Set.of("INSERT"));           // legacy alias
-        m.put("all",                  Set.of("SELECT", "INSERT", "DELETE", "ALTER", "DROP", "DESCRIBE"));
-        m.put("datalocation",         Set.of("DATA_LOCATION_ACCESS"));
-        m.put("data_location_access", Set.of("DATA_LOCATION_ACCESS"));
-        return Collections.unmodifiableMap(m);
+    private record DenyKey(String principalArn, String resourceId, String permission) {}
+
+    private void collectDenies(JsonNode policy, Set<DenyKey> denySet) {
+        String serviceName = policy.path("service").asText(null);
+        Map<String, Set<String>> accessMap = accessMapForService(serviceName);
+        JsonNode resources = policy.path("resources");
+
+        for (JsonNode item : policy.path("denyPolicyItems")) {
+            Set<String> lfPermissions = new HashSet<>();
+            for (JsonNode acc : item.path("accesses")) {
+                String type = acc.path("type").asText("").toLowerCase(Locale.ROOT);
+                Set<String> mapped = accessMap.get(type);
+                if (mapped != null) lfPermissions.addAll(mapped);
+            }
+            if (lfPermissions.isEmpty()) continue;
+
+            List<ResourceSpec> specs = extractResourceSpecs(resources, lfPermissions);
+            for (String principalArn : resolvePrincipals(item)) {
+                for (ResourceSpec spec : specs) {
+                    for (String permission : lfPermissions) {
+                        denySet.add(new DenyKey(principalArn, spec.resourceId(), permission));
+                    }
+                }
+            }
+        }
+    }
+
+    private Map<String, Set<String>> accessMapForService(String serviceName) {
+        String key = (serviceName == null || serviceName.isEmpty())
+                     ? "lakeformation"
+                     : serviceName.toLowerCase(Locale.ROOT);
+        Map<String, Set<String>> map = SERVICE_ACCESS_MAPS.get(key);
+        if (map == null) {
+            LOG.warn("Unknown service name '{}'; falling back to lakeformation access map", serviceName);
+            return SERVICE_ACCESS_MAPS.get("lakeformation");
+        }
+        return map;
+    }
+
+    private static Map<String, Map<String, Set<String>>> buildServiceAccessMaps() {
+        Map<String, Set<String>> lfMap = new HashMap<>();
+        lfMap.put("select",               Set.of("SELECT"));
+        lfMap.put("insert",               Set.of("INSERT"));
+        lfMap.put("delete",               Set.of("DELETE"));
+        lfMap.put("describe",             Set.of("DESCRIBE"));
+        lfMap.put("alter",                Set.of("ALTER"));
+        lfMap.put("drop",                 Set.of("DROP"));
+        lfMap.put("create_database",      Set.of("CREATE_DATABASE"));
+        lfMap.put("create_table",         Set.of("CREATE_TABLE"));
+        lfMap.put("update",               Set.of("INSERT"));
+        lfMap.put("create",               Set.of("CREATE_TABLE"));
+        lfMap.put("read",                 Set.of("SELECT"));
+        lfMap.put("write",                Set.of("INSERT"));
+        lfMap.put("all",                  Set.of("SELECT", "INSERT", "DELETE", "ALTER", "DROP", "DESCRIBE"));
+        lfMap.put("datalocation",         Set.of("DATA_LOCATION_ACCESS"));
+        lfMap.put("data_location_access", Set.of("DATA_LOCATION_ACCESS"));
+
+        Map<String, Set<String>> hiveMap = new HashMap<>();
+        hiveMap.put("select", Set.of("SELECT"));
+        hiveMap.put("update", Set.of("INSERT"));
+        hiveMap.put("create", Set.of("CREATE_TABLE"));
+        hiveMap.put("drop",   Set.of("DROP"));
+        hiveMap.put("alter",  Set.of("ALTER"));
+        hiveMap.put("read",   Set.of("SELECT"));
+        hiveMap.put("write",  Set.of("INSERT"));
+        // "all" intentionally absent: maps to SUPER which is not an LF permission
+
+        Map<String, Set<String>> trinoMap = new HashMap<>();
+        trinoMap.put("select", Set.of("SELECT"));
+        trinoMap.put("insert", Set.of("INSERT"));
+        trinoMap.put("delete", Set.of("DELETE"));
+        trinoMap.put("create", Set.of("CREATE_TABLE"));
+        trinoMap.put("drop",   Set.of("DROP"));
+        trinoMap.put("alter",  Set.of("ALTER"));
+        trinoMap.put("use",    Set.of("DESCRIBE"));
+        trinoMap.put("show",   Set.of("DESCRIBE"));
+
+        Map<String, Map<String, Set<String>>> result = new HashMap<>();
+        result.put("lakeformation", Collections.unmodifiableMap(lfMap));
+        result.put("hive",          Collections.unmodifiableMap(hiveMap));
+        result.put("trino",         Collections.unmodifiableMap(trinoMap));
+        return Collections.unmodifiableMap(result);
     }
 }
