@@ -27,7 +27,7 @@ public class DataLocationPolicyGenerator {
     /**
      * Generate a DATA_LOCATION_ACCESS policy for a random S3 path.
      */
-    public Map<String, Object> generateDataLocationPolicy(String policyId) {
+    public Map<String, Object> generate(String policyId) {
         String path = randomFrom(s3Paths);
         String user = randomFrom(principalNames);
 
@@ -43,7 +43,6 @@ public class DataLocationPolicyGenerator {
         );
 
         return Map.of(
-                "id", policyId,
                 "name", "sim-datalocation-" + policyId,
                 "service", hiveServiceName,
                 "isEnabled", true,

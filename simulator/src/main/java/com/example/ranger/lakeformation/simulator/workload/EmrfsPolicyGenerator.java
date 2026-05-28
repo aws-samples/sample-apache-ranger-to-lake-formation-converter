@@ -29,7 +29,7 @@ public class EmrfsPolicyGenerator {
     /**
      * Generate an EMRFS policy for a random S3 prefix.
      */
-    public Map<String, Object> generateEmrfsPolicy(String policyId) {
+    public Map<String, Object> generate(String policyId) {
         String prefix = randomFrom(s3Prefixes);
         String user = randomFrom(principalNames);
         String accessType = randomFrom(EMRFS_ACCESS_TYPES);
@@ -46,7 +46,6 @@ public class EmrfsPolicyGenerator {
         );
 
         return Map.of(
-                "id", policyId,
                 "name", "sim-emrfs-" + policyId,
                 "service", emrfsServiceName,
                 "isEnabled", true,

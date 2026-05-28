@@ -31,7 +31,7 @@ public class TagPolicyGenerator {
      * Generate a tag-based policy for a random LF-tag key.
      * This will produce a GAP_RECORD (TAG_BASED_POLICY) in the sync service and zero LF grants.
      */
-    public Map<String, Object> generateTagPolicy(String policyId) {
+    public Map<String, Object> generate(String policyId) {
         String tagKey = randomFrom(tagKeys);
         String user = randomFrom(principalNames);
 
@@ -47,7 +47,6 @@ public class TagPolicyGenerator {
         );
 
         return Map.of(
-                "id", policyId,
                 "name", "sim-tag-" + policyId,
                 "service", tagServiceName,
                 "isEnabled", true,

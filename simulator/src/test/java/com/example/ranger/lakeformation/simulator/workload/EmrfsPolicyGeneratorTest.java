@@ -21,10 +21,10 @@ class EmrfsPolicyGeneratorTest {
         return new EmrfsPolicyGenerator(S3_PREFIXES, PRINCIPALS, EMRFS_SERVICE, new Random(seed));
     }
 
-    // 1. generateEmrfsPolicy() returns map with "s3prefix" in resources
+    // 1. generate() returns map with "s3prefix" in resources
     @Test
     void generateEmrfsPolicy_hasS3PrefixInResources() {
-        Map<String, Object> policy = generator(42).generateEmrfsPolicy("p1");
+        Map<String, Object> policy = generator(42).generate("p1");
         assertNotNull(policy);
         @SuppressWarnings("unchecked")
         Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
@@ -35,9 +35,17 @@ class EmrfsPolicyGeneratorTest {
     // 2. Service name is the emrfsServiceName passed to constructor
     @Test
     void generateEmrfsPolicy_serviceNameMatchesConstructorArg() {
-        Map<String, Object> policy = generator(7).generateEmrfsPolicy("p2");
+        Map<String, Object> policy = generator(7).generate("p2");
         assertEquals(EMRFS_SERVICE, policy.get("service"),
                 "service name should match the emrfsServiceName passed to constructor");
+    }
+
+    // 4. No "id" key in payload — Ranger rejects string 'id' fields
+    @Test
+    void generateEmrfsPolicy_noIdInPayload() {
+        Map<String, Object> policy = generator(42).generate("test-id");
+        assertFalse(policy.containsKey("id"),
+                "Ranger rejects string 'id' fields — payload must not include 'id'");
     }
 
     // 3. "policyItems" has one item with a "read", "write", or "read_write" access type
@@ -46,7 +54,7 @@ class EmrfsPolicyGeneratorTest {
         Set<String> validTypes = Set.of("read", "write", "read_write");
         // Run several times with different seeds to exercise all access types
         for (long seed = 0; seed < 20; seed++) {
-            Map<String, Object> policy = generator(seed).generateEmrfsPolicy("p3-" + seed);
+            Map<String, Object> policy = generator(seed).generate("p3-" + seed);
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> policyItems = (List<Map<String, Object>>) policy.get("policyItems");
             assertNotNull(policyItems);

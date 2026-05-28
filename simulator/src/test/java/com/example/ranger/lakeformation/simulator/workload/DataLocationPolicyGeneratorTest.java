@@ -20,10 +20,10 @@ class DataLocationPolicyGeneratorTest {
         return new DataLocationPolicyGenerator(S3_PATHS, PRINCIPALS, SERVICE, new Random(seed));
     }
 
-    // 1. generateDataLocationPolicy() returns map with "datalocation" in resources
+    // 1. generate() returns map with "datalocation" in resources
     @Test
     void generateDataLocationPolicy_hasDataLocationInResources() {
-        Map<String, Object> policy = generator(42).generateDataLocationPolicy("p1");
+        Map<String, Object> policy = generator(42).generate("p1");
         assertNotNull(policy);
         @SuppressWarnings("unchecked")
         Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
@@ -34,7 +34,7 @@ class DataLocationPolicyGeneratorTest {
     // 2. "policyItems" contains one item with access type "datalocation"
     @Test
     void generateDataLocationPolicy_policyItemHasDatalocationAccessType() {
-        Map<String, Object> policy = generator(7).generateDataLocationPolicy("p2");
+        Map<String, Object> policy = generator(7).generate("p2");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> policyItems = (List<Map<String, Object>>) policy.get("policyItems");
         assertNotNull(policyItems);
@@ -51,15 +51,23 @@ class DataLocationPolicyGeneratorTest {
     // 3. "policyType" is 0 (allow policy)
     @Test
     void generateDataLocationPolicy_policyTypeIsZero() {
-        Map<String, Object> policy = generator(99).generateDataLocationPolicy("p3");
+        Map<String, Object> policy = generator(99).generate("p3");
         assertEquals(0, policy.get("policyType"), "policyType should be 0 (allow policy)");
+    }
+
+    // 5. No "id" key in payload — Ranger rejects string 'id' fields
+    @Test
+    void generateDataLocationPolicy_noIdInPayload() {
+        Map<String, Object> policy = generator(42).generate("test-id");
+        assertFalse(policy.containsKey("id"),
+                "Ranger rejects string 'id' fields — payload must not include 'id'");
     }
 
     // 4. Fixed seed → deterministic output
     @Test
     void generateDataLocationPolicy_deterministicWithFixedSeed() {
-        Map<String, Object> first = generator(12345).generateDataLocationPolicy("p4");
-        Map<String, Object> second = generator(12345).generateDataLocationPolicy("p4");
+        Map<String, Object> first = generator(12345).generate("p4");
+        Map<String, Object> second = generator(12345).generate("p4");
         assertEquals(first.get("name"), second.get("name"));
         assertEquals(first.get("service"), second.get("service"));
         @SuppressWarnings("unchecked")

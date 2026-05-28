@@ -24,10 +24,10 @@ class TagPolicyGeneratorTest {
         return new TagPolicyGenerator(TAG_KEYS, PRINCIPALS, TAG_SERVICE, new Random(seed));
     }
 
-    // 1. generateTagPolicy() returns map with service name containing "tag"
+    // 1. generate() returns map with service name containing "tag"
     @Test
     void generateTagPolicy_serviceNameContainsTag() {
-        Map<String, Object> policy = generator(42).generateTagPolicy("p1");
+        Map<String, Object> policy = generator(42).generate("p1");
         assertNotNull(policy);
         String serviceName = (String) policy.get("service");
         assertNotNull(serviceName);
@@ -44,10 +44,18 @@ class TagPolicyGeneratorTest {
         );
     }
 
+    // 4. No "id" key in payload — Ranger rejects string 'id' fields
+    @Test
+    void generateTagPolicy_noIdInPayload() {
+        Map<String, Object> policy = generator(42).generate("test-id");
+        assertFalse(policy.containsKey("id"),
+                "Ranger rejects string 'id' fields — payload must not include 'id'");
+    }
+
     // 3. ExpectedPermissionsComputer.compute() returns empty set for a tag policy
     @Test
     void tagPolicy_producesNoExpectedPermissions() {
-        Map<String, Object> tagPolicy = generator(99).generateTagPolicy("p3");
+        Map<String, Object> tagPolicy = generator(99).generate("p3");
         JsonNode policyNode = MAPPER.valueToTree(tagPolicy);
 
         Map<String, String> principalMap = Map.of(
