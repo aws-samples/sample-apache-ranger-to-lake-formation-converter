@@ -7,7 +7,8 @@ import java.util.*;
  * Produces policies that cover database, table, and column levels.
  */
 public class HivePolicyGenerator {
-    private static final List<String> DEFAULT_ACCESS_TYPES = List.of("select", "insert", "delete", "describe");
+    private static final List<String> HIVE_ACCESS_TYPES =
+            List.of("select", "update", "read", "write", "create", "drop", "alter");
 
     private final Map<String, List<String>> databaseTables;  // db name → table names in that db
     private final List<String> databases;                     // ordered key list for random selection
@@ -33,7 +34,7 @@ public class HivePolicyGenerator {
         List<String> tables = databaseTables.getOrDefault(db, List.of());
         String table = tables.isEmpty() ? "*" : randomFrom(tables);
         String user = randomFrom(principalNames);
-        List<String> accesses = randomSubset(DEFAULT_ACCESS_TYPES, 1 + random.nextInt(3));
+        List<String> accesses = randomSubset(HIVE_ACCESS_TYPES, 1 + random.nextInt(3));
 
         return buildPolicy(policyId, db, table, null, user, accesses, false);
     }
@@ -66,7 +67,7 @@ public class HivePolicyGenerator {
                 "isEnabled", true,
                 "policyType", 0,
                 "resources", resources,
-                "policyItems", List.of(buildItem(user, List.of("create_table", "drop"), false)),
+                "policyItems", List.of(buildItem(user, List.of("create", "drop"), false)),
                 "denyPolicyItems", List.of()
         );
     }

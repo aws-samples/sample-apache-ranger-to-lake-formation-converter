@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -64,6 +65,68 @@ class HivePolicyGeneratorTest {
         assertNotNull(resources);
         assertTrue(resources.containsKey("database"), "resources should have 'database'");
         assertFalse(resources.containsKey("table"), "database policy should NOT have 'table' in resources");
+    }
+
+    // 6. generateTablePolicy() only produces valid Hive access types
+    @Test
+    void generateTablePolicy_usesHiveAccessTypes() {
+        Set<String> validHiveTypes = Set.of("select", "update", "read", "write", "create", "drop", "alter");
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateTablePolicy("p-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            assertNotNull(items);
+            for (Map<String, Object> item : items) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> accesses = (List<Map<String, Object>>) item.get("accesses");
+                for (Map<String, Object> access : accesses) {
+                    String type = (String) access.get("type");
+                    assertTrue(validHiveTypes.contains(type),
+                            "Access type '" + type + "' is not a valid Hive access type");
+                }
+            }
+        }
+    }
+
+    // 7. generateTablePolicy() table name belongs to the chosen database
+    @Test
+    void generateTablePolicy_tableNameBelongsToChosenDatabase() {
+        // Run 100 iterations with fixed seed; every table must be in databaseTables.get(db)
+        for (int seed = 0; seed < 100; seed++) {
+            Map<String, Object> policy = generator(seed).generateTablePolicy("p-" + seed);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
+            @SuppressWarnings("unchecked")
+            List<String> dbs = (List<String>) ((Map<String, Object>) resources.get("database")).get("values");
+            @SuppressWarnings("unchecked")
+            List<String> tables = (List<String>) ((Map<String, Object>) resources.get("table")).get("values");
+            String db = dbs.get(0);
+            String table = tables.get(0);
+            if (!"*".equals(table)) {
+                assertTrue(DATABASE_TABLES.getOrDefault(db, List.of()).contains(table),
+                        "Table '" + table + "' does not belong to db '" + db + "'");
+            }
+        }
+    }
+
+    // 8. generateDatabasePolicy() uses "create" not "create_table"
+    @Test
+    void generateDatabasePolicy_usesHiveCreateNotCreateTable() {
+        // generateDatabasePolicy should use "create" and "drop", not "create_table"
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateDatabasePolicy("dp-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            for (Map<String, Object> item : items) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> accesses = (List<Map<String, Object>>) item.get("accesses");
+                for (Map<String, Object> access : accesses) {
+                    String type = (String) access.get("type");
+                    assertNotEquals("create_table", type,
+                            "generateDatabasePolicy must use 'create' not 'create_table'");
+                }
+            }
+        }
     }
 
     // 5. Fixed seed → deterministic output (same policy generated twice with same seed)
