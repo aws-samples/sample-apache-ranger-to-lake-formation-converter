@@ -1,11 +1,7 @@
 package com.example.ranger.lakeformation.simulator.workload;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 
 /**
  * Generates weighted-random batches of MutationOperation for one simulator cycle.
@@ -16,84 +12,91 @@ import java.util.Random;
  *   DISABLE 15%
  *   ENABLE  15%
  *   DELETE  10%
- *   (remaining 10% reserved — currently treated as no-op / empty batch entry)
+ *   (remaining 10% no-op)
  *
+ * Generator selection is a second weighted draw across the List<GeneratorEntry>.
  * Batch size is 1–5, chosen uniformly at random.
  */
 public class WorkloadOrchestrator {
     private static final int BATCH_MIN = 1;
     private static final int BATCH_MAX = 5;
-
-    // Cumulative weight thresholds (exclusive upper bound)
     private static final int WEIGHT_CREATE  = 30;
-    private static final int WEIGHT_UPDATE  = 50;   // 30+20
-    private static final int WEIGHT_DISABLE = 65;   // 50+15
-    private static final int WEIGHT_ENABLE  = 80;   // 65+15
-    private static final int WEIGHT_DELETE  = 90;   // 80+10
-    // 90–99 reserved → treated as no-op (not appended to batch)
+    private static final int WEIGHT_UPDATE  = 50;
+    private static final int WEIGHT_DISABLE = 65;
+    private static final int WEIGHT_ENABLE  = 80;
+    private static final int WEIGHT_DELETE  = 90;
 
     private final List<String> principalPool;
     private final List<String> existingPolicyIds;
+    private final List<GeneratorEntry> generators;
+    private final int totalWeight;
     private final Random random;
-    private final HivePolicyGenerator policyGenerator;
 
     public WorkloadOrchestrator(List<String> principalPool, List<String> existingPolicyIds,
-                                Map<String, List<String>> databaseTables,
-                                String hiveServiceName, Random random) {
-        this.principalPool = List.copyOf(principalPool);
+                                List<GeneratorEntry> generators, Random random) {
+        this.principalPool     = List.copyOf(principalPool);
         this.existingPolicyIds = new ArrayList<>(existingPolicyIds);
-        this.random = random;
-        this.policyGenerator = new HivePolicyGenerator(databaseTables, this.principalPool, hiveServiceName, random);
+        this.generators        = List.copyOf(generators);
+        this.totalWeight       = generators.stream().mapToInt(GeneratorEntry::weight).sum();
+        this.random            = random;
     }
 
-    /**
-     * Generate one batch for a cycle. Batch size is 1–5.
-     * Returned list may be smaller than batch size if reserved slots are drawn.
-     */
     public List<MutationOperation> generateBatch() {
         int batchSize = BATCH_MIN + random.nextInt(BATCH_MAX - BATCH_MIN + 1);
         List<MutationOperation> batch = new ArrayList<>();
         for (int i = 0; i < batchSize; i++) {
-            int roll = random.nextInt(100);
-            MutationOperation op = pickOperation(roll);
-            if (op != null) {
-                batch.add(op);
-            }
+            MutationOperation op = pickOperation(random.nextInt(100));
+            if (op != null) batch.add(op);
         }
         return batch;
     }
 
+    public List<String> getExistingPolicyIds() {
+        return Collections.unmodifiableList(existingPolicyIds);
+    }
+
     private MutationOperation pickOperation(int roll) {
-        Instant now = Instant.now();
         if (roll < WEIGHT_CREATE) {
-            String newId = "sim-policy-" + System.nanoTime();
+            GeneratorEntry entry = pickGenerator();
+            String newId = entry.name() + "-sim-" + System.nanoTime();
+            Map<String, Object> payload = entry.generator().generate(newId);
             existingPolicyIds.add(newId);
-            return new MutationOperation.CreatePolicy(now, newId, policyGenerator.generateTablePolicy(newId));
-        } else if (roll < WEIGHT_UPDATE) {
-            if (existingPolicyIds.isEmpty()) return null;
+            return new MutationOperation.CreatePolicy(Instant.now(), newId, payload);
+        }
+        if (existingPolicyIds.isEmpty()) return null;
+        if (roll < WEIGHT_UPDATE) {
+            GeneratorEntry entry = pickGenerator();
             String id = randomFrom(existingPolicyIds);
-            return new MutationOperation.UpdatePolicy(now, id, policyGenerator.generateTablePolicy(id));
-        } else if (roll < WEIGHT_DISABLE) {
-            if (existingPolicyIds.isEmpty()) return null;
-            return new MutationOperation.DisablePolicy(now, randomFrom(existingPolicyIds));
-        } else if (roll < WEIGHT_ENABLE) {
-            if (existingPolicyIds.isEmpty()) return null;
-            return new MutationOperation.EnablePolicy(now, randomFrom(existingPolicyIds));
-        } else if (roll < WEIGHT_DELETE) {
-            if (existingPolicyIds.isEmpty()) return null;
+            Map<String, Object> payload = entry.generator().generate(id);
+            return new MutationOperation.UpdatePolicy(Instant.now(), id, payload);
+        }
+        if (roll < WEIGHT_DISABLE) {
+            String id = randomFrom(existingPolicyIds);
+            return new MutationOperation.DisablePolicy(Instant.now(), id);
+        }
+        if (roll < WEIGHT_ENABLE) {
+            String id = randomFrom(existingPolicyIds);
+            return new MutationOperation.EnablePolicy(Instant.now(), id);
+        }
+        if (roll < WEIGHT_DELETE) {
             String id = randomFrom(existingPolicyIds);
             existingPolicyIds.remove(id);
-            return new MutationOperation.DeletePolicy(now, id);
+            return new MutationOperation.DeletePolicy(Instant.now(), id);
         }
-        return null; // reserved range 90–99
+        return null;
+    }
+
+    private GeneratorEntry pickGenerator() {
+        int roll = random.nextInt(totalWeight);
+        int cumulative = 0;
+        for (GeneratorEntry entry : generators) {
+            cumulative += entry.weight();
+            if (roll < cumulative) return entry;
+        }
+        return generators.getLast();
     }
 
     private String randomFrom(List<String> list) {
         return list.get(random.nextInt(list.size()));
-    }
-
-    /** Expose current known policy IDs (after mutations from generated batches). */
-    public List<String> getExistingPolicyIds() {
-        return Collections.unmodifiableList(existingPolicyIds);
     }
 }

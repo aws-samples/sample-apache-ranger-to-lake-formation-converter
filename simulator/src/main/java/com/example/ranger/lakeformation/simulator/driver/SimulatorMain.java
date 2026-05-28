@@ -69,8 +69,19 @@ public class SimulatorMain {
                 ? new ArrayList<>(config.getPrincipalMappings().keySet())
                 : config.getPrincipalPool();
 
+        // TODO(Task8): replace with full multi-service generator list
+        Random rng = new Random();
+        HivePolicyGenerator hivePolicyGenerator =
+                new HivePolicyGenerator(databaseTables, principals, config.getRangerServiceName(), rng);
+        List<GeneratorEntry> generators = List.of(
+                new GeneratorEntry("hive",         hivePolicyGenerator::generateTablePolicy, 45),
+                new GeneratorEntry("trino",        new TrinoServiceGenerator(databaseTables, principals, config.getRangerServiceName(), rng)::generate, 25),
+                new GeneratorEntry("datalocation", new DataLocationPolicyGenerator(List.of(), principals, config.getRangerServiceName(), rng)::generate, 15),
+                new GeneratorEntry("tag",          new TagPolicyGenerator(List.of(), principals, config.getRangerServiceName() + "-tag", rng)::generate, 10),
+                new GeneratorEntry("emrfs",        new EmrfsPolicyGenerator(List.of(), principals, config.getRangerServiceName() + "-emrfs", rng)::generate, 5)
+        );
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
-                principals, new ArrayList<>(), databaseTables, config.getRangerServiceName(), new Random());
+                principals, new ArrayList<>(), generators, rng);
 
         MutationDriver mutationDriver = new MutationDriver(rangerClient, mutationLog);
 
