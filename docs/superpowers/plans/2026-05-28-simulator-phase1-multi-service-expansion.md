@@ -1256,6 +1256,15 @@ private void processItemInto(JsonNode item, JsonNode resources,
                               Map<String, Set<String>> accessMap)
 ```
 
+Also update the internal call inside the body from:
+```java
+Set<String> permissions = extractPermissions(item.path("accesses"));
+```
+to:
+```java
+Set<String> permissions = extractPermissions(item.path("accesses"), accessMap);
+```
+
 Then pass `accessMapForService(serviceName)` from `processPermitsInto()` down to each `processItemInto()` call. `serviceName` is already available at the top of `processPermitsInto()` — read it as `policy.path("service").asText(null)` if not already done.
 
 **4b. Add `schema` fallback in `extractResourceSpecs()`**
