@@ -122,8 +122,8 @@ class HivePolicyGeneratorTest {
                 List<Map<String, Object>> accesses = (List<Map<String, Object>>) item.get("accesses");
                 for (Map<String, Object> access : accesses) {
                     String type = (String) access.get("type");
-                    assertNotEquals("create_table", type,
-                            "generateDatabasePolicy must use 'create' not 'create_table'");
+                    assertTrue(Set.of("create", "drop").contains(type),
+                            "generateDatabasePolicy access type '" + type + "' must be 'create' or 'drop'");
                 }
             }
         }
