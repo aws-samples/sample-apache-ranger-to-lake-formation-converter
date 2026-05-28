@@ -81,7 +81,7 @@ public class SimulatorMain {
                 new GeneratorEntry("emrfs",        new EmrfsPolicyGenerator(List.of(), principals, config.getRangerServiceName() + "-emrfs", rng)::generate, 5)
         );
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
-                principals, new ArrayList<>(), generators, rng);
+                new ArrayList<>(), generators, rng);
 
         MutationDriver mutationDriver = new MutationDriver(rangerClient, mutationLog);
 

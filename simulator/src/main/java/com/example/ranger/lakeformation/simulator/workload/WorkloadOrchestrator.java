@@ -26,15 +26,13 @@ public class WorkloadOrchestrator {
     private static final int WEIGHT_ENABLE  = 80;
     private static final int WEIGHT_DELETE  = 90;
 
-    private final List<String> principalPool;
     private final List<String> existingPolicyIds;
     private final List<GeneratorEntry> generators;
     private final int totalWeight;
     private final Random random;
 
-    public WorkloadOrchestrator(List<String> principalPool, List<String> existingPolicyIds,
+    public WorkloadOrchestrator(List<String> existingPolicyIds,
                                 List<GeneratorEntry> generators, Random random) {
-        this.principalPool     = List.copyOf(principalPool);
         this.existingPolicyIds = new ArrayList<>(existingPolicyIds);
         this.generators        = List.copyOf(generators);
         this.totalWeight       = generators.stream().mapToInt(GeneratorEntry::weight).sum();
@@ -58,7 +56,7 @@ public class WorkloadOrchestrator {
     private MutationOperation pickOperation(int roll) {
         if (roll < WEIGHT_CREATE) {
             GeneratorEntry entry = pickGenerator();
-            String newId = entry.name() + "-sim-" + System.nanoTime();
+            String newId = entry.name() + "-sim-" + Long.toUnsignedString(random.nextLong(), 36);
             Map<String, Object> payload = entry.generator().generate(newId);
             existingPolicyIds.add(newId);
             return new MutationOperation.CreatePolicy(Instant.now(), newId, payload);

@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class WorkloadOrchestratorTest {
 
-    private static final List<String> PRINCIPALS = List.of("user:alice", "user:bob");
     private static final long FIXED_SEED = 42L;
 
     // Build a 5-entry generator list; each lambda captures the service name in the payload
@@ -21,7 +20,7 @@ class WorkloadOrchestratorTest {
     }
 
     private WorkloadOrchestrator orchestrator(List<String> policyIds, long seed) {
-        return new WorkloadOrchestrator(PRINCIPALS, policyIds, makeGenerators(), new Random(seed));
+        return new WorkloadOrchestrator(policyIds, makeGenerators(), new Random(seed));
     }
 
     @Test
