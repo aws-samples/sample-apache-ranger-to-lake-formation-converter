@@ -2,6 +2,13 @@ package com.example.ranger.lakeformation.simulator.workload;
 
 import java.util.*;
 
+/**
+ * Generates Ranger Trino service policy JSON payloads for the simulator workload.
+ * Uses {@code schema} (not {@code database}) as the resource key to match Trino's
+ * catalog/schema model, and the Trino access type vocabulary. Approximately 20% of
+ * generated policies include a {@code denyPolicyItems} entry to exercise cross-service
+ * forbid scenarios in the validator.
+ */
 public class TrinoServiceGenerator implements PolicyGenerator {
     private static final List<String> TRINO_ACCESS_TYPES =
         List.of("select", "insert", "delete", "create", "drop", "alter", "use", "show");
