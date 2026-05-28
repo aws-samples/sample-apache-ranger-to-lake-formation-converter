@@ -25,9 +25,9 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 - **CloudWatch Metrics**: Publishes operational metrics (sync cycle success/failure, duration, grants/revocations applied, error counts) to a configurable CloudWatch namespace.
 - **Dry-Run Mode**: Serializes LF operations to JSON files instead of calling AWS APIs, for testing and human review.
 
-### Cross-Service Deny Semantics
+## Cross-Service Deny Semantics
 
-All configured Ranger services are merged into a single Cedar evaluation namespace. A `forbid` from any service suppresses a `permit` from any other service for the same principal, action, and resource. This means a Trino deny policy will suppress a Hive grant for the same resource. Scope deny policies carefully when using multiple Ranger services.
+All configured Ranger services are merged into a single Cedar evaluation namespace. A `forbid` for principal P from any service suppresses a `permit` for the same principal P from any other service for the same action and resource. This means a Trino deny policy will suppress a Hive grant for the same resource. Scope deny policies carefully when using multiple Ranger services.
 
 ## Features not yet implemented
 

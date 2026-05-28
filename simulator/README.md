@@ -63,7 +63,7 @@ RangerPolicyClient ──── Ranger Admin ◄────────┤
 
 The sync service merges policies from **all configured Ranger services** into a single Cedar evaluation namespace before converting to Lake Formation permissions. Cedar's `forbid`-wins semantics apply **across service boundaries**:
 
-> A `forbid` from any service suppresses a `permit` from any other service for the same `(principal, action, resource)` triple.
+> A `forbid` for principal P from any service suppresses a `permit` for the same principal P from any other service for the same `(action, resource)` pair.
 
 **Example:** Hive grants `analyst` SELECT on `analytics.events`. Trino denies `analyst` SELECT on `analytics.events`. Effective Lake Formation permission: **no grant** — the Trino deny wins even though the grant came from Hive.
 
@@ -77,13 +77,13 @@ The sync service merges policies from **all configured Ranger services** into a 
 
 The simulator generates policies from five generators with weighted random selection:
 
-| Generator | Weight | Service | Notes |
-|-----------|--------|---------|-------|
-| `HivePolicyGenerator` | 45% | LakeFormation (Hive) | Table-level allow policies |
-| `TrinoServiceGenerator` | 25% | Trino | Uses `schema` key; ~20% include deny items |
-| `DataLocationPolicyGenerator` | 15% | LakeFormation | S3 prefix data-location policies |
-| `TagPolicyGenerator` | 10% | Tag service | Tag-based policies (recorded as coverage gaps) |
-| `EmrfsPolicyGenerator` | 5% | EMRFS | S3 Access Grants policies |
+| Generator | Weight | Config field (default) | Notes |
+|-----------|--------|------------------------|-------|
+| `HivePolicyGenerator` | 45% | `rangerServiceName` (`lakeformation`) | Table-level allow policies |
+| `TrinoServiceGenerator` | 25% | `trinoServiceName` (`trino`) | Uses `schema` key; ~20% include deny items |
+| `DataLocationPolicyGenerator` | 15% | `rangerServiceName` (`lakeformation`) | S3 prefix data-location policies |
+| `TagPolicyGenerator` | 10% | `tagServiceName` (`cl_tag`) | Tag-based policies (recorded as coverage gaps) |
+| `EmrfsPolicyGenerator` | 5% | `emrfsServiceName` (`emrfs`) | S3 Access Grants policies |
 
 ---
 
@@ -606,6 +606,8 @@ The following scenarios are not currently exercised by the simulator. Each repre
 ### 5. Deny policies
 
 **Scenario:** A Ranger policy has entries in `denyPolicyItems`. The sync service converts these to Cedar `forbid` statements which should suppress permits for the same (principal, action, resource) triple. The net result should be zero LF grants for the denied combination.
+
+Note: the `TrinoServiceGenerator` does emit deny items to exercise the **cross-service** forbid path (a Trino deny suppressing a Hive grant). What is not covered here is deny policies **within a single-service** Hive or LF policy.
 
 ---
 
