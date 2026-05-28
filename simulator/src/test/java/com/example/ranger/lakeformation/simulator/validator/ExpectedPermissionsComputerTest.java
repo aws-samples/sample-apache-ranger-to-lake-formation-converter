@@ -289,7 +289,8 @@ class ExpectedPermissionsComputerTest {
         assertEquals(1, result.size());
         SimulatorPermission perm = result.iterator().next();
         assertEquals("TABLE_WITH_COLUMNS", perm.resourceType(), "SELECT is stored as TABLE_WITH_COLUMNS in LF");
-        assertNotNull(perm.resourceId(), "Bare wildcard table should expand to concrete tables");
+        assertEquals("mydb.*", perm.resourceId(),
+                "Bare wildcard table pattern '*' should produce resourceId 'mydb.*'");
     }
 
     // -----------------------------------------------------------------------
@@ -437,6 +438,9 @@ class ExpectedPermissionsComputerTest {
                 + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],"
                 + "  \"delegateAdmin\":false}]}";
         Set<SimulatorPermission> result = computeFromJsonStrings(policyA, policyB);
+        // Cross-service deny is intentional: this validator uses a single logical resource space.
+        // DenyKey omits resourceType so that TABLE-based denies suppress TABLE_WITH_COLUMNS permits
+        // for the same (principal, resourceId, permission) — which is the correct LF semantic.
         assertTrue(result.isEmpty(),
                 "Trino deny must suppress Hive grant for same (principal, resource, permission)");
     }
@@ -448,8 +452,7 @@ class ExpectedPermissionsComputerTest {
     // Single-policy convenience helper used by the new hive/trino tests
     private Set<SimulatorPermission> compute(String json) {
         try {
-            ObjectMapper mapper = new ObjectMapper();
-            JsonNode policy = mapper.readTree(json);
+            JsonNode policy = MAPPER.readTree(json);
             return computer.compute(List.of(policy));
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -459,10 +462,9 @@ class ExpectedPermissionsComputerTest {
     // Multi-policy helper used by the cross-service forbid test
     private Set<SimulatorPermission> computeFromJsonStrings(String... jsonPolicies) {
         try {
-            ObjectMapper mapper = new ObjectMapper();
             List<JsonNode> nodes = new ArrayList<>();
             for (String json : jsonPolicies) {
-                nodes.add(mapper.readTree(json));
+                nodes.add(MAPPER.readTree(json));
             }
             return computer.compute(nodes);
         } catch (Exception e) {

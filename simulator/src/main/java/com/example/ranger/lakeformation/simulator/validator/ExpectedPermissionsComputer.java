@@ -217,6 +217,7 @@ public class ExpectedPermissionsComputer {
         for (JsonNode item : policy.path("denyPolicyItems")) {
             Set<String> lfPermissions = new HashSet<>();
             for (JsonNode acc : item.path("accesses")) {
+                if (!acc.path("isAllowed").asBoolean(true)) continue;
                 String type = acc.path("type").asText("").toLowerCase(Locale.ROOT);
                 Set<String> mapped = accessMap.get(type);
                 if (mapped != null) lfPermissions.addAll(mapped);
@@ -273,6 +274,8 @@ public class ExpectedPermissionsComputer {
         hiveMap.put("read",   Set.of("SELECT"));
         hiveMap.put("write",  Set.of("INSERT"));
         // "all" intentionally absent: maps to SUPER which is not an LF permission
+        // "describe" intentionally absent: Hive "describe" does not map to an LF permission
+        // "insert" intentionally absent: Hive uses "write" for insert semantics; "insert" is not a Hive access type
 
         Map<String, Set<String>> trinoMap = new HashMap<>();
         trinoMap.put("select", Set.of("SELECT"));
