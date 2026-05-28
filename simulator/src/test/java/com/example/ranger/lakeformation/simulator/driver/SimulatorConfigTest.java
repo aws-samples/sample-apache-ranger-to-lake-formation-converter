@@ -190,4 +190,14 @@ class SimulatorConfigTest {
         assertEquals("my-emrfs", config.getEmrfsServiceName());
         assertEquals("my-tag",   config.getTagServiceName());
     }
+
+    @Test
+    void s3PrefixesEmptyListFallsBackToDefaults() {
+        SimulatorConfig config = new SimulatorConfig(
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, List.of());
+        assertNotNull(config.getS3Prefixes());
+        assertFalse(config.getS3Prefixes().isEmpty(),
+                "Empty s3Prefixes list should fall back to default sample paths");
+    }
 }
