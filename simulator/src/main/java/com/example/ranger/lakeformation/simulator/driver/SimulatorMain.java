@@ -69,16 +69,25 @@ public class SimulatorMain {
                 ? new ArrayList<>(config.getPrincipalMappings().keySet())
                 : config.getPrincipalPool();
 
-        // TODO(Task8): replace with full multi-service generator list
         Random rng = new Random();
-        HivePolicyGenerator hivePolicyGenerator =
-                new HivePolicyGenerator(databaseTables, principals, config.getRangerServiceName(), rng);
+
+        HivePolicyGenerator hivePolicyGenerator = new HivePolicyGenerator(
+                databaseTables, principals, config.getRangerServiceName(), rng);
+        TrinoServiceGenerator trinoServiceGenerator = new TrinoServiceGenerator(
+                databaseTables, principals, config.getTrinoServiceName(), rng);
+        DataLocationPolicyGenerator dataLocationGenerator = new DataLocationPolicyGenerator(
+                config.getS3Prefixes(), principals, config.getRangerServiceName(), rng);
+        TagPolicyGenerator tagPolicyGenerator = new TagPolicyGenerator(
+                List.of(), principals, config.getTagServiceName(), rng);
+        EmrfsPolicyGenerator emrfsPolicyGenerator = new EmrfsPolicyGenerator(
+                config.getS3Prefixes(), principals, config.getEmrfsServiceName(), rng);
+
         List<GeneratorEntry> generators = List.of(
-                new GeneratorEntry("hive",         hivePolicyGenerator::generateTablePolicy, 45),
-                new GeneratorEntry("trino",        new TrinoServiceGenerator(databaseTables, principals, config.getRangerServiceName(), rng)::generate, 25),
-                new GeneratorEntry("datalocation", new DataLocationPolicyGenerator(List.of(), principals, config.getRangerServiceName(), rng)::generate, 15),
-                new GeneratorEntry("tag",          new TagPolicyGenerator(List.of(), principals, config.getRangerServiceName() + "-tag", rng)::generate, 10),
-                new GeneratorEntry("emrfs",        new EmrfsPolicyGenerator(List.of(), principals, config.getRangerServiceName() + "-emrfs", rng)::generate, 5)
+            new GeneratorEntry("hive",         hivePolicyGenerator::generateTablePolicy, 45),
+            new GeneratorEntry("trino",        trinoServiceGenerator::generate,          25),
+            new GeneratorEntry("datalocation", dataLocationGenerator::generate,          15),
+            new GeneratorEntry("tag",          tagPolicyGenerator::generate,             10),
+            new GeneratorEntry("emrfs",        emrfsPolicyGenerator::generate,            5)
         );
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
                 new ArrayList<>(), generators, rng);
@@ -132,6 +141,15 @@ public class SimulatorMain {
         }
     }
 
+    private static List<String> buildAllServiceNames(SimulatorConfig config) {
+        List<String> names = new ArrayList<>();
+        names.add(config.getRangerServiceName());
+        if (config.getTrinoServiceName() != null) names.add(config.getTrinoServiceName());
+        if (config.getEmrfsServiceName()  != null) names.add(config.getEmrfsServiceName());
+        if (config.getTagServiceName()    != null) names.add(config.getTagServiceName());
+        return names;
+    }
+
     @SuppressWarnings("java:S107")
     private void runOneCycle(long cycleNumber, SimulatorConfig config,
                               RangerPolicyClient rangerClient, MutationLog mutationLog,
@@ -177,14 +195,15 @@ public class SimulatorMain {
         }
 
         // Step 6: Fetch Ranger policies and Phase 2 correctness check
+        List<String> allServiceNames = buildAllServiceNames(config);
         var rangerPolicies = new ArrayList<com.fasterxml.jackson.databind.JsonNode>();
-        try {
-            var policiesNode = rangerClient.listPolicies(config.getRangerServiceName());
-            if (policiesNode.isArray()) {
-                policiesNode.forEach(rangerPolicies::add);
+        for (String svcName : allServiceNames) {
+            try {
+                var node = rangerClient.listPolicies(svcName);
+                if (node.isArray()) node.forEach(rangerPolicies::add);
+            } catch (Exception e) {
+                LOG.warn("Failed to fetch Ranger policies for service {}: {}", svcName, e.getMessage());
             }
-        } catch (Exception e) {
-            LOG.warn("Failed to fetch Ranger policies for Phase2: {}", e.getMessage());
         }
 
         ValidationResult phase2Result = phase2.validate(lfActual, rangerPolicies);
