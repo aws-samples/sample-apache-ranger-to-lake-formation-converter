@@ -54,9 +54,9 @@ The sync service merges all policies from all configured Ranger services into a 
 
 | File | Change |
 |------|--------|
-| `workload/DataLocationPolicyGenerator.java` | Remove `"id": policyId` from payload map |
-| `workload/EmrfsPolicyGenerator.java` | Remove `"id": policyId` from payload map |
-| `workload/TagPolicyGenerator.java` | Remove `"id": policyId` from payload map |
+| `workload/DataLocationPolicyGenerator.java` | Remove `"id": policyId` from payload map; rename `generateDataLocationPolicy(String)` to `generate(String)` so it implements `PolicyGenerator` |
+| `workload/EmrfsPolicyGenerator.java` | Remove `"id": policyId` from payload map; rename `generateEmrfsPolicy(String)` to `generate(String)` so it implements `PolicyGenerator` |
+| `workload/TagPolicyGenerator.java` | Remove `"id": policyId` from payload map; rename `generateTagPolicy(String)` to `generate(String)` so it implements `PolicyGenerator` |
 | `workload/HivePolicyGenerator.java` | Fix access types to Hive vocabulary; fix `generateDatabasePolicy()` to use `create` not `create_table`; service name comes from caller |
 | `workload/WorkloadOrchestrator.java` | Replace single generator with weighted `List<GeneratorEntry>`; rewrite `generateBatch()`/`pickOperation()` to dispatch to whichever generator is selected |
 | `driver/SimulatorConfig.java` | Add 4 optional fields: `trinoServiceName`, `emrfsServiceName`, `tagServiceName`, `s3Prefixes`; update `SimulatorConfigTest` accordingly |
@@ -126,7 +126,13 @@ Policy IDs for CREATE operations become `"{entry.name()}-sim-{nanoTime}"` so the
 public TrinoServiceGenerator(Map<String, List<String>> databaseTables,
                               List<String> principalNames,
                               String trinoServiceName,
-                              Random random)
+                              Random random) {
+    this.databaseTables = Map.copyOf(databaseTables);
+    this.databases = List.copyOf(databaseTables.keySet());  // derived key list for random pick
+    this.principalNames = List.copyOf(principalNames);
+    this.trinoServiceName = trinoServiceName;
+    this.random = random;
+}
 ```
 
 Uses resource key `schema` (not `database`). Access types drawn from Trino vocabulary only. ~20% of generated policies include a `denyPolicyItems` entry (same user, same resource, subset of access types) to exercise cross-service forbid scenarios.
@@ -136,7 +142,7 @@ private static final List<String> TRINO_ACCESS_TYPES =
     List.of("select", "insert", "delete", "create", "drop", "alter", "use", "show");
 
 public Map<String, Object> generate(String policyId) {
-    String schema = randomFrom(databases);
+    String schema = randomFrom(databases);  // databases = List.copyOf(databaseTables.keySet())
     List<String> tables = databaseTables.getOrDefault(schema, List.of());
     String table = tables.isEmpty() ? "*" : randomFrom(tables);
     String user = randomFrom(principalNames);
@@ -297,6 +303,37 @@ public Set<SimulatorPermission> compute(List<JsonNode> policies) {
 
 `collectDenies()` reads `denyPolicyItems`, resolves principals via the principal mapping, resolves access types using the same per-service `accessMapForService()` and the same `extractResourceSpecs()` helper used in `processPermitsInto()`, and adds `DenyKey` entries to the set. It applies the same `shouldProcess()` guard as Pass 2 (the guard is already applied in the outer loop above, so `collectDenies()` can assume it will only be called for enabled, non-masking, non-tag policies).
 
+```java
+private void collectDenies(JsonNode policy, Set<DenyKey> denySet) {
+    String serviceName = policy.path("service").asText(null);
+    Map<String, Set<String>> accessMap = accessMapForService(serviceName);
+    JsonNode resources = policy.path("resources");
+
+    for (JsonNode item : policy.path("denyPolicyItems")) {
+        Set<String> lfPermissions = new HashSet<>();
+        for (JsonNode acc : item.path("accesses")) {
+            String type = acc.path("type").asText();
+            Set<String> mapped = accessMap.get(type.toLowerCase(Locale.ROOT));
+            if (mapped != null) lfPermissions.addAll(mapped);
+        }
+        if (lfPermissions.isEmpty()) continue;
+
+        List<ResourceSpec> specs = extractResourceSpecs(resources, lfPermissions);
+        for (JsonNode user : item.path("users")) {
+            String principalArn = principalMappings.get(user.asText());
+            if (principalArn == null) continue;
+            for (ResourceSpec spec : specs) {
+                for (String permission : lfPermissions) {
+                    denySet.add(new DenyKey(principalArn, spec.resourceId(), permission));
+                }
+            }
+        }
+    }
+}
+```
+
+`ResourceSpec` and `extractResourceSpecs()` are the same types/methods already used in `processPermitsInto()` — no duplication.
+
 `processPermitsInto()` is the existing `processPolicyInto()` renamed, reading only `policyItems`.
 
 The `shouldProcess()` helper extracts the guard logic (disabled, tag service, masking policy checks) currently inlined in `processPolicyInto()`.
@@ -369,10 +406,14 @@ Add 4 optional fields (all nullable/defaulted — existing configs continue to w
 @JsonProperty("trinoServiceName")  String trinoServiceName   // default: "trino"
 @JsonProperty("emrfsServiceName")  String emrfsServiceName   // default: "emrfs"
 @JsonProperty("tagServiceName")    String tagServiceName      // default: "cl_tag"
-@JsonProperty("s3Prefixes")        List<String> s3Prefixes   // default: sample paths
+@JsonProperty("s3Prefixes")        List<String> s3Prefixes   // default: List.of("s3://my-bucket/data/", "s3://my-bucket/logs/")
 ```
 
-`SimulatorConfigTest`: add a `null` as the 15th–18th argument to all existing constructor calls; add tests verifying each new field defaults correctly and is defensively copied where applicable.
+Getters: `getTrinoServiceName()`, `getEmrfsServiceName()`, `getTagServiceName()`, `getS3Prefixes()` — follow the same defensive-copy pattern as `getPrincipalPool()`. `s3Prefixes` is a list and must be defensively copied in the constructor (same pattern as `principalPool`).
+
+`SimulatorMain` wires generators as: `new DataLocationPolicyGenerator(config.getS3Prefixes(), config.getPrincipalPool(), config.getRangerServiceName(), random)` — adjust if the existing constructor signature differs.
+
+`SimulatorConfigTest`: add four `null` arguments to all existing 14-arg constructor calls (see Unit Test Changes section for the exact instruction). Add tests verifying each new field defaults correctly and is defensively copied where applicable.
 
 ### Default generator weights in `SimulatorMain`
 
@@ -429,7 +470,7 @@ The simulator README gets a new "Cross-Service Deny Semantics" section:
 - Add cross-service forbid case: two policies — policy A has `service=hive`, `policyItems` with `select`; policy B has `service=trino`, `denyPolicyItems` with `select`; same principal and `db.table` resource → `compute(List.of(policyA, policyB))` returns empty set
 
 ### `SimulatorConfigTest`
-- Add `null` for each new field to all existing 14-arg constructor calls (they become 18-arg)
+- Add **four** `null` arguments (one for each of `trinoServiceName`, `emrfsServiceName`, `tagServiceName`, `s3Prefixes`) to every existing 14-arg constructor call, making them 18-arg. For example, the existing call `new SimulatorConfig(null, null, null, null, null, null, null, null, null, null, null, null, null, null)` becomes `new SimulatorConfig(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null)`.
 - Add `trinoServiceNameDefaultsToTrino()`, `tagServiceNameDefaultsToCl_tag()`, etc.
 
 ---
