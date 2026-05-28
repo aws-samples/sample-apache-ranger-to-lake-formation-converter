@@ -7,7 +7,7 @@ import java.util.*;
  * Service name contains "tag" → these produce NO LF grants (gap recording only).
  * Used to verify the simulator correctly sees zero LF permissions for tag policies.
  */
-public class TagPolicyGenerator {
+public class TagPolicyGenerator implements PolicyGenerator {
     private static final List<String> SAMPLE_TAGS = List.of("PII", "CONFIDENTIAL", "PUBLIC");
 
     private final List<String> tagKeys;

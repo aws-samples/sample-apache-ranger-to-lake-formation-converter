@@ -6,21 +6,21 @@ import java.util.*;
  * Generates Ranger datalocation policy payloads.
  * These use the "datalocation" resource key and produce DATA_LOCATION_ACCESS in LF.
  */
-public class DataLocationPolicyGenerator {
+public class DataLocationPolicyGenerator implements PolicyGenerator {
     private static final List<String> SAMPLE_PATHS = List.of(
             "s3://my-bucket/data/", "s3://my-bucket/analytics/", "s3://my-bucket/staging/"
     );
 
     private final List<String> s3Paths;
     private final List<String> principalNames;
-    private final String hiveServiceName;
+    private final String serviceName;
     private final Random random;
 
     public DataLocationPolicyGenerator(List<String> s3Paths, List<String> principalNames,
-                                       String hiveServiceName, Random random) {
+                                       String serviceName, Random random) {
         this.s3Paths = s3Paths.isEmpty() ? SAMPLE_PATHS : List.copyOf(s3Paths);
         this.principalNames = List.copyOf(principalNames);
-        this.hiveServiceName = hiveServiceName;
+        this.serviceName = serviceName;
         this.random = random;
     }
 
@@ -44,7 +44,7 @@ public class DataLocationPolicyGenerator {
 
         return Map.of(
                 "name", "sim-datalocation-" + policyId,
-                "service", hiveServiceName,
+                "service", serviceName,
                 "isEnabled", true,
                 "policyType", 0,
                 "resources", resources,

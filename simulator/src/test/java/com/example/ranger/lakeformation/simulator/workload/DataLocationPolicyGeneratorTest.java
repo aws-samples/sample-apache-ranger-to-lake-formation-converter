@@ -14,7 +14,7 @@ class DataLocationPolicyGeneratorTest {
             "s3://my-bucket/data/", "s3://my-bucket/analytics/"
     );
     private static final List<String> PRINCIPALS = List.of("alice", "bob");
-    private static final String SERVICE = "hive";
+    private static final String SERVICE = "lakeformation";
 
     private DataLocationPolicyGenerator generator(long seed) {
         return new DataLocationPolicyGenerator(S3_PATHS, PRINCIPALS, SERVICE, new Random(seed));

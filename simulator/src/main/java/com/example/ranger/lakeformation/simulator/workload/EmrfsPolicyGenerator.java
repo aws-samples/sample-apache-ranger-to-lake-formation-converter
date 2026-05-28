@@ -7,7 +7,7 @@ import java.util.*;
  * These use a custom Ranger service (emrfs) and produce S3 Access Grants — NOT LF permissions.
  * The simulator captures them via S3AgPermissionsFetcher.
  */
-public class EmrfsPolicyGenerator {
+public class EmrfsPolicyGenerator implements PolicyGenerator {
     private static final List<String> SAMPLE_PREFIXES = List.of(
             "s3://my-bucket/emr-output/", "s3://my-bucket/emr-input/", "s3://my-bucket/emr-scratch/"
     );
