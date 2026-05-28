@@ -58,7 +58,7 @@ The sync service merges all policies from all configured Ranger services into a 
 | `workload/EmrfsPolicyGenerator.java` | Remove `"id": policyId` from payload map; rename `generateEmrfsPolicy(String)` to `generate(String)` so it implements `PolicyGenerator` |
 | `workload/TagPolicyGenerator.java` | Remove `"id": policyId` from payload map; rename `generateTagPolicy(String)` to `generate(String)` so it implements `PolicyGenerator` |
 | `workload/HivePolicyGenerator.java` | Fix access types to Hive vocabulary; fix `generateDatabasePolicy()` to use `create` not `create_table`; service name comes from caller |
-| `workload/WorkloadOrchestrator.java` | Replace single generator with weighted `List<GeneratorEntry>`; rewrite `generateBatch()`/`pickOperation()` to dispatch to whichever generator is selected |
+| `workload/WorkloadOrchestrator.java` | Replace single generator with weighted `List<GeneratorEntry>`; rewrite `generateBatch()`/`pickOperation()` to dispatch to whichever generator is selected; **delete** the old `HivePolicyGenerator policyGenerator` field, the old 5-arg constructor (`principalPool, existingPolicyIds, databaseTables, hiveServiceName, random`), and all internal calls to `policyGenerator.generateTablePolicy()` |
 | `driver/SimulatorConfig.java` | Add 4 optional fields: `trinoServiceName`, `emrfsServiceName`, `tagServiceName`, `s3Prefixes`; update `SimulatorConfigTest` accordingly |
 | `driver/SimulatorMain.java` | Build all generators; wire into orchestrator; fetch Ranger policies from all configured service names for Phase 2 |
 | `validator/ExpectedPermissionsComputer.java` | Add per-service ACCESS_MAP; implement `denyPolicyItems` processing (currently missing); implement cross-service forbid semantics |
@@ -319,9 +319,8 @@ private void collectDenies(JsonNode policy, Set<DenyKey> denySet) {
         if (lfPermissions.isEmpty()) continue;
 
         List<ResourceSpec> specs = extractResourceSpecs(resources, lfPermissions);
-        for (JsonNode user : item.path("users")) {
-            String principalArn = principalMappings.get(user.asText());
-            if (principalArn == null) continue;
+        // Use the existing resolvePrincipals(item) helper — handles users, groups, and roles
+        for (String principalArn : resolvePrincipals(item)) {
             for (ResourceSpec spec : specs) {
                 for (String permission : lfPermissions) {
                     denySet.add(new DenyKey(principalArn, spec.resourceId(), permission));
