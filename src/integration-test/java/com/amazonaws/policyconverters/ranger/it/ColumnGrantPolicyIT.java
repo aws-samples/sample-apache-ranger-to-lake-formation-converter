@@ -27,7 +27,7 @@ public class ColumnGrantPolicyIT extends DryRunPipelineIT {
                 + "\"resources\":{"
                 + "  \"database\":{\"values\":[\"test_db\"],\"isRecursive\":false},"
                 + "  \"table\":{\"values\":[\"events\"],\"isRecursive\":false},"
-                + "  \"column\":{\"values\":[\"user_id\"],\"isRecursive\":false}"
+                + "  \"column\":{\"values\":[\"id\"],\"isRecursive\":false}"
                 + "},"
                 + "\"policyItems\":[{"
                 + "  \"users\":[\"analyst\"],"
@@ -52,11 +52,11 @@ public class ColumnGrantPolicyIT extends DryRunPipelineIT {
                         && "test_db".equals(op.getResource().getDatabaseName())
                         && "events".equals(op.getResource().getTableName())
                         && op.getResource().getColumnNames() != null
-                        && op.getResource().getColumnNames().contains("user_id"))
+                        && op.getResource().getColumnNames().contains("id"))
                 .collect(Collectors.toList());
 
         assertEquals(1, colGrants.size(),
-                "Expected exactly one GRANT for column user_id, found " + colGrants.size());
+                "Expected exactly one GRANT for column id, found " + colGrants.size());
 
         LFPermissionOperation grant = colGrants.get(0);
         assertTrue(grant.getPermissions().contains(LFPermission.SELECT),
