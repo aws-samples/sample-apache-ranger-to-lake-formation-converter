@@ -574,6 +574,77 @@ class SyncServiceTest {
     }
 
     // ---------------------------------------------------------------
+    // Failed-grant retry behavior (snapshot exclusion)
+    // ---------------------------------------------------------------
+
+    /**
+     * Verifies that when applyBatch reports a policy as failed, that policy's
+     * operation is excluded from previousOperations (the snapshot), causing
+     * computeDiff to treat it as a new grant on the next cycle and retry it.
+     *
+     * Cycle 1: applyBatch fails policy "1" → snapshot must NOT contain op for "1"
+     * Cycle 2: same policy "1" appears again → computeDiff sees it as new → applyBatch
+     *          is called again with a GRANT for "1"
+     */
+    @Test
+    void failedGrantsAreExcludedFromSnapshotAndRetriedOnNextCycle() {
+        syncService.start(syncConfig);
+
+        CedarPolicySet mockPolicySet = mock(CedarPolicySet.class);
+        when(mockPolicySet.getPermitCount()).thenReturn(1);
+        when(mockPolicySet.getForbidCount()).thenReturn(0);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPolicySet);
+
+        LFPermissionOperation grantOp = makeGrantOp("42", "arn:aws:iam::123:user/alice", "db1", "table1");
+        when(cedarToLFConverter.convert(mockPolicySet)).thenReturn(Collections.singletonList(grantOp));
+
+        // Cycle 1: applyBatch reports policy "42" as failed
+        BatchResult failedResult = new BatchResult(
+                Collections.<String>emptyList(),
+                Collections.singletonList("42"),
+                1, 0, 1);
+        when(lakeFormationClient.applyBatch(anyList(), any())).thenReturn(failedResult);
+
+        syncService.onPoliciesUpdated(createServicePolicies(1L, 1));
+
+        // The failed operation must NOT be in the snapshot — otherwise cycle 2 would
+        // see it as unchanged and skip it.
+        List<LFPermissionOperation> snapshotAfterCycle1 = syncService.getPreviousOperations();
+        assertFalse(
+                snapshotAfterCycle1.stream().anyMatch(op -> "42".equals(op.getSourcePolicyId())),
+                "Failed policy '42' should be excluded from previousOperations after cycle 1");
+
+        // Cycle 2: same policy still present — applyBatch now succeeds
+        BatchResult successResult = new BatchResult(
+                Collections.singletonList("42"),
+                Collections.<String>emptyList(),
+                1, 1, 0);
+        when(lakeFormationClient.applyBatch(anyList(), any())).thenReturn(successResult);
+
+        syncService.onPoliciesUpdated(createServicePolicies(2L, 1));
+
+        // applyBatch must have been invoked on cycle 2 with a GRANT for policy "42"
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient, times(2)).applyBatch(captor.capture(), eq(deadLetterLogger));
+
+        List<LFPermissionOperation> cycle2Batch = captor.getAllValues().get(1);
+        assertEquals(1, cycle2Batch.size(),
+                "Cycle 2 batch should contain exactly the retried grant");
+        LFPermissionOperation retried = cycle2Batch.get(0);
+        assertEquals(OperationType.GRANT, retried.getOperationType(),
+                "Retried operation should be a GRANT");
+        assertEquals("42", retried.getSourcePolicyId(),
+                "Retried operation should be for the previously failed policy '42'");
+
+        // After successful cycle 2, the snapshot should contain the operation
+        List<LFPermissionOperation> snapshotAfterCycle2 = syncService.getPreviousOperations();
+        assertTrue(
+                snapshotAfterCycle2.stream().anyMatch(op -> "42".equals(op.getSourcePolicyId())),
+                "Snapshot after successful cycle 2 should contain policy '42'");
+    }
+
+    // ---------------------------------------------------------------
     // Null policy list handling
     // ---------------------------------------------------------------
 
