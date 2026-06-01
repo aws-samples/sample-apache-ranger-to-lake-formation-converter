@@ -44,8 +44,8 @@ class DataLocationPolicyGeneratorTest {
         List<Map<String, Object>> accesses = (List<Map<String, Object>>) policyItems.get(0).get("accesses");
         assertNotNull(accesses);
         assertFalse(accesses.isEmpty(), "accesses should not be empty");
-        assertEquals("datalocation", accesses.get(0).get("type"),
-                "access type should be 'datalocation'");
+        assertEquals("data_location_access", accesses.get(0).get("type"),
+                "access type should be 'data_location_access'");
     }
 
     // 3. "policyType" is 0 (allow policy)
