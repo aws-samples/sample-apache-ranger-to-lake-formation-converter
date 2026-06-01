@@ -449,6 +449,191 @@ class ExpectedPermissionsComputerTest {
     }
 
     // -----------------------------------------------------------------------
+    // Gap A — groups and roles principals
+    // -----------------------------------------------------------------------
+
+    @Test
+    void groupPrincipalMappedToIamArn() {
+        ExpectedPermissionsComputer c = new ExpectedPermissionsComputer(
+                Map.of("data_team", "arn:aws:iam::123:role/data_team"),
+                (db, pattern) -> List.of(pattern));
+
+        ObjectNode item = MAPPER.createObjectNode();
+        item.set("users", MAPPER.createArrayNode());
+        ArrayNode groups = MAPPER.createArrayNode();
+        groups.add("data_team");
+        item.set("groups", groups);
+        item.set("roles", MAPPER.createArrayNode());
+        ArrayNode accesses = MAPPER.createArrayNode();
+        ObjectNode access = MAPPER.createObjectNode();
+        access.put("type", "select");
+        access.put("isAllowed", true);
+        accesses.add(access);
+        item.set("accesses", accesses);
+        item.put("delegateAdmin", false);
+
+        JsonNode resources = buildTableResources("mydb", "events");
+        JsonNode policy = buildPolicy(true, "hive", 0, singleItemArray(item), resources);
+
+        Set<SimulatorPermission> result = c.compute(List.of(policy));
+
+        assertEquals(1, result.size());
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("arn:aws:iam::123:role/data_team", perm.principalArn(),
+                "group name should be mapped to its IAM ARN");
+        assertEquals("SELECT", perm.permission());
+    }
+
+    @Test
+    void rolePrincipalMappedToIamArn() {
+        ExpectedPermissionsComputer c = new ExpectedPermissionsComputer(
+                Map.of("etl_role", "arn:aws:iam::123:role/etl_role"),
+                (db, pattern) -> List.of(pattern));
+
+        ObjectNode item = MAPPER.createObjectNode();
+        item.set("users", MAPPER.createArrayNode());
+        item.set("groups", MAPPER.createArrayNode());
+        ArrayNode roles = MAPPER.createArrayNode();
+        roles.add("etl_role");
+        item.set("roles", roles);
+        ArrayNode accesses = MAPPER.createArrayNode();
+        ObjectNode access = MAPPER.createObjectNode();
+        access.put("type", "select");
+        access.put("isAllowed", true);
+        accesses.add(access);
+        item.set("accesses", accesses);
+        item.put("delegateAdmin", false);
+
+        JsonNode resources = buildTableResources("mydb", "events");
+        JsonNode policy = buildPolicy(true, "hive", 0, singleItemArray(item), resources);
+
+        Set<SimulatorPermission> result = c.compute(List.of(policy));
+
+        assertEquals(1, result.size());
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("arn:aws:iam::123:role/etl_role", perm.principalArn(),
+                "role name should be mapped to its IAM ARN");
+        assertEquals("SELECT", perm.permission());
+    }
+
+    // -----------------------------------------------------------------------
+    // Gap B — isAllowed=false access entry is ignored
+    // -----------------------------------------------------------------------
+
+    @Test
+    void accessWithIsAllowedFalseIsIgnored() {
+        ObjectNode item = MAPPER.createObjectNode();
+        ArrayNode users = MAPPER.createArrayNode();
+        users.add("alice");
+        item.set("users", users);
+        item.set("groups", MAPPER.createArrayNode());
+        item.set("roles", MAPPER.createArrayNode());
+        ArrayNode accesses = MAPPER.createArrayNode();
+        ObjectNode access = MAPPER.createObjectNode();
+        access.put("type", "select");
+        access.put("isAllowed", false);
+        accesses.add(access);
+        item.set("accesses", accesses);
+        item.put("delegateAdmin", false);
+
+        JsonNode resources = buildTableResources("mydb", "events");
+        JsonNode policy = buildPolicy(true, "hive", 0, singleItemArray(item), resources);
+
+        Set<SimulatorPermission> result = computer.compute(List.of(policy));
+
+        assertTrue(result.isEmpty(),
+                "access entry with isAllowed=false must produce no permissions");
+    }
+
+    // -----------------------------------------------------------------------
+    // Gap C — Hive access type mappings: create, drop, alter
+    // -----------------------------------------------------------------------
+
+    @Test
+    void hiveCreateAccessTypeProducesCreateTablePermission() {
+        String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"create\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+
+        Set<SimulatorPermission> result = compute(json);
+
+        assertEquals(1, result.size());
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("CREATE_TABLE", perm.permission(),
+                "hive 'create' must map to CREATE_TABLE");
+        assertEquals("TABLE", perm.resourceType(),
+                "CREATE_TABLE is a non-SELECT permission — resource type stays TABLE");
+    }
+
+    @Test
+    void hiveDropAccessTypeProducesDropPermission() {
+        String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"drop\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+
+        Set<SimulatorPermission> result = compute(json);
+
+        assertEquals(1, result.size());
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("DROP", perm.permission(),
+                "hive 'drop' must map to DROP");
+        assertEquals("TABLE", perm.resourceType(),
+                "DROP is a non-SELECT permission — resource type stays TABLE");
+    }
+
+    @Test
+    void hiveAlterAccessTypeProducesAlterPermission() {
+        String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"alter\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+
+        Set<SimulatorPermission> result = compute(json);
+
+        assertEquals(1, result.size());
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("ALTER", perm.permission(),
+                "hive 'alter' must map to ALTER");
+        assertEquals("TABLE", perm.resourceType(),
+                "ALTER is a non-SELECT permission — resource type stays TABLE");
+    }
+
+    // -----------------------------------------------------------------------
+    // Gap D — data_location_access access type on lakeformation service
+    // -----------------------------------------------------------------------
+
+    @Test
+    void dataLocationAccessTypeProducesDataLocationPermission() {
+        String json = "{\"service\":\"lakeformation\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"datalocation\":{\"values\":[\"s3://bucket/\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"data_location_access\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+
+        Set<SimulatorPermission> result = compute(json);
+
+        assertEquals(1, result.size());
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("DATA_LOCATION", perm.resourceType(),
+                "data_location_access on a datalocation resource must produce DATA_LOCATION resource type");
+        assertEquals("s3://bucket/", perm.resourceId());
+        assertEquals("DATA_LOCATION_ACCESS", perm.permission(),
+                "data_location_access access type must map to DATA_LOCATION_ACCESS permission");
+    }
+
+    // -----------------------------------------------------------------------
     // Private helpers for the new tests
     // -----------------------------------------------------------------------
 
