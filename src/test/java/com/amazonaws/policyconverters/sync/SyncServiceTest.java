@@ -537,6 +537,38 @@ class SyncServiceTest {
         assertEquals(0, diff.getUnchangedCount());
     }
 
+    @Test
+    void grantableTrueOnOperationFlowsThroughToApplyBatch() {
+        syncService.start(syncConfig);
+
+        CedarPolicySet mockPolicySet = mock(CedarPolicySet.class);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPolicySet);
+        when(mockPolicySet.getPermitCount()).thenReturn(1);
+        when(mockPolicySet.getForbidCount()).thenReturn(0);
+
+        // Operation with isGrantable=true — simulates delegateAdmin=true flowing through the pipeline
+        LFResource resource = new LFResource("cat", "db1", "table1", null, null);
+        LFPermissionOperation grantableOp = new LFPermissionOperation(
+                OperationType.GRANT, "42", "arn:aws:iam::123:role/data_admin",
+                resource, EnumSet.of(LFPermission.SELECT), true);
+        when(cedarToLFConverter.convert(mockPolicySet)).thenReturn(Collections.singletonList(grantableOp));
+
+        BatchResult batchResult = new BatchResult(
+                Collections.singletonList("42"), Collections.<String>emptyList(), 1, 1, 0);
+        when(lakeFormationClient.applyBatch(anyList(), any())).thenReturn(batchResult);
+
+        syncService.onPoliciesUpdated(createServicePolicies(1L, 1));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor.capture(), eq(deadLetterLogger));
+
+        List<LFPermissionOperation> applied = captor.getValue();
+        assertEquals(1, applied.size());
+        assertTrue(applied.get(0).isGrantable(),
+                "An operation with isGrantable=true must reach applyBatch unchanged");
+    }
+
     // ---------------------------------------------------------------
     // Audit logging tests
     // ---------------------------------------------------------------
