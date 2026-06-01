@@ -143,4 +143,81 @@ class Phase2CorrectnessValidatorTest {
         assertTrue(result.overGrants().isEmpty());
         assertTrue(result.underGrants().isEmpty());
     }
+
+    // -----------------------------------------------------------------------
+    // Tests for managedPrincipalArns filtering branch
+    // -----------------------------------------------------------------------
+
+    // 5. Unmanaged principal permissions are stripped before comparison → PASS
+    @Test
+    void unmanagedPrincipalPermissionsAreFilteredBeforeComparison() {
+        ExpectedPermissionsComputer computer = new ExpectedPermissionsComputer(
+                PRINCIPALS, (db, pattern) -> List.of(pattern));
+        Phase2CorrectnessValidator filteredValidator =
+                new Phase2CorrectnessValidator(computer, Set.of("arn:aws:iam::123:role/alice"));
+
+        JsonNode policy = buildPolicy(
+                singleItemArray(buildItem("alice", "select")),
+                buildTableResources("mydb", "events"));
+
+        SimulatorPermission infraPerm = new SimulatorPermission(
+                "arn:aws:iam::123:role/infra-admin", "TABLE", "mydb.events", "SELECT", false);
+
+        // actual = alice's correct grant + infra-admin grant (unmanaged, should be filtered)
+        ValidationResult result = filteredValidator.validate(
+                Set.of(ALICE_SELECT_EVENTS, infraPerm), List.of(policy));
+
+        assertFalse(result.isViolation());
+        assertEquals(ValidationResult.Outcome.PASS, result.outcome());
+        assertTrue(result.overGrants().isEmpty());
+        assertTrue(result.underGrants().isEmpty());
+    }
+
+    // 6. Over-grant from managed principal is still detected even with unmanaged permissions present
+    @Test
+    void managedPrincipalOverGrantDetectedWhenOtherUnmanagedPermissionsPresent() {
+        ExpectedPermissionsComputer computer = new ExpectedPermissionsComputer(
+                PRINCIPALS, (db, pattern) -> List.of(pattern));
+        Phase2CorrectnessValidator filteredValidator =
+                new Phase2CorrectnessValidator(computer, Set.of("arn:aws:iam::123:role/alice"));
+
+        JsonNode policy = buildPolicy(
+                singleItemArray(buildItem("alice", "select")),
+                buildTableResources("mydb", "events"));
+
+        SimulatorPermission aliceInsert = new SimulatorPermission(
+                "arn:aws:iam::123:role/alice", "TABLE", "mydb.events", "INSERT", false);
+        SimulatorPermission infraPerm = new SimulatorPermission(
+                "arn:aws:iam::123:role/infra-admin", "TABLE", "mydb.events", "SELECT", false);
+
+        // actual = alice's correct grant + alice's over-grant (INSERT) + infra-admin (filtered out)
+        ValidationResult result = filteredValidator.validate(
+                Set.of(ALICE_SELECT_EVENTS, aliceInsert, infraPerm), List.of(policy));
+
+        assertTrue(result.isViolation());
+        assertEquals(ValidationResult.Outcome.TRANSIENT_VIOLATION, result.outcome());
+        assertEquals(Set.of(aliceInsert), result.overGrants());
+        assertTrue(result.underGrants().isEmpty());
+    }
+
+    // 7. Empty managedPrincipalArns skips filtering → unmanaged permission treated as over-grant
+    @Test
+    void emptyManagedSetSkipsFilteringAndExposesAllPermissions() {
+        // validator field uses Set.of() — filtering branch is skipped
+        JsonNode policy = buildPolicy(
+                singleItemArray(buildItem("alice", "select")),
+                buildTableResources("mydb", "events"));
+
+        SimulatorPermission infraPerm = new SimulatorPermission(
+                "arn:aws:iam::123:role/infra-admin", "TABLE", "mydb.events", "SELECT", false);
+
+        // No filtering: infra-admin permission appears as an over-grant
+        ValidationResult result = validator.validate(
+                Set.of(ALICE_SELECT_EVENTS, infraPerm), List.of(policy));
+
+        assertTrue(result.isViolation());
+        assertEquals(ValidationResult.Outcome.TRANSIENT_VIOLATION, result.outcome());
+        assertEquals(Set.of(infraPerm), result.overGrants());
+        assertTrue(result.underGrants().isEmpty());
+    }
 }
