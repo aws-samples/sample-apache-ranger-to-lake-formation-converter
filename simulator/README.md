@@ -635,11 +635,11 @@ The following scenarios are not currently exercised by the simulator. Each repre
 
 ---
 
-### 2. Wildcard table policies
+### 2. Wildcard table policies ✅
 
 **Scenario:** A Ranger policy uses `"table": {"values": ["*"]}` or a glob like `"events_*"`. The sync service must expand this against the Glue catalog. When a new matching table is later added to Glue, the `WildcardRefreshScheduler` should pick it up and apply the grant automatically.
 
-**Risk:** Wildcard expansion is one of the most complex code paths in the sync service. New tables may not get grants, or deleted tables may not get revokes.
+**Covered by:** `HivePolicyGenerator.generateWildcardTablePolicy()` wired as the `hive-wildcard` generator entry (3% of mutations). Always emits `"*"` as the table value; the `ExpectedPermissionsComputer` expands it against the configured `databaseTables` map.
 
 ---
 
@@ -659,31 +659,35 @@ The following scenarios are not currently exercised by the simulator. Each repre
 
 ---
 
-### 5. Deny policies
+### 5. Deny policies ✅
 
 **Scenario:** A Ranger policy has entries in `denyPolicyItems`. The sync service converts these to Cedar `forbid` statements which should suppress permits for the same (principal, action, resource) triple. The net result should be zero LF grants for the denied combination.
 
-Note: the `TrinoServiceGenerator` does emit deny items to exercise the **cross-service** forbid path (a Trino deny suppressing a Hive grant). What is not covered here is deny policies **within a single-service** Hive or LF policy.
+**Covered by:** `HivePolicyGenerator.generateDenyTablePolicy()` wired as the `hive-deny` generator entry (4% of mutations). Emits policies with populated `denyPolicyItems` and empty `policyItems`. Cross-service deny (a Trino deny suppressing a Hive grant) is also continuously exercised by `TrinoServiceGenerator` (~20% of Trino policies contain deny items).
 
 ---
 
-### 6. Cross-policy permit + deny suppression
+### 6. Cross-policy permit + deny suppression ✅
 
 **Scenario:** Policy A grants `analyst` SELECT on `analytics.events`. Policy B denies `analyst` SELECT on `analytics.events`. The sync service must see both, combine them via Cedar, and produce zero LF grants — even though policy A alone would produce a grant.
 
+**Covered by:** With a small resource pool (3 databases, ~5 tables per database), `hive` (grant) and `hive-deny` generators will naturally produce overlapping (principal, resource) combinations across cycles. The Phase 2 validator enforces that the combined Cedar evaluation produces correct net grants.
+
 ---
 
-### 7. Overlapping policies for the same resource
+### 7. Overlapping policies for the same resource ✅
 
 **Scenario:** Policy A and Policy B both independently grant `analyst` SELECT on `analytics.events`. When policy A is deleted, the sync service must keep the LF grant because policy B still covers it. If it revokes it, `analyst` loses access they should still have.
 
-**Risk:** This is a subtle diff-correctness edge case. If the sync service revokes grants based on the deleted policy without checking whether another policy still covers the same permission, it will produce a false under-grant.
+**Covered by:** With a small resource pool and independent `hive` generators running across cycles, overlapping grants on the same resource occur naturally. The Phase 2 validator detects false under-grants: if the LF permission is missing but still expected from surviving policies, it flags the violation.
 
 ---
 
-### 8. Grantable permissions (`delegateAdmin=true`)
+### 8. Grantable permissions (`delegateAdmin=true`) ✅
 
 **Scenario:** A Ranger policy has `delegateAdmin=true` on a policy item. This should flow through to `permissionsWithGrantOption` in the LF grant (`WITH GRANT OPTION`).
+
+**Covered by:** `HivePolicyGenerator.generateGrantableTablePolicy()` wired as the `hive-grantable` generator entry (3% of mutations). Always emits `delegateAdmin=true`; the `ExpectedPermissionsComputer` sets `grantable=true` on the expected `SimulatorPermission` and the Phase 2 validator checks it.
 
 ---
 
@@ -695,9 +699,11 @@ Note: the `TrinoServiceGenerator` does emit deny items to exercise the **cross-s
 
 ---
 
-### 10. Group and role principals
+### 10. Group and role principals ✅
 
 **Scenario:** A Ranger policy grants access to a group (`"groups": ["data_team"]`) or a role (`"roles": ["etl_role"]`) rather than a user. These require a group/role → IAM ARN mapping in `principalMappings`.
+
+**Covered by:** `HivePolicyGenerator.generateGroupTablePolicy()` and `generateRoleTablePolicy()` wired as the `hive-group` and `hive-role` generator entries (1% each). Both draw principals from the same pool as user policies; the sync service must resolve them via `principalMappings` in the same way.
 
 ---
 
@@ -734,15 +740,15 @@ Note: the `TrinoServiceGenerator` does emit deny items to exercise the **cross-s
 | Re-enabled policy restores LF grant | ✅ |
 | Deleted policy revokes LF grant | ✅ |
 | GDC table/database deletion with live Ranger policy | ❌ |
-| Wildcard table policies (`*`, `events_*`) | ❌ |
+| Wildcard table policies (`*`, `events_*`) | ✅ (`hive-wildcard`, 3%) |
 | Database-level policies | ✅ |
 | Column-level policies | ✅ |
-| Deny policies (single-service) | ❌ |
-| Cross-policy permit + deny suppression | ❌ |
-| Overlapping policies for the same resource | ❌ |
-| Grantable permissions (`delegateAdmin=true`) | ❌ |
+| Deny policies (single-service) | ✅ (`hive-deny`, 4%) |
+| Cross-policy permit + deny suppression | ✅ (emerges from overlapping `hive` + `hive-deny` on small resource pool) |
+| Overlapping policies for the same resource | ✅ (emerges naturally from independent generators on small resource pool) |
+| Grantable permissions (`delegateAdmin=true`) | ✅ (`hive-grantable`, 3%) |
 | Multi-user policies | ✅ |
-| Group and role principals | ❌ |
+| Group and role principals | ✅ (`hive-group` 1%, `hive-role` 1%) |
 | Unmapped principal | ✅ |
 | `all` access type expansion | ❌ (lakeformation Ranger service rejects "all"; generator exists but not wired) |
 | Sync service restart recovery | ❌ |

@@ -110,6 +110,97 @@ public class HivePolicyGenerator {
     }
 
     /**
+     * Gap 6: Generate a table-level allow policy with a group principal.
+     * The sync service must resolve the group name via principalMappings the same way it resolves users.
+     */
+    public Map<String, Object> generateGroupTablePolicy(String policyId) {
+        String db = randomFrom(databases);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
+        String group = randomFrom(principalNames);
+        List<String> accesses = randomSubset(TABLE_ACCESS_TYPES, 1 + random.nextInt(3));
+
+        Map<String, Object> resources = new LinkedHashMap<>();
+        resources.put("database", Map.of("values", List.of(db), "isExcludes", false));
+        resources.put("table", Map.of("values", List.of(table), "isExcludes", false));
+
+        return Map.of(
+                "name", "sim-policy-" + policyId,
+                "service", hiveServiceName,
+                "isEnabled", true,
+                "policyType", 0,
+                "resources", resources,
+                "policyItems", List.of(buildGroupItem(List.of(group), accesses)),
+                "denyPolicyItems", List.of()
+        );
+    }
+
+    /**
+     * Gap 6: Generate a table-level allow policy with a role principal.
+     * The sync service must resolve the role name via principalMappings the same way it resolves users.
+     */
+    public Map<String, Object> generateRoleTablePolicy(String policyId) {
+        String db = randomFrom(databases);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
+        String role = randomFrom(principalNames);
+        List<String> accesses = randomSubset(TABLE_ACCESS_TYPES, 1 + random.nextInt(3));
+
+        Map<String, Object> resources = new LinkedHashMap<>();
+        resources.put("database", Map.of("values", List.of(db), "isExcludes", false));
+        resources.put("table", Map.of("values", List.of(table), "isExcludes", false));
+
+        return Map.of(
+                "name", "sim-policy-" + policyId,
+                "service", hiveServiceName,
+                "isEnabled", true,
+                "policyType", 0,
+                "resources", resources,
+                "policyItems", List.of(buildRoleItem(List.of(role), accesses)),
+                "denyPolicyItems", List.of()
+        );
+    }
+
+    /**
+     * Gap 2: Generate a deny-only table-level policy (entries in denyPolicyItems, empty policyItems).
+     * The sync service converts denyPolicyItems to Cedar forbid statements; net LF grants for the
+     * denied (principal, resource) combination must be zero.
+     */
+    public Map<String, Object> generateDenyTablePolicy(String policyId) {
+        String db = randomFrom(databases);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
+        String user = randomFrom(principalNames);
+        List<String> accesses = randomSubset(TABLE_ACCESS_TYPES, 1 + random.nextInt(3));
+
+        Map<String, Object> resources = new LinkedHashMap<>();
+        resources.put("database", Map.of("values", List.of(db), "isExcludes", false));
+        resources.put("table", Map.of("values", List.of(table), "isExcludes", false));
+
+        return Map.of(
+                "name", "sim-policy-" + policyId,
+                "service", hiveServiceName,
+                "isEnabled", true,
+                "policyType", 0,
+                "resources", resources,
+                "policyItems", List.of(),
+                "denyPolicyItems", List.of(buildItem(List.of(user), accesses, false))
+        );
+    }
+
+    /**
+     * Generate a wildcard table policy covering all tables in a random database ("*" as table value).
+     * Exercises wildcard expansion: the sync service must expand "*" to all known tables via CatalogResolver.
+     */
+    public Map<String, Object> generateWildcardTablePolicy(String policyId) {
+        String db = randomFrom(databases);
+        String user = randomFrom(principalNames);
+        List<String> accesses = randomSubset(TABLE_ACCESS_TYPES, 1 + random.nextInt(3));
+
+        return buildPolicy(policyId, db, "*", null, List.of(user), accesses, false);
+    }
+
+    /**
      * Gap 5: Generate a table-level policy using "all" access type.
      * "all" expands to SELECT, INSERT, DELETE, ALTER, DROP, DESCRIBE in LF.
      */
@@ -161,9 +252,7 @@ public class HivePolicyGenerator {
     }
 
     private Map<String, Object> buildItem(List<String> users, List<String> accessTypes, boolean delegateAdmin) {
-        List<Map<String, Object>> accesses = accessTypes.stream()
-                .map(a -> Map.<String, Object>of("type", a, "isAllowed", true))
-                .toList();
+        List<Map<String, Object>> accesses = buildAccesses(accessTypes);
         return Map.of(
                 "users", users,
                 "groups", List.of(),
@@ -171,6 +260,34 @@ public class HivePolicyGenerator {
                 "accesses", accesses,
                 "delegateAdmin", delegateAdmin
         );
+    }
+
+    private Map<String, Object> buildGroupItem(List<String> groups, List<String> accessTypes) {
+        List<Map<String, Object>> accesses = buildAccesses(accessTypes);
+        return Map.of(
+                "users", List.of(),
+                "groups", groups,
+                "roles", List.of(),
+                "accesses", accesses,
+                "delegateAdmin", false
+        );
+    }
+
+    private Map<String, Object> buildRoleItem(List<String> roles, List<String> accessTypes) {
+        List<Map<String, Object>> accesses = buildAccesses(accessTypes);
+        return Map.of(
+                "users", List.of(),
+                "groups", List.of(),
+                "roles", roles,
+                "accesses", accesses,
+                "delegateAdmin", false
+        );
+    }
+
+    private List<Map<String, Object>> buildAccesses(List<String> accessTypes) {
+        return accessTypes.stream()
+                .map(a -> Map.<String, Object>of("type", a, "isAllowed", true))
+                .toList();
     }
 
     private <T> T randomFrom(List<T> list) {

@@ -239,6 +239,103 @@ class HivePolicyGeneratorTest {
         assertFalse(resources.containsKey("column"), "all-access table policy should not have column resource");
     }
 
+    // Gap 6: generateGroupTablePolicy() places principal in "groups", not "users"
+    @Test
+    void generateGroupTablePolicy_principalIsInGroupsField() {
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateGroupTablePolicy("gp-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            assertNotNull(items);
+            assertFalse(items.isEmpty());
+            Map<String, Object> item = items.get(0);
+            @SuppressWarnings("unchecked")
+            List<String> users = (List<String>) item.get("users");
+            @SuppressWarnings("unchecked")
+            List<String> groups = (List<String>) item.get("groups");
+            assertTrue(users.isEmpty(), "users must be empty in a group policy");
+            assertFalse(groups.isEmpty(), "groups must be non-empty in a group policy");
+            assertTrue(PRINCIPALS.containsAll(groups),
+                    "group principals must come from the principal pool");
+        }
+    }
+
+    // Gap 6: generateRoleTablePolicy() places principal in "roles", not "users"
+    @Test
+    void generateRoleTablePolicy_principalIsInRolesField() {
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateRoleTablePolicy("rp-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            assertNotNull(items);
+            assertFalse(items.isEmpty());
+            Map<String, Object> item = items.get(0);
+            @SuppressWarnings("unchecked")
+            List<String> users = (List<String>) item.get("users");
+            @SuppressWarnings("unchecked")
+            List<String> roles = (List<String>) item.get("roles");
+            assertTrue(users.isEmpty(), "users must be empty in a role policy");
+            assertFalse(roles.isEmpty(), "roles must be non-empty in a role policy");
+            assertTrue(PRINCIPALS.containsAll(roles),
+                    "role principals must come from the principal pool");
+        }
+    }
+
+    // Gap 2: generateDenyTablePolicy() has entries in denyPolicyItems and empty policyItems
+    @Test
+    void generateDenyTablePolicy_hasDenyItemsAndEmptyAllowItems() {
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateDenyTablePolicy("dp-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> policyItems = (List<Map<String, Object>>) policy.get("policyItems");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> denyItems = (List<Map<String, Object>>) policy.get("denyPolicyItems");
+            assertNotNull(policyItems, "policyItems must not be null");
+            assertNotNull(denyItems, "denyPolicyItems must not be null");
+            assertTrue(policyItems.isEmpty(), "allow policyItems must be empty in a deny-only policy");
+            assertFalse(denyItems.isEmpty(), "denyPolicyItems must not be empty");
+        }
+    }
+
+    // Gap 2: generateDenyTablePolicy() has "database" and "table" in resources
+    @Test
+    void generateDenyTablePolicy_hasTableAndDatabaseResources() {
+        Map<String, Object> policy = generator(55).generateDenyTablePolicy("dp-55");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
+        assertNotNull(resources);
+        assertTrue(resources.containsKey("database"), "deny policy must have 'database'");
+        assertTrue(resources.containsKey("table"), "deny policy must have 'table'");
+        assertFalse(resources.containsKey("column"), "deny table policy must not have 'column'");
+    }
+
+    // Gap 1: generateWildcardTablePolicy() always uses "*" as the table value
+    @Test
+    void generateWildcardTablePolicy_tableValueIsWildcard() {
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateWildcardTablePolicy("wp-" + seed);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
+            assertNotNull(resources);
+            assertTrue(resources.containsKey("database"), "wildcard policy must have 'database'");
+            assertTrue(resources.containsKey("table"), "wildcard policy must have 'table'");
+            @SuppressWarnings("unchecked")
+            List<String> tableValues = (List<String>) ((Map<String, Object>) resources.get("table")).get("values");
+            assertEquals(List.of("*"), tableValues,
+                    "wildcard policy table value must be '*'");
+        }
+    }
+
+    // Gap 1: generateWildcardTablePolicy() does not include "column" in resources
+    @Test
+    void generateWildcardTablePolicy_hasNoColumnResource() {
+        Map<String, Object> policy = generator(42).generateWildcardTablePolicy("wp-42");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
+        assertFalse(resources.containsKey("column"),
+                "wildcard table policy must not have 'column' in resources");
+    }
+
     // Gap 9: generateUnmappedPrincipalPolicy() uses the unmapped principal name
     @Test
     void generateUnmappedPrincipalPolicy_usesUnmappedPrincipal() {

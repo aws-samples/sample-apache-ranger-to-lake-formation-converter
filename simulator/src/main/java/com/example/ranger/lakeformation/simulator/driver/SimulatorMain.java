@@ -88,15 +88,20 @@ public class SimulatorMain {
         // generateAllAccessTablePolicy() is kept in HivePolicyGenerator for future use against
         // a Hive-type service that supports "all", but is not wired here.
         List<GeneratorEntry> generators = List.of(
-            new GeneratorEntry("hive",           hivePolicyGenerator::generateTablePolicy,           33),
-            new GeneratorEntry("trino",          trinoServiceGenerator::generate,                    20),
-            new GeneratorEntry("datalocation",   dataLocationGenerator::generate,                    12),
-            new GeneratorEntry("tag",            tagPolicyGenerator::generate,                        8),
-            new GeneratorEntry("emrfs",          emrfsPolicyGenerator::generate,                      5),
-            new GeneratorEntry("hive-multi",     hivePolicyGenerator::generateMultiUserTablePolicy,  10),
-            new GeneratorEntry("hive-db",        hivePolicyGenerator::generateDatabasePolicy,         5),
-            new GeneratorEntry("hive-col",       hivePolicyGenerator::generateColumnPolicy,           5),
-            new GeneratorEntry("hive-unmapped",  hivePolicyGenerator::generateUnmappedPrincipalPolicy, 2)
+            new GeneratorEntry("hive",            hivePolicyGenerator::generateTablePolicy,            25),
+            new GeneratorEntry("trino",           trinoServiceGenerator::generate,                     16),
+            new GeneratorEntry("datalocation",    dataLocationGenerator::generate,                     12),
+            new GeneratorEntry("tag",             tagPolicyGenerator::generate,                         8),
+            new GeneratorEntry("emrfs",           emrfsPolicyGenerator::generate,                       5),
+            new GeneratorEntry("hive-multi",      hivePolicyGenerator::generateMultiUserTablePolicy,   10),
+            new GeneratorEntry("hive-db",         hivePolicyGenerator::generateDatabasePolicy,          5),
+            new GeneratorEntry("hive-col",        hivePolicyGenerator::generateColumnPolicy,            5),
+            new GeneratorEntry("hive-unmapped",   hivePolicyGenerator::generateUnmappedPrincipalPolicy, 2),
+            new GeneratorEntry("hive-grantable",  hivePolicyGenerator::generateGrantableTablePolicy,    3),
+            new GeneratorEntry("hive-wildcard",   hivePolicyGenerator::generateWildcardTablePolicy,     3),
+            new GeneratorEntry("hive-deny",       hivePolicyGenerator::generateDenyTablePolicy,         4),
+            new GeneratorEntry("hive-group",      hivePolicyGenerator::generateGroupTablePolicy,        1),
+            new GeneratorEntry("hive-role",       hivePolicyGenerator::generateRoleTablePolicy,         1)
         );
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
                 new ArrayList<>(), generators, rng);
