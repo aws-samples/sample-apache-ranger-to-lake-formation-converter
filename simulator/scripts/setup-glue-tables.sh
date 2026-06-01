@@ -98,15 +98,12 @@ PYEOF
 
   echo "  Checking table '${DB}.${TABLE}'..."
 
-  local HTTP_CODE
-  HTTP_CODE=$(aws glue get-table \
-    --database-name "${DB}" \
-    --name "${TABLE}" \
-    --region "${REGION}" \
-    --output json \
-    > /tmp/glue-get-${DB}-${TABLE}.json 2>&1 && echo "200" || echo "404")
-
-  if [ "${HTTP_CODE}" = "200" ]; then
+  if aws glue get-table \
+       --database-name "${DB}" \
+       --name "${TABLE}" \
+       --region "${REGION}" \
+       --output json \
+       > /tmp/glue-get-${DB}-${TABLE}.json 2>/tmp/glue-get-${DB}-${TABLE}.err; then
     echo "    Table exists — updating schema..."
     aws glue update-table \
       --database-name "${DB}" \
@@ -116,14 +113,20 @@ PYEOF
     echo "    Updated '${DB}.${TABLE}'."
     LAST_ACTION="updated"
   else
-    echo "    Table does not exist — creating..."
-    aws glue create-table \
-      --database-name "${DB}" \
-      --table-input "${TABLE_INPUT}" \
-      --region "${REGION}" \
-      > /dev/null
-    echo "    Created '${DB}.${TABLE}'."
-    LAST_ACTION="created"
+    if grep -q "EntityNotFoundException" /tmp/glue-get-${DB}-${TABLE}.err; then
+      echo "    Table does not exist — creating..."
+      aws glue create-table \
+        --database-name "${DB}" \
+        --table-input "${TABLE_INPUT}" \
+        --region "${REGION}" \
+        > /dev/null
+      echo "    Created '${DB}.${TABLE}'."
+      LAST_ACTION="created"
+    else
+      echo "ERROR: Unexpected error checking table '${DB}.${TABLE}':" >&2
+      cat /tmp/glue-get-${DB}-${TABLE}.err >&2
+      exit 1
+    fi
   fi
 }
 
