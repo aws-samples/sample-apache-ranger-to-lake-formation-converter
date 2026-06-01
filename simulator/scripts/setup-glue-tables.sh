@@ -114,6 +114,7 @@ PYEOF
       --region "${REGION}" \
       > /dev/null
     echo "    Updated '${DB}.${TABLE}'."
+    LAST_ACTION="updated"
   else
     echo "    Table does not exist — creating..."
     aws glue create-table \
@@ -122,6 +123,7 @@ PYEOF
       --region "${REGION}" \
       > /dev/null
     echo "    Created '${DB}.${TABLE}'."
+    LAST_ACTION="created"
   fi
 }
 
@@ -130,6 +132,7 @@ PYEOF
 # ---------------------------------------------------------------------------
 CREATED=0
 UPDATED=0
+LAST_ACTION=""
 
 if [ -n "${ACCOUNT_ID}" ]; then
   echo "Account: ${ACCOUNT_ID}, Region: ${REGION}"
@@ -141,17 +144,9 @@ echo ""
 for DB in "${DATABASES[@]}"; do
   echo "Database: ${DB}"
   for TABLE in "${TABLES[@]}"; do
-    # Capture action for summary counter
-    HTTP_CODE=$(aws glue get-table \
-      --database-name "${DB}" \
-      --name "${TABLE}" \
-      --region "${REGION}" \
-      --output json \
-      > /dev/null 2>&1 && echo "200" || echo "404")
-
     ensure_table "${DB}" "${TABLE}"
 
-    if [ "${HTTP_CODE}" = "200" ]; then
+    if [ "${LAST_ACTION}" = "updated" ]; then
       UPDATED=$((UPDATED + 1))
     else
       CREATED=$((CREATED + 1))
