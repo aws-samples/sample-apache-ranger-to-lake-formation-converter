@@ -594,6 +594,7 @@ class SyncServiceTest {
         // Build a SyncService in multi-service mode so executeSyncCycle() is functional.
         BaseRangerService mockRangerService = mock(BaseRangerService.class);
         when(mockRangerService.getServiceType()).thenReturn("lakeformation");
+        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
         when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
 
         // Both cycles see the same single policy — the mock always returns it.
@@ -623,6 +624,9 @@ class SyncServiceTest {
         when(lakeFormationClient.applyBatch(anyList(), any())).thenReturn(failedResult);
 
         multiSyncService.executeSyncCycle();
+
+        // Guard: confirm applyBatch was actually invoked in cycle 1 (rules out early-exit paths).
+        verify(lakeFormationClient, times(1)).applyBatch(anyList(), any());
 
         // The failed operation must NOT be in the snapshot — otherwise cycle 2 would
         // see it as unchanged and skip it.
