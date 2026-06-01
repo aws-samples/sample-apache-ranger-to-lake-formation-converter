@@ -199,9 +199,20 @@ done
 
 ### 6. Create the Glue tables
 
-Five tables per database, with at least one column each (LakeFormation requires at least one column to register a table):
+Five tables per database, each with the full 8-column schema used by `HivePolicyGenerator.generateColumnPolicy()`. LakeFormation rejects `TABLE_WITH_COLUMNS` grants for columns that do not exist in the table schema, so all 8 columns must be present.
 
 ```bash
+COLUMNS='[
+  {"Name":"id","Type":"string"},
+  {"Name":"name","Type":"string"},
+  {"Name":"value","Type":"string"},
+  {"Name":"created_at","Type":"string"},
+  {"Name":"status","Type":"string"},
+  {"Name":"amount","Type":"string"},
+  {"Name":"category","Type":"string"},
+  {"Name":"region","Type":"string"}
+]'
+
 for DB in analytics staging default_sim; do
   for TABLE in events users orders products sessions; do
     aws glue create-table \
@@ -210,7 +221,7 @@ for DB in analytics staging default_sim; do
       --table-input "{
         \"Name\": \"${TABLE}\",
         \"StorageDescriptor\": {
-          \"Columns\": [{\"Name\": \"id\", \"Type\": \"string\"}],
+          \"Columns\": ${COLUMNS},
           \"Location\": \"s3://your-bucket/${DB}/${TABLE}/\",
           \"InputFormat\": \"org.apache.hadoop.mapred.TextInputFormat\",
           \"OutputFormat\": \"org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat\",
@@ -224,6 +235,8 @@ done
 ```
 
 > Replace `s3://your-bucket/` with any S3 prefix — the simulator does not read from S3, so the location just needs to be syntactically valid.
+
+Alternatively, run `simulator/scripts/setup-glue-tables.sh --region $REGION` which creates or updates all 15 tables idempotently.
 
 ### 7. Grant the sync role permissions on the Glue catalog
 
@@ -383,15 +396,20 @@ curl -s -u admin:rangerR0cks! http://localhost:6080/service/public/v2/api/servic
 # → ['lakeformation', 'cl_tag']
 ```
 
-### Step 2.5 — Provision simulator Ranger services
+### Step 2.5 — Provision simulator Ranger services and Glue tables
 
-The simulator requires `trino` and `emrfs` Ranger service instances in addition to the `lakeformation` and `cl_tag` instances provisioned by the integration-test stack. Run the setup script once after the stack is healthy:
+The simulator requires `trino` and `emrfs` Ranger service instances in addition to the `lakeformation` and `cl_tag` instances provisioned by the integration-test stack. Run both setup scripts once after the stack is healthy:
 
 ```bash
+# Provision the Ranger service instances (requires Ranger Admin access)
 simulator/scripts/setup-ranger-services.sh --ranger-url http://localhost:6080
+
+# Create or update all 15 Glue tables with the full 8-column schema
+# (requires AWS credentials with glue:CreateTable, glue:UpdateTable, glue:GetTable)
+simulator/scripts/setup-glue-tables.sh --region $REGION
 ```
 
-The script is idempotent — re-running it on an already-provisioned stack is safe. After it completes, verify all four services are registered:
+Both scripts are idempotent — re-running them on an already-provisioned environment is safe. After `setup-ranger-services.sh` completes, verify all four Ranger services are registered:
 
 ```bash
 curl -s -u admin:rangerR0cks! http://localhost:6080/service/public/v2/api/service \
@@ -399,7 +417,7 @@ curl -s -u admin:rangerR0cks! http://localhost:6080/service/public/v2/api/servic
 # → ['lakeformation', 'cl_tag', 'trino', 'emrfs']
 ```
 
-Alternatively, use the Maven `run-simulator` profile (Step 4 below) which runs this script automatically before launching the simulator jar.
+Alternatively, use the Maven `run-simulator` profile (Step 4 below) which runs `setup-ranger-services.sh` automatically before launching the simulator jar. You still need to run `setup-glue-tables.sh` manually if the Glue tables have not been created yet.
 
 ### Step 3 — Start the sync service
 
