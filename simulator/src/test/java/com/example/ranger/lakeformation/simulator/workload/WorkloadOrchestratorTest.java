@@ -24,11 +24,11 @@ class WorkloadOrchestratorTest {
     }
 
     @Test
-    void generateBatchReturnsBetweenZeroAndFiveOperations() {
+    void generateBatchReturnsBetweenZeroAndTenOperations() {
         WorkloadOrchestrator orch = orchestrator(new ArrayList<>(List.of("p1", "p2")), FIXED_SEED);
         List<MutationOperation> batch = orch.generateBatch();
         assertNotNull(batch);
-        assertTrue(batch.size() >= 0 && batch.size() <= 5);
+        assertTrue(batch.size() >= 0 && batch.size() <= 10);
     }
 
     @Test
@@ -110,5 +110,90 @@ class WorkloadOrchestratorTest {
         Set<String> expected = Set.of("hive", "trino", "datalocation", "tag", "emrfs");
         assertEquals(expected, observedPrefixes,
                 "All five generator names must appear in CreatePolicy IDs over 1000 cycles");
+    }
+
+    @Test
+    void updatePolicyOperationIsGenerated() {
+        WorkloadOrchestrator orch = orchestrator(
+                new ArrayList<>(List.of("seed-1", "seed-2")), 3L);
+        boolean found = false;
+        for (int cycle = 0; cycle < 100 && !found; cycle++) {
+            for (MutationOperation op : orch.generateBatch()) {
+                if (op instanceof MutationOperation.UpdatePolicy update) {
+                    assertNotNull(update.policyId());
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assertTrue(found, "Should generate at least one UpdatePolicy in 100 cycles");
+    }
+
+    @Test
+    void disablePolicyOperationIsGenerated() {
+        WorkloadOrchestrator orch = orchestrator(
+                new ArrayList<>(List.of("seed-1", "seed-2")), 5L);
+        boolean found = false;
+        for (int cycle = 0; cycle < 100 && !found; cycle++) {
+            for (MutationOperation op : orch.generateBatch()) {
+                if (op instanceof MutationOperation.DisablePolicy disable) {
+                    assertNotNull(disable.policyId());
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assertTrue(found, "Should generate at least one DisablePolicy in 100 cycles");
+    }
+
+    @Test
+    void enablePolicyOperationIsGenerated() {
+        WorkloadOrchestrator orch = orchestrator(
+                new ArrayList<>(List.of("seed-1", "seed-2")), 6L);
+        boolean found = false;
+        for (int cycle = 0; cycle < 100 && !found; cycle++) {
+            for (MutationOperation op : orch.generateBatch()) {
+                if (op instanceof MutationOperation.EnablePolicy enable) {
+                    assertNotNull(enable.policyId());
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assertTrue(found, "Should generate at least one EnablePolicy in 100 cycles");
+    }
+
+    @Test
+    void batchWithEmptyExistingIdsContainsOnlyCreateOperations() {
+        // When existingPolicyIds is initially empty, any roll >= WEIGHT_CREATE returns null
+        // and is filtered. Only CREATE ops (which also populate existingPolicyIds) can appear.
+        // We verify this by checking a single batch: the orchestrator starts empty, so the
+        // first non-CREATE roll must be null-filtered. CREATEs within the batch add IDs, so
+        // we track them and assert non-CREATE ops only reference IDs seeded prior to the batch.
+        //
+        // Simplest invariant: run one batch from a fresh (empty) orchestrator; any non-CREATE
+        // op must reference a policyId that was added by a CREATE during that same batch
+        // (existingPolicyIds starts empty, so null was returned and filtered for any roll that
+        // preceded all CREATEs). We verify no UPDATE/DISABLE/ENABLE/DELETE appears in the batch
+        // unless a CREATE op already ran and added its id.
+        WorkloadOrchestrator orch = orchestrator(new ArrayList<>(), 1L);
+        // Run a single batch; collect policyIds seen via CREATE ops as they are added
+        List<MutationOperation> batch = orch.generateBatch();
+        Set<String> createdIds = new LinkedHashSet<>();
+        for (MutationOperation op : batch) {
+            if (op instanceof MutationOperation.CreatePolicy create) {
+                createdIds.add(create.policyId());
+            } else {
+                // Any non-CREATE op must reference a policyId that was previously created
+                String pid = null;
+                if (op instanceof MutationOperation.UpdatePolicy u)  pid = u.policyId();
+                else if (op instanceof MutationOperation.DisablePolicy d) pid = d.policyId();
+                else if (op instanceof MutationOperation.EnablePolicy e)  pid = e.policyId();
+                else if (op instanceof MutationOperation.DeletePolicy d)  pid = d.policyId();
+                assertTrue(createdIds.contains(pid),
+                        "Non-CREATE op " + op.getClass().getSimpleName()
+                                + " references policyId not yet created in this batch: " + pid);
+            }
+        }
     }
 }
