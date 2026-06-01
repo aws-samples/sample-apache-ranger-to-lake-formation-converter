@@ -40,6 +40,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
  * Orchestrates the real-time synchronization of Ranger policies to Lake Formation.
@@ -378,6 +379,7 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
 
         if (deltaOperations.isEmpty()) {
             LOG.info("SyncService: no changes to apply for policy version {}", policyVersion);
+            previousOperations = currentOperations;
         } else {
             LOG.info("SyncService: applying {} delta operations for policy version {}",
                     deltaOperations.size(), policyVersion);
@@ -393,10 +395,19 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
                     batchResult.getAppliedOperations(),
                     batchResult.getRolledBackOperations(),
                     batchResult.getFailedPolicyIds());
+
+            Set<String> failedIds = new HashSet<>(batchResult.getFailedPolicyIds());
+            if (!failedIds.isEmpty()) {
+                LOG.warn("SyncService: {} failed policy IDs excluded from snapshot — will retry next cycle: {}",
+                        failedIds.size(), failedIds);
+            }
+            previousOperations = failedIds.isEmpty()
+                    ? currentOperations
+                    : currentOperations.stream()
+                            .filter(op -> !failedIds.contains(op.getSourcePolicyId()))
+                            .collect(Collectors.toList());
         }
 
-        // Update the previous snapshot to the current state
-        previousOperations = currentOperations;
         lastCedarPolicyText = cedarPolicySet.toCedarString();
         lastPolicyVersion = policyVersion;
 
@@ -524,6 +535,7 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
 
         if (deltaOperations.isEmpty()) {
             LOG.info("SyncService: no changes to apply in multi-service sync cycle");
+            previousOperations = currentOperations;
         } else {
             LOG.info("SyncService: applying {} delta operations in multi-service sync cycle",
                     deltaOperations.size());
@@ -538,10 +550,18 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
                     batchResult.getAppliedOperations(),
                     batchResult.getRolledBackOperations(),
                     batchResult.getFailedPolicyIds());
-        }
 
-        // Update the previous snapshot to the current state
-        previousOperations = currentOperations;
+            Set<String> failedIds = new HashSet<>(batchResult.getFailedPolicyIds());
+            if (!failedIds.isEmpty()) {
+                LOG.warn("SyncService: {} failed policy IDs excluded from snapshot — will retry next cycle: {}",
+                        failedIds.size(), failedIds);
+            }
+            previousOperations = failedIds.isEmpty()
+                    ? currentOperations
+                    : currentOperations.stream()
+                            .filter(op -> !failedIds.contains(op.getSourcePolicyId()))
+                            .collect(Collectors.toList());
+        }
         lastCedarPolicyText = cedarPolicySet.toCedarString();
 
         // Persist checkpoint with per-service version map (Req 10.1, 10.2)
