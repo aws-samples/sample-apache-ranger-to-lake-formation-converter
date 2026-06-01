@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -14,7 +15,7 @@ class CycleWaiterTest {
      */
     static class StubStatusClient extends SyncServiceStatusClient {
         private final long[] cycles;
-        private int callCount = 0;
+        int callCount = 0;
 
         StubStatusClient(long... cycles) {
             super("localhost", 0); // port doesn't matter — we override fetchStatus
@@ -25,6 +26,23 @@ class CycleWaiterTest {
         public StatusResponse fetchStatus() {
             long cycle = cycles[Math.min(callCount++, cycles.length - 1)];
             return new StatusResponse(cycle, 0, "running");
+        }
+    }
+
+    /**
+     * Stub that always throws IOException to simulate a failed HTTP call.
+     */
+    static class ThrowingStatusClient extends SyncServiceStatusClient {
+        private final IOException toThrow;
+
+        ThrowingStatusClient(IOException toThrow) {
+            super("localhost", 0);
+            this.toThrow = toThrow;
+        }
+
+        @Override
+        public StatusResponse fetchStatus() throws IOException {
+            throw toThrow;
         }
     }
 
@@ -91,5 +109,59 @@ class CycleWaiterTest {
         };
 
         assertThrows(CycleTimeoutException.class, () -> waiter.waitForCycleAfter(5));
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests 4-6: exercise the REAL production implementation (no method override)
+    // -------------------------------------------------------------------------
+
+    @Test
+    void fetchStatusIOExceptionPropagates() {
+        // Real CycleWaiter with a stub that throws IOException on the first call.
+        // The throw happens before any sleep, so this test is instant.
+        ThrowingStatusClient client = new ThrowingStatusClient(new IOException("connection refused"));
+        CycleWaiter waiter = new CycleWaiter(client, Duration.ofSeconds(30));
+
+        assertThrows(IOException.class, () -> waiter.waitForCycleAfter(5L));
+    }
+
+    @Test
+    void interruptedExceptionPropagates() throws InterruptedException {
+        // Real CycleWaiter: stub always returns cycle=5 (not > target 5), causing the loop
+        // to call Thread.sleep(POLL_INTERVAL). We interrupt the sleeping thread and verify
+        // that InterruptedException propagates out of waitForCycleAfter.
+        StubStatusClient stub = new StubStatusClient(5);
+        CycleWaiter waiter = new CycleWaiter(stub, Duration.ofMinutes(5));
+
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+        Thread t = new Thread(() -> {
+            try {
+                waiter.waitForCycleAfter(5L);
+            } catch (InterruptedException e) {
+                caught.set(e);
+            } catch (Exception e) {
+                caught.set(e);
+            }
+        });
+        t.start();
+        Thread.sleep(100); // let the thread enter the sleep
+        t.interrupt();
+        t.join(10_000);
+        assertFalse(t.isAlive(), "Thread should have terminated");
+        assertInstanceOf(InterruptedException.class, caught.get());
+    }
+
+    @Test
+    // NOTE: this test sleeps ~5s due to POLL_INTERVAL
+    void secondPollReturnsResultAfterFirstPollNotReady() throws IOException, InterruptedException, CycleTimeoutException {
+        // Real CycleWaiter: first call returns cycle=5 (not > 5), second returns cycle=6 (> 5).
+        // The real implementation sleeps POLL_INTERVAL (5s) between polls, so this test is slow.
+        StubStatusClient stub = new StubStatusClient(5, 6);
+        CycleWaiter waiter = new CycleWaiter(stub, Duration.ofSeconds(30));
+
+        long result = waiter.waitForCycleAfter(5L);
+
+        assertEquals(6L, result);
+        assertEquals(2, stub.callCount, "fetchStatus should have been called exactly twice");
     }
 }
