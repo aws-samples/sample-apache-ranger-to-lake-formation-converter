@@ -7,8 +7,15 @@ import java.util.*;
  * Produces policies that cover database, table, and column levels.
  */
 public class HivePolicyGenerator {
-    private static final List<String> HIVE_ACCESS_TYPES =
-            List.of("select", "update", "read", "write", "create", "drop", "alter");
+    // Native lakeformation Ranger service access types (verified against the service definition)
+    private static final List<String> TABLE_ACCESS_TYPES =
+            List.of("select", "insert", "delete", "describe", "alter", "drop");
+    // Column-level policies: only "select" produces an LF grant (TABLE_WITH_COLUMNS SELECT).
+    // insert/delete on a column resource are accepted by Ranger but produce no LF permission.
+    private static final List<String> COLUMN_ACCESS_TYPES = List.of("select");
+    private static final List<String> COLUMN_NAMES =
+            List.of("id", "name", "value", "created_at", "status", "amount", "category", "region");
+    private static final String UNMAPPED_PRINCIPAL = "ghost_user";
 
     private final Map<String, List<String>> databaseTables;  // db name → table names in that db
     private final List<String> databases;                     // ordered key list for random selection
@@ -34,9 +41,9 @@ public class HivePolicyGenerator {
         List<String> tables = databaseTables.getOrDefault(db, List.of());
         String table = tables.isEmpty() ? "*" : randomFrom(tables);
         String user = randomFrom(principalNames);
-        List<String> accesses = randomSubset(HIVE_ACCESS_TYPES, 1 + random.nextInt(3));
+        List<String> accesses = randomSubset(TABLE_ACCESS_TYPES, 1 + random.nextInt(3));
 
-        return buildPolicy(policyId, db, table, null, user, accesses, false);
+        return buildPolicy(policyId, db, table, null, List.of(user), accesses, false);
     }
 
     /**
@@ -48,7 +55,7 @@ public class HivePolicyGenerator {
         String table = tables.isEmpty() ? "*" : randomFrom(tables);
         String user = randomFrom(principalNames);
 
-        return buildPolicy(policyId, db, table, null, user, List.of("select"), true);
+        return buildPolicy(policyId, db, table, null, List.of(user), List.of("select"), true);
     }
 
     /**
@@ -67,13 +74,74 @@ public class HivePolicyGenerator {
                 "isEnabled", true,
                 "policyType", 0,
                 "resources", resources,
-                "policyItems", List.of(buildItem(user, List.of("create", "drop"), false)),
+                "policyItems", List.of(buildItem(List.of(user), List.of("create_table", "drop"), false)),
                 "denyPolicyItems", List.of()
         );
     }
 
+    /**
+     * Gap 2: Generate a table-level policy with 2-3 users in a single policyItem.
+     * Exercises the multi-user path: the sync service must produce one LF grant per user.
+     */
+    public Map<String, Object> generateMultiUserTablePolicy(String policyId) {
+        String db = randomFrom(databases);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
+        int userCount = 2 + random.nextInt(Math.min(2, principalNames.size() - 1));
+        List<String> users = randomSubset(principalNames, userCount);
+        List<String> accesses = randomSubset(TABLE_ACCESS_TYPES, 1 + random.nextInt(3));
+
+        return buildPolicy(policyId, db, table, null, users, accesses, false);
+    }
+
+    /**
+     * Gap 4: Generate a column-level allow policy.
+     * Exercises TABLE_WITH_COLUMNS handling: DESCRIBE must be stripped from LF grants.
+     */
+    public Map<String, Object> generateColumnPolicy(String policyId) {
+        String db = randomFrom(databases);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
+        String user = randomFrom(principalNames);
+        List<String> accesses = randomSubset(COLUMN_ACCESS_TYPES, 1 + random.nextInt(2));
+        List<String> columns = randomSubset(COLUMN_NAMES, 1 + random.nextInt(3));
+
+        return buildPolicy(policyId, db, table, columns, List.of(user), accesses, false);
+    }
+
+    /**
+     * Gap 5: Generate a table-level policy using "all" access type.
+     * "all" expands to SELECT, INSERT, DELETE, ALTER, DROP, DESCRIBE in LF.
+     */
+    public Map<String, Object> generateAllAccessTablePolicy(String policyId) {
+        String db = randomFrom(databases);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
+        String user = randomFrom(principalNames);
+
+        return buildPolicy(policyId, db, table, null, List.of(user), List.of("all"), false);
+    }
+
+    /**
+     * Gap 9: Generate a table-level policy with an unmapped principal.
+     * The sync service must produce zero LF grants and record a gap entry — no exception.
+     */
+    public Map<String, Object> generateUnmappedPrincipalPolicy(String policyId) {
+        String db = randomFrom(databases);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
+        List<String> accesses = randomSubset(TABLE_ACCESS_TYPES, 1 + random.nextInt(3));
+
+        return buildPolicy(policyId, db, table, null, List.of(UNMAPPED_PRINCIPAL), accesses, false);
+    }
+
+    /** The unmapped principal name used by {@link #generateUnmappedPrincipalPolicy}. */
+    public static String getUnmappedPrincipal() {
+        return UNMAPPED_PRINCIPAL;
+    }
+
     private Map<String, Object> buildPolicy(String policyId, String db, String table, List<String> columns,
-                                             String user, List<String> accessTypes, boolean delegateAdmin) {
+                                             List<String> users, List<String> accessTypes, boolean delegateAdmin) {
         Map<String, Object> resources = new LinkedHashMap<>();
         resources.put("database", Map.of("values", List.of(db), "isExcludes", false));
         resources.put("table", Map.of("values", List.of(table), "isExcludes", false));
@@ -87,17 +155,17 @@ public class HivePolicyGenerator {
                 "isEnabled", true,
                 "policyType", 0,
                 "resources", resources,
-                "policyItems", List.of(buildItem(user, accessTypes, delegateAdmin)),
+                "policyItems", List.of(buildItem(users, accessTypes, delegateAdmin)),
                 "denyPolicyItems", List.of()
         );
     }
 
-    private Map<String, Object> buildItem(String user, List<String> accessTypes, boolean delegateAdmin) {
+    private Map<String, Object> buildItem(List<String> users, List<String> accessTypes, boolean delegateAdmin) {
         List<Map<String, Object>> accesses = accessTypes.stream()
                 .map(a -> Map.<String, Object>of("type", a, "isAllowed", true))
                 .toList();
         return Map.of(
-                "users", List.of(user),
+                "users", users,
                 "groups", List.of(),
                 "roles", List.of(),
                 "accesses", accesses,

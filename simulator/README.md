@@ -75,15 +75,19 @@ The sync service merges policies from **all configured Ranger services** into a 
 
 ## Generators
 
-The simulator generates policies from five generators with weighted random selection:
+The simulator generates policies from nine generators with weighted random selection (weights sum to 100):
 
 | Generator | Weight | Config field (default) | Notes |
 |-----------|--------|------------------------|-------|
-| `HivePolicyGenerator` | 45% | `rangerServiceName` (`lakeformation`) | Table-level allow policies |
-| `TrinoServiceGenerator` | 25% | `trinoServiceName` (`trino`) | Uses `schema` key; ~20% include deny items |
-| `DataLocationPolicyGenerator` | 15% | `rangerServiceName` (`lakeformation`) | S3 prefix data-location policies |
-| `TagPolicyGenerator` | 10% | `tagServiceName` (`cl_tag`) | Tag-based policies (recorded as coverage gaps) |
+| `HivePolicyGenerator` — table | 33% | `rangerServiceName` (`lakeformation`) | Single-user table-level allow policies |
+| `HivePolicyGenerator` — multi-user | 10% | `rangerServiceName` (`lakeformation`) | 2–3 users in one policy item |
+| `TrinoServiceGenerator` | 20% | `trinoServiceName` (`trino`) | Uses `catalog`/`schema`/`table`; ~20% include deny items |
+| `DataLocationPolicyGenerator` | 12% | `rangerServiceName` (`lakeformation`) | S3 prefix `data_location_access` policies |
+| `TagPolicyGenerator` | 8% | `tagServiceName` (`cl_tag`) | Tag-based policies (recorded as coverage gaps, not validated) |
 | `EmrfsPolicyGenerator` | 5% | `emrfsServiceName` (`emrfs`) | S3 Access Grants policies |
+| `HivePolicyGenerator` — database | 5% | `rangerServiceName` (`lakeformation`) | Database-level `CREATE_TABLE`/`DROP` policies |
+| `HivePolicyGenerator` — column | 5% | `rangerServiceName` (`lakeformation`) | Column-scoped `TABLE_WITH_COLUMNS SELECT` policies |
+| `HivePolicyGenerator` — unmapped principal | 2% | `rangerServiceName` (`lakeformation`) | Uses `ghost_user` (absent from `principalMappings`); validates zero-grant safety |
 
 ---
 
@@ -379,6 +383,24 @@ curl -s -u admin:rangerR0cks! http://localhost:6080/service/public/v2/api/servic
 # → ['lakeformation', 'cl_tag']
 ```
 
+### Step 2.5 — Provision simulator Ranger services
+
+The simulator requires `trino` and `emrfs` Ranger service instances in addition to the `lakeformation` and `cl_tag` instances provisioned by the integration-test stack. Run the setup script once after the stack is healthy:
+
+```bash
+simulator/scripts/setup-ranger-services.sh --ranger-url http://localhost:6080
+```
+
+The script is idempotent — re-running it on an already-provisioned stack is safe. After it completes, verify all four services are registered:
+
+```bash
+curl -s -u admin:rangerR0cks! http://localhost:6080/service/public/v2/api/service \
+  | python3 -c "import sys,json; print([s['name'] for s in json.load(sys.stdin)])"
+# → ['lakeformation', 'cl_tag', 'trino', 'emrfs']
+```
+
+Alternatively, use the Maven `run-simulator` profile (Step 4 below) which runs this script automatically before launching the simulator jar.
+
 ### Step 3 — Start the sync service
 
 ```bash
@@ -404,6 +426,8 @@ curl -s http://localhost:18080/status
 
 ### Step 4 — Start the simulator
 
+**Option A — direct jar (recommended for long runs):**
+
 ```bash
 # From repository root
 AWS_PROFILE=your-profile \
@@ -412,6 +436,16 @@ AWS_PROFILE=your-profile \
   > /tmp/simulator.log 2>&1 &
 
 echo "Simulator PID=$!"
+```
+
+**Option B — Maven profile (runs setup script automatically):**
+
+```bash
+# From repository root — provisions Ranger services then launches the simulator
+AWS_PROFILE=your-profile \
+  mvn -pl simulator -Prun-simulator integration-test \
+  -DRANGER_URL=http://localhost:6080 \
+  -DAWS_REGION=us-west-2
 ```
 
 On startup the simulator queries the Glue catalog to build its list of databases and tables. You should see lines like:
@@ -591,15 +625,19 @@ The following scenarios are not currently exercised by the simulator. Each repre
 
 ---
 
-### 3. Database-level policies (no table resource)
+### 3. Database-level policies (no table resource) ✅
 
 **Scenario:** A Ranger policy has only a `database` resource (no `table`). These map to `CREATE_TABLE` / `DROP` LF database permissions rather than table-level grants.
 
+**Covered by:** `HivePolicyGenerator.generateDatabasePolicy()` wired as the `hive-db` generator entry (5% of mutations).
+
 ---
 
-### 4. Column-level policies
+### 4. Column-level policies ✅
 
 **Scenario:** A Ranger policy includes a `column` resource. In LF, this maps to `TABLE_WITH_COLUMNS` with specific column names, and `DESCRIBE` must be stripped from the grant.
+
+**Covered by:** `HivePolicyGenerator.generateColumnPolicy()` wired as the `hive-col` generator entry (5% of mutations).
 
 ---
 
@@ -631,9 +669,11 @@ Note: the `TrinoServiceGenerator` does emit deny items to exercise the **cross-s
 
 ---
 
-### 9. Multi-user policies
+### 9. Multi-user policies ✅
 
 **Scenario:** A single Ranger policy item has multiple users (e.g., both `analyst` and `etl_user`). The sync service should produce separate LF grants for each user.
+
+**Covered by:** `HivePolicyGenerator.generateMultiUserTablePolicy()` wired as the `hive-multi` generator entry (10% of mutations). Emits 2–3 users in a single `policyItems` entry.
 
 ---
 
@@ -643,15 +683,19 @@ Note: the `TrinoServiceGenerator` does emit deny items to exercise the **cross-s
 
 ---
 
-### 11. Unmapped principal
+### 11. Unmapped principal ✅
 
 **Scenario:** A Ranger policy references a user that has no entry in `principalMappings`. The sync service should produce zero LF grants for that policy item and record a gap entry — without throwing an exception.
 
+**Covered by:** `HivePolicyGenerator.generateUnmappedPrincipalPolicy()` wired as the `hive-unmapped` generator entry (2% of mutations). Uses the fixed principal name `ghost_user`, which is deliberately absent from `principalMappings`.
+
 ---
 
-### 12. `all` access type expansion
+### 12. `all` access type expansion ✅
 
 **Scenario:** A Ranger policy uses `"type": "all"`, which should expand to `SELECT, INSERT, DELETE, ALTER, DROP, DESCRIBE` in LF.
+
+**Covered by:** `HivePolicyGenerator.generateAllAccessTablePolicy()` wired as the `hive-all` generator entry (3% of mutations).
 
 ---
 
@@ -673,13 +717,14 @@ Note: the `TrinoServiceGenerator` does emit deny items to exercise the **cross-s
 | Deleted policy revokes LF grant | ✅ |
 | GDC table/database deletion with live Ranger policy | ❌ |
 | Wildcard table policies (`*`, `events_*`) | ❌ |
-| Database-level policies | ❌ |
-| Column-level policies | ❌ |
-| Deny policies | ❌ |
+| Database-level policies | ✅ |
+| Column-level policies | ✅ |
+| Deny policies (single-service) | ❌ |
 | Cross-policy permit + deny suppression | ❌ |
 | Overlapping policies for the same resource | ❌ |
 | Grantable permissions (`delegateAdmin=true`) | ❌ |
-| Multi-user / group / role policies | ❌ |
-| Unmapped principal | ❌ |
-| `all` access type expansion | ❌ |
+| Multi-user policies | ✅ |
+| Group and role principals | ❌ |
+| Unmapped principal | ✅ |
+| `all` access type expansion | ❌ (lakeformation Ranger service rejects "all"; generator exists but not wired) |
 | Sync service restart recovery | ❌ |

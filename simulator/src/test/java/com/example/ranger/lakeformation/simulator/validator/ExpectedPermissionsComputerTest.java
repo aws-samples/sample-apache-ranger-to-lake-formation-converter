@@ -294,23 +294,23 @@ class ExpectedPermissionsComputerTest {
     }
 
     // -----------------------------------------------------------------------
-    // Test 11: column-level grant strips DESCRIBE
+    // Test 11: column-level grant produces only SELECT
+    // LF TABLE_WITH_COLUMNS only supports SELECT — all other permissions (INSERT, DELETE,
+    // ALTER, DROP, DESCRIBE) are ignored by the sync service for column-scoped resources.
     // -----------------------------------------------------------------------
 
     @Test
-    void columnLevelGrantStripsDescribe() {
+    void columnLevelGrantProducesOnlySelect() {
         JsonNode items = singleItemArray(buildItem("alice", "all", false));
         JsonNode resources = buildColumnResources("mydb", "events", "salary");
         JsonNode policy = buildPolicy(true, "lakeformation", 0, items, resources);
 
         Set<SimulatorPermission> result = computer.compute(List.of(policy));
 
-        Set<String> permissions = result.stream()
-                .map(SimulatorPermission::permission)
-                .collect(Collectors.toSet());
-        assertFalse(permissions.contains("DESCRIBE"), "DESCRIBE must be stripped from column-level grants");
-        // Should have the remaining 5: SELECT, INSERT, DELETE, ALTER, DROP
-        assertEquals(Set.of("SELECT", "INSERT", "DELETE", "ALTER", "DROP"), permissions);
+        assertEquals(1, result.size(), "column-level 'all' should produce exactly 1 permission (SELECT)");
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("TABLE_WITH_COLUMNS", perm.resourceType());
+        assertEquals("SELECT", perm.permission(), "only SELECT is valid for TABLE_WITH_COLUMNS");
     }
 
     // -----------------------------------------------------------------------
@@ -353,7 +353,10 @@ class ExpectedPermissionsComputerTest {
 
     @Test
     void hiveAll_producesNoPermissions() {
-        // "all" in hive maps to SUPER which is not an LF permission — zero grants expected
+        // "all" in the "hive" service map is absent (HiveServiceAdapter maps it to "SUPER" → no LF permission).
+        // Note: the simulator's generateAllAccessTablePolicy() uses rangerServiceName ("lakeformation"), not "hive",
+        // so that generator takes the lakeformation map where "all" expands to 6 permissions. This test covers
+        // the "hive"-named service path, which is reachable if an operator configures a custom hive service name.
         String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
                 + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
                 + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"

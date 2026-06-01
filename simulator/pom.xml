@@ -15,6 +15,8 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <RANGER_URL>http://localhost:6080</RANGER_URL>
+        <AWS_REGION>us-east-1</AWS_REGION>
         <aws.sdk.version>2.29.52</aws.sdk.version>
         <jackson.version>2.15.3</jackson.version>
         <slf4j.version>1.7.36</slf4j.version>
@@ -127,4 +129,67 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            run-simulator: build the fat jar, provision Ranger services, then launch the simulator.
+
+            Required environment variables:
+              RANGER_URL          (default: http://localhost:6080)
+              AWS_PROFILE         AWS credentials profile for the simulator account
+              AWS_REGION          (default: us-east-1)
+
+            Usage:
+              mvn package -pl simulator -Prun-simulator \
+                -DRANGER_URL=http://localhost:6080 \
+                -DAWS_PROFILE=my-profile
+        -->
+        <profile>
+            <id>run-simulator</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <!-- Step 1: provision Ranger service defs and instances -->
+                            <execution>
+                                <id>setup-ranger-services</id>
+                                <phase>pre-integration-test</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>${project.basedir}/scripts/setup-ranger-services.sh</executable>
+                                    <arguments>
+                                        <argument>--ranger-url</argument>
+                                        <argument>${RANGER_URL}</argument>
+                                        <argument>--repo-root</argument>
+                                        <argument>${project.basedir}/..</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <!-- Step 2: run the simulator fat jar -->
+                            <execution>
+                                <id>run-simulator</id>
+                                <phase>integration-test</phase>
+                                <goals><goal>java</goal></goals>
+                                <configuration>
+                                    <mainClass>com.example.ranger.lakeformation.simulator.driver.SimulatorMain</mainClass>
+                                    <includeProjectDependencies>true</includeProjectDependencies>
+                                    <includePluginDependencies>false</includePluginDependencies>
+                                    <classpathScope>runtime</classpathScope>
+                                    <systemProperties>
+                                        <systemProperty>
+                                            <key>aws.region</key>
+                                            <value>${AWS_REGION}</value>
+                                        </systemProperty>
+                                    </systemProperties>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

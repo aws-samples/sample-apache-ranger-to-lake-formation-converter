@@ -42,7 +42,7 @@ public class TagPolicyGenerator implements PolicyGenerator {
                 "users", List.of(user),
                 "groups", List.of(),
                 "roles", List.of(),
-                "accesses", List.of(Map.of("type", "select", "isAllowed", true)),
+                "accesses", List.of(Map.of("type", "lakeformation:select", "isAllowed", true)),
                 "delegateAdmin", false
         );
 

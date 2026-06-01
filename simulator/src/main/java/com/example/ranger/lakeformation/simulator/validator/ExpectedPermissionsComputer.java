@@ -89,7 +89,14 @@ public class ExpectedPermissionsComputer {
         // Determine resource type and IDs
         List<ResourceSpec> specs = extractResourceSpecs(resources, permissions);
         for (ResourceSpec spec : specs) {
-            Set<String> finalPerms = spec.isColumn() ? withoutDescribe(permissions) : permissions;
+            Set<String> finalPerms;
+            if (spec.isColumn()) {
+                // LF TABLE_WITH_COLUMNS only supports SELECT — strip everything else.
+                // INSERT/DELETE/ALTER etc. on a column resource are ignored by the sync service.
+                finalPerms = permissions.contains("SELECT") ? Set.of("SELECT") : Set.of();
+            } else {
+                finalPerms = permissions;
+            }
             if (finalPerms.isEmpty()) continue;
             for (String arn : arns) {
                 // LF models SELECT on a table as TABLE_WITH_COLUMNS (all columns).
@@ -273,8 +280,8 @@ public class ExpectedPermissionsComputer {
         hiveMap.put("alter",  Set.of("ALTER"));
         hiveMap.put("read",   Set.of("SELECT"));
         hiveMap.put("write",  Set.of("INSERT"));
-        // "all" intentionally absent: maps to SUPER which is not an LF permission
-        // "describe" intentionally absent: Hive "describe" does not map to an LF permission
+        // "all" intentionally absent: HiveServiceAdapter maps it to "SUPER" which is not an LF permission → zero grants
+        // "describe" intentionally absent: not a registered access type in the Hive Ranger service definition
         // "insert" intentionally absent: Hive uses "write" for insert semantics; "insert" is not a Hive access type
 
         Map<String, Set<String>> trinoMap = new HashMap<>();

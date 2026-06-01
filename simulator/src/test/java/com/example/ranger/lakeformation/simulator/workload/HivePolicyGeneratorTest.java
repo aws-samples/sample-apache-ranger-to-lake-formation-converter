@@ -67,10 +67,10 @@ class HivePolicyGeneratorTest {
         assertFalse(resources.containsKey("table"), "database policy should NOT have 'table' in resources");
     }
 
-    // 6. generateTablePolicy() only produces valid Hive access types
+    // 6. generateTablePolicy() only produces valid lakeformation service access types
     @Test
-    void generateTablePolicy_usesHiveAccessTypes() {
-        Set<String> validHiveTypes = Set.of("select", "update", "read", "write", "create", "drop", "alter");
+    void generateTablePolicy_usesLakeFormationAccessTypes() {
+        Set<String> validTypes = Set.of("select", "insert", "delete", "describe", "alter", "drop");
         for (int seed = 0; seed < 20; seed++) {
             Map<String, Object> policy = generator(seed).generateTablePolicy("p-" + seed);
             @SuppressWarnings("unchecked")
@@ -81,8 +81,8 @@ class HivePolicyGeneratorTest {
                 List<Map<String, Object>> accesses = (List<Map<String, Object>>) item.get("accesses");
                 for (Map<String, Object> access : accesses) {
                     String type = (String) access.get("type");
-                    assertTrue(validHiveTypes.contains(type),
-                            "Access type '" + type + "' is not a valid Hive access type");
+                    assertTrue(validTypes.contains(type),
+                            "Access type '" + type + "' is not a valid lakeformation service access type");
                 }
             }
         }
@@ -109,10 +109,10 @@ class HivePolicyGeneratorTest {
         }
     }
 
-    // 8. generateDatabasePolicy() uses "create" not "create_table"
+    // 8. generateDatabasePolicy() uses the native lakeformation service access types
     @Test
-    void generateDatabasePolicy_usesHiveCreateNotCreateTable() {
-        // generateDatabasePolicy should use "create" and "drop", not "create_table"
+    void generateDatabasePolicy_usesLakeFormationCreateTable() {
+        // generateDatabasePolicy must use "create_table" and "drop" (native lakeformation service access types)
         for (int seed = 0; seed < 20; seed++) {
             Map<String, Object> policy = generator(seed).generateDatabasePolicy("dp-" + seed);
             @SuppressWarnings("unchecked")
@@ -122,8 +122,8 @@ class HivePolicyGeneratorTest {
                 List<Map<String, Object>> accesses = (List<Map<String, Object>>) item.get("accesses");
                 for (Map<String, Object> access : accesses) {
                     String type = (String) access.get("type");
-                    assertTrue(Set.of("create", "drop").contains(type),
-                            "generateDatabasePolicy access type '" + type + "' must be 'create' or 'drop'");
+                    assertTrue(Set.of("create_table", "drop").contains(type),
+                            "generateDatabasePolicy access type '" + type + "' must be 'create_table' or 'drop'");
                 }
             }
         }
@@ -142,5 +142,131 @@ class HivePolicyGeneratorTest {
         Map<String, Object> resources2 = (Map<String, Object>) second.get("resources");
         assertEquals(resources1.get("database"), resources2.get("database"));
         assertEquals(resources1.get("table"), resources2.get("table"));
+    }
+
+    // Gap 2: generateMultiUserTablePolicy() has 2-3 users in the single policyItem
+    @Test
+    void generateMultiUserTablePolicy_hasTwoOrThreeUsers() {
+        for (int seed = 0; seed < 50; seed++) {
+            Map<String, Object> policy = generator(seed).generateMultiUserTablePolicy("mp-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            assertNotNull(items);
+            assertFalse(items.isEmpty());
+            @SuppressWarnings("unchecked")
+            List<String> users = (List<String>) items.get(0).get("users");
+            assertNotNull(users);
+            assertTrue(users.size() >= 2 && users.size() <= 3,
+                    "Expected 2-3 users in multi-user policy, got " + users.size());
+            // All users must be from the principal pool
+            assertTrue(PRINCIPALS.containsAll(users),
+                    "All users must be from the principal pool, got: " + users);
+        }
+    }
+
+    // Gap 2: generateMultiUserTablePolicy() users are distinct (no duplicates)
+    @Test
+    void generateMultiUserTablePolicy_usersAreDistinct() {
+        for (int seed = 0; seed < 50; seed++) {
+            Map<String, Object> policy = generator(seed).generateMultiUserTablePolicy("mp-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            @SuppressWarnings("unchecked")
+            List<String> users = (List<String>) items.get(0).get("users");
+            assertEquals(users.size(), Set.copyOf(users).size(),
+                    "Users in multi-user policy must be distinct, got: " + users);
+        }
+    }
+
+    // Gap 4: generateColumnPolicy() includes "column" in resources
+    @Test
+    void generateColumnPolicy_hasColumnInResources() {
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateColumnPolicy("cp-" + seed);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
+            assertNotNull(resources);
+            assertTrue(resources.containsKey("column"), "column policy must have 'column' in resources");
+            assertTrue(resources.containsKey("database"), "column policy must have 'database' in resources");
+            assertTrue(resources.containsKey("table"), "column policy must have 'table' in resources");
+        }
+    }
+
+    // Gap 4: generateColumnPolicy() always uses "select" — the only access type that
+    // produces an LF TABLE_WITH_COLUMNS grant; insert/delete on column resources are no-ops in LF.
+    @Test
+    void generateColumnPolicy_usesSelectOnly() {
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateColumnPolicy("cp-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            for (Map<String, Object> item : items) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> accesses = (List<Map<String, Object>>) item.get("accesses");
+                assertEquals(1, accesses.size(), "column policy should have exactly one access entry");
+                assertEquals("select", accesses.get(0).get("type"),
+                        "column policy must use 'select' (the only access type producing an LF grant)");
+            }
+        }
+    }
+
+    // Gap 5: generateAllAccessTablePolicy() uses exactly "all" as the single access type
+    @Test
+    void generateAllAccessTablePolicy_hasAllAccessType() {
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateAllAccessTablePolicy("ap-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            assertNotNull(items);
+            assertFalse(items.isEmpty());
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> accesses = (List<Map<String, Object>>) items.get(0).get("accesses");
+            assertEquals(1, accesses.size(), "all-access policy should have exactly one access entry");
+            assertEquals("all", accesses.get(0).get("type"),
+                    "all-access policy must use 'all' access type");
+        }
+    }
+
+    // Gap 5: generateAllAccessTablePolicy() has table and database resources
+    @Test
+    void generateAllAccessTablePolicy_hasTableAndDatabaseResources() {
+        Map<String, Object> policy = generator(77).generateAllAccessTablePolicy("ap-77");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
+        assertNotNull(resources);
+        assertTrue(resources.containsKey("database"));
+        assertTrue(resources.containsKey("table"));
+        assertFalse(resources.containsKey("column"), "all-access table policy should not have column resource");
+    }
+
+    // Gap 9: generateUnmappedPrincipalPolicy() uses the unmapped principal name
+    @Test
+    void generateUnmappedPrincipalPolicy_usesUnmappedPrincipal() {
+        String unmapped = HivePolicyGenerator.getUnmappedPrincipal();
+        for (int seed = 0; seed < 20; seed++) {
+            Map<String, Object> policy = generator(seed).generateUnmappedPrincipalPolicy("up-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            assertNotNull(items);
+            assertFalse(items.isEmpty());
+            @SuppressWarnings("unchecked")
+            List<String> users = (List<String>) items.get(0).get("users");
+            assertEquals(List.of(unmapped), users,
+                    "unmapped policy must use the unmapped principal '" + unmapped + "'");
+            // The unmapped principal must NOT be in the principal pool
+            assertFalse(PRINCIPALS.contains(unmapped),
+                    "Unmapped principal '" + unmapped + "' must not be in the standard principal pool");
+        }
+    }
+
+    // Gap 9: generateUnmappedPrincipalPolicy() has valid table and database resources
+    @Test
+    void generateUnmappedPrincipalPolicy_hasTableResources() {
+        Map<String, Object> policy = generator(55).generateUnmappedPrincipalPolicy("up-55");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
+        assertNotNull(resources);
+        assertTrue(resources.containsKey("database"));
+        assertTrue(resources.containsKey("table"));
     }
 }

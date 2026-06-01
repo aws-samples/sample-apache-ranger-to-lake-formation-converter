@@ -51,9 +51,14 @@ integration-test/
 ├── docker/              Docker Compose file for the Ranger stack
 │   └── docker-compose.yml
 ├── scripts/             Lifecycle and utility scripts
-│   ├── start-ranger.sh        Start stack + wait for health
-│   ├── stop-ranger.sh         Idempotent teardown
-│   └── run-integration-tests.sh  Full lifecycle runner
+│   ├── setup-environment.sh       Orchestrator: build IT image, start stack, provision services, start conversion-server
+│   ├── install-servicedef.sh      Install/update the lakeformation servicedef (idempotent)
+│   ├── create-service-instance.sh Create the lakeformation service instance (idempotent)
+│   ├── create-tag-service.sh      Create the cl_tag tag service instance (idempotent)
+│   ├── teardown-environment.sh    Tear down the Docker stack
+│   ├── start-ranger.sh            Start stack + wait for health
+│   ├── stop-ranger.sh             Idempotent teardown
+│   └── run-integration-tests.sh   Full lifecycle runner
 ├── k8s/                 Kubernetes manifests (EKS Fargate — future)
 ├── ec2/                 EC2 deployment scripts (future)
 └── DEPLOYMENT-STRATEGIES.md   Comparison of deployment options
@@ -61,10 +66,17 @@ integration-test/
 
 Integration test Java sources live in `src/integration-test/java/` and are compiled only when the `integration-test` Maven profile is active.
 
+The `setup-environment.sh` script provisions the `lakeformation` and `cl_tag` service instances used by the integration tests. The simulator requires two additional services (`trino`, `emrfs`) which are provisioned separately by `simulator/scripts/setup-ranger-services.sh`.
+
 ## Script Reference
 
 | Script | Purpose |
 |--------|---------|
+| `setup-environment.sh` | Full stack bring-up: builds IT Docker image, starts Ranger, provisions servicedefs and service instances, starts conversion-server. Called by the `integration-test` and `start-stack` Maven profiles. |
+| `install-servicedef.sh` | Installs or updates the `lakeformation` servicedef from `conf/ranger-servicedef-lakeformation.json`. Idempotent (PUT if exists, POST if not). |
+| `create-service-instance.sh` | Creates the `lakeformation` service instance. Patches out the custom `implClass` for Docker compatibility. Idempotent. |
+| `create-tag-service.sh` | Creates the `cl_tag` tag service instance. Idempotent. |
+| `teardown-environment.sh` | Tears down the Docker stack. Always exits 0. |
 | `start-ranger.sh` | Starts the Docker Compose stack and polls until Ranger Admin is healthy. Supports `--timeout`, `--interval`, `--compose-file` flags. |
 | `stop-ranger.sh` | Tears down the stack. Always exits 0 (idempotent). Supports `--compose-file` flag. |
 | `run-integration-tests.sh` | Full lifecycle: provision → test → teardown. Supports `--skip-teardown` flag. |

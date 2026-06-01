@@ -38,7 +38,7 @@ public class DataLocationPolicyGenerator implements PolicyGenerator {
                 "users", List.of(user),
                 "groups", List.of(),
                 "roles", List.of(),
-                "accesses", List.of(Map.of("type", "datalocation", "isAllowed", true)),
+                "accesses", List.of(Map.of("type", "data_location_access", "isAllowed", true)),
                 "delegateAdmin", false
         );
 

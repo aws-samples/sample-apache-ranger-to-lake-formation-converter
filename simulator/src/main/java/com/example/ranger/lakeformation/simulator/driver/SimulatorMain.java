@@ -84,12 +84,19 @@ public class SimulatorMain {
         EmrfsPolicyGenerator emrfsPolicyGenerator = new EmrfsPolicyGenerator(
                 config.getS3Prefixes(), principals, config.getEmrfsServiceName(), rng);
 
+        // "hive-all" omitted: lakeformation Ranger service rejects "all" as an access type.
+        // generateAllAccessTablePolicy() is kept in HivePolicyGenerator for future use against
+        // a Hive-type service that supports "all", but is not wired here.
         List<GeneratorEntry> generators = List.of(
-            new GeneratorEntry("hive",         hivePolicyGenerator::generateTablePolicy, 45),
-            new GeneratorEntry("trino",        trinoServiceGenerator::generate,          25),
-            new GeneratorEntry("datalocation", dataLocationGenerator::generate,          15),
-            new GeneratorEntry("tag",          tagPolicyGenerator::generate,             10),
-            new GeneratorEntry("emrfs",        emrfsPolicyGenerator::generate,            5)
+            new GeneratorEntry("hive",           hivePolicyGenerator::generateTablePolicy,           33),
+            new GeneratorEntry("trino",          trinoServiceGenerator::generate,                    20),
+            new GeneratorEntry("datalocation",   dataLocationGenerator::generate,                    12),
+            new GeneratorEntry("tag",            tagPolicyGenerator::generate,                        8),
+            new GeneratorEntry("emrfs",          emrfsPolicyGenerator::generate,                      5),
+            new GeneratorEntry("hive-multi",     hivePolicyGenerator::generateMultiUserTablePolicy,  10),
+            new GeneratorEntry("hive-db",        hivePolicyGenerator::generateDatabasePolicy,         5),
+            new GeneratorEntry("hive-col",       hivePolicyGenerator::generateColumnPolicy,           5),
+            new GeneratorEntry("hive-unmapped",  hivePolicyGenerator::generateUnmappedPrincipalPolicy, 2)
         );
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
                 new ArrayList<>(), generators, rng);

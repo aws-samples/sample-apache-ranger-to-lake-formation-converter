@@ -39,8 +39,9 @@ public class TrinoServiceGenerator implements PolicyGenerator {
         List<String> accesses = randomSubset(TRINO_ACCESS_TYPES, 1 + random.nextInt(3));
 
         Map<String, Object> resources = new LinkedHashMap<>();
-        resources.put("schema", Map.of("values", List.of(schema), "isExcludes", false));
-        resources.put("table",  Map.of("values", List.of(table),  "isExcludes", false));
+        resources.put("catalog", Map.of("values", List.of("hive"),   "isExcludes", false));
+        resources.put("schema",  Map.of("values", List.of(schema),   "isExcludes", false));
+        resources.put("table",   Map.of("values", List.of(table),    "isExcludes", false));
 
         List<Object> denyItems = random.nextInt(100) < 20
             ? List.of(buildItem(user, randomSubset(accesses, 1), false))
