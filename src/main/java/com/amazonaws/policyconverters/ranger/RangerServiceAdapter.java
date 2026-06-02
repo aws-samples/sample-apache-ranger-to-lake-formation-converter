@@ -179,11 +179,13 @@ public class RangerServiceAdapter implements SourcePolicyAdapter {
 
     /**
      * Build an S3 data location ARN: {@code arn:aws:s3:::{s3Path}}.
-     * The s3Path is the raw value from the Ranger policy's datalocation resource
-     * (e.g., "my-bucket/data/path").
+     * The s3Path is the raw value from the Ranger policy's datalocation resource.
+     * Accepts either bare bucket/path form ("my-bucket/data/") or s3:// URL form
+     * ("s3://my-bucket/data/"); both are normalized to the ARN format required by LF.
      */
     public String buildDataLocationArn(String s3Path) {
-        return "arn:aws:s3:::" + s3Path;
+        String path = s3Path.startsWith("s3://") ? s3Path.substring("s3://".length()) : s3Path;
+        return "arn:aws:s3:::" + path;
     }
 
     /**

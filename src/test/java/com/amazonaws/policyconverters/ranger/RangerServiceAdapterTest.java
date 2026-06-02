@@ -146,6 +146,17 @@ class RangerServiceAdapterTest {
         assertEquals("arn:aws:s3:::my-bucket/data/path", ref.getEntityId());
     }
 
+    @Test
+    void buildDataLocationArn_barePathProducesArn() {
+        assertEquals("arn:aws:s3:::my-bucket/data/", adapter.buildDataLocationArn("my-bucket/data/"));
+    }
+
+    @Test
+    void buildDataLocationArn_s3UrlStrippedBeforeArnPrefix() {
+        // Ranger policies stored with s3:// prefix must not produce arn:aws:s3:::s3://...
+        assertEquals("arn:aws:s3:::my-bucket/data/", adapter.buildDataLocationArn("s3://my-bucket/data/"));
+    }
+
     // --- buildPrincipalRef ---
 
     @Test
