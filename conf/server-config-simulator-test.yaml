@@ -19,6 +19,11 @@ principalMapping:
     "etl_user": "arn:aws:iam::988640946202:role/ranger-sim-etl_user"
     "data_admin": "arn:aws:iam::988640946202:role/ranger-sim-data_admin"
     "viewer": "arn:aws:iam::988640946202:role/ranger-sim-viewer"
+  roleMappings:
+    "analyst": "arn:aws:iam::988640946202:role/ranger-sim-analyst"
+    "etl_user": "arn:aws:iam::988640946202:role/ranger-sim-etl_user"
+    "data_admin": "arn:aws:iam::988640946202:role/ranger-sim-data_admin"
+    "viewer": "arn:aws:iam::988640946202:role/ranger-sim-viewer"
 
 policyRefreshIntervalMs: 15000
 
