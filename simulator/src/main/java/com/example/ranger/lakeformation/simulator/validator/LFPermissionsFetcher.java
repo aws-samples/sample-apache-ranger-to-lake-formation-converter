@@ -96,7 +96,15 @@ public class LFPermissionsFetcher {
             return resource.database().name();
         }
         if (resource.dataLocation() != null) {
-            return resource.dataLocation().resourceArn();
+            // LF stores the ARN (arn:aws:s3:::bucket/path); normalize back to s3:// URL
+            // with trailing slash to match Ranger policy datalocation resource values.
+            String arn = resource.dataLocation().resourceArn();
+            if (arn != null && arn.startsWith("arn:aws:s3:::")) {
+                String s3Path = "s3://" + arn.substring("arn:aws:s3:::".length());
+                if (!s3Path.endsWith("/")) s3Path += "/";
+                return s3Path;
+            }
+            return arn;
         }
         if (resource.tableWithColumns() != null) {
             TableWithColumnsResource twc = resource.tableWithColumns();
