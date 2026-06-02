@@ -31,10 +31,15 @@ public class S3AgPermissionsFetcher {
 
     /**
      * List all grants from the Access Grants instance and return as SimulatorPermissions.
-     * Returns empty set if no S3 Access Grants instance exists (404).
+     * Returns empty set if instanceArn is blank (S3AG not configured), or if no instance exists (404).
      */
     public Set<SimulatorPermission> fetchAll() {
         Set<SimulatorPermission> result = new HashSet<>();
+        if (instanceArn == null || instanceArn.isBlank()) {
+            LOG.debug("No S3 Access Grants instance ARN configured; skipping S3AG validation");
+            return result;
+        }
+
         String continuationToken = null;
         int pageCount = 0;
 
