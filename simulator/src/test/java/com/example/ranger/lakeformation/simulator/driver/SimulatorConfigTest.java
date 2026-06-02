@@ -15,7 +15,7 @@ class SimulatorConfigTest {
     void nullFieldsResolveToDefaults() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
 
         assertEquals(60, config.getCycleIntervalSeconds());
         assertEquals("us-east-1", config.getAwsRegion());
@@ -50,7 +50,7 @@ class SimulatorConfigTest {
                 "my-host",
                 "/tmp/bundles",
                 null,
-                null, null, null, null);
+                null, null, null, null, null);
 
         assertEquals(120, config.getCycleIntervalSeconds());
         assertEquals("eu-west-1", config.getAwsRegion());
@@ -72,7 +72,7 @@ class SimulatorConfigTest {
         List<String> mutable = new ArrayList<>(List.of("arn:aws:iam::111:role/A"));
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, mutable, null, null, null, null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
 
         mutable.add("arn:aws:iam::222:role/B");
 
@@ -84,7 +84,7 @@ class SimulatorConfigTest {
     void toStringContainsRangerAdminUrl() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, "http://ranger-admin:6080", null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
 
         assertTrue(config.toString().contains("rangerAdminUrl"),
                 "toString() should contain 'rangerAdminUrl' for logging diagnostics");
@@ -141,7 +141,7 @@ class SimulatorConfigTest {
     void trinoServiceNameDefaultsToTrino() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
         assertEquals("trino", config.getTrinoServiceName());
     }
 
@@ -149,7 +149,7 @@ class SimulatorConfigTest {
     void emrfsServiceNameDefaultsToEmrfs() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
         assertEquals("emrfs", config.getEmrfsServiceName());
     }
 
@@ -157,7 +157,7 @@ class SimulatorConfigTest {
     void tagServiceNameDefaultsToClTag() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
         assertEquals("cl_tag", config.getTagServiceName());
     }
 
@@ -165,7 +165,7 @@ class SimulatorConfigTest {
     void s3PrefixesDefaultsToSamplePaths() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
         assertNotNull(config.getS3Prefixes());
         assertFalse(config.getS3Prefixes().isEmpty());
     }
@@ -175,7 +175,7 @@ class SimulatorConfigTest {
         List<String> mutable = new ArrayList<>(List.of("s3://bucket/path/"));
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, mutable);
+                null, null, null, mutable, null);
         mutable.add("s3://bucket/other/");
         assertEquals(1, config.getS3Prefixes().size(),
                 "Mutating original list must not affect s3Prefixes");
@@ -185,7 +185,7 @@ class SimulatorConfigTest {
     void explicitServiceNamesOverrideDefaults() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                "my-trino", "my-emrfs", "my-tag", null);
+                "my-trino", "my-emrfs", "my-tag", null, null);
         assertEquals("my-trino", config.getTrinoServiceName());
         assertEquals("my-emrfs", config.getEmrfsServiceName());
         assertEquals("my-tag",   config.getTagServiceName());
@@ -195,7 +195,7 @@ class SimulatorConfigTest {
     void s3PrefixesEmptyListFallsBackToDefaults() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, List.of());
+                null, null, null, List.of(), null);
         assertNotNull(config.getS3Prefixes());
         assertFalse(config.getS3Prefixes().isEmpty(),
                 "Empty s3Prefixes list should fall back to default sample paths");

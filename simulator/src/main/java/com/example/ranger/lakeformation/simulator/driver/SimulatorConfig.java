@@ -44,6 +44,8 @@ public class SimulatorConfig {
     private final String emrfsServiceName;
     private final String tagServiceName;
     private final List<String> s3Prefixes;
+    /** Optional IAM role ARN to assume for all AWS API calls. If null, uses the default credential chain. */
+    private final String roleArn;
 
     @JsonCreator
     public SimulatorConfig(
@@ -64,7 +66,8 @@ public class SimulatorConfig {
             @JsonProperty("trinoServiceName")        String  trinoServiceName,
             @JsonProperty("emrfsServiceName")        String  emrfsServiceName,
             @JsonProperty("tagServiceName")          String  tagServiceName,
-            @JsonProperty("s3Prefixes")              List<String> s3Prefixes) {
+            @JsonProperty("s3Prefixes")              List<String> s3Prefixes,
+            @JsonProperty("roleArn")                 String  roleArn) {
         this.cycleIntervalSeconds = cycleIntervalSeconds != null ? cycleIntervalSeconds : DEFAULT_CYCLE_INTERVAL_SECONDS;
         this.awsRegion = awsRegion != null ? awsRegion : DEFAULT_AWS_REGION;
         this.rangerAdminUrl = rangerAdminUrl;
@@ -85,6 +88,7 @@ public class SimulatorConfig {
         this.s3Prefixes       = s3Prefixes != null && !s3Prefixes.isEmpty()
                                 ? List.copyOf(s3Prefixes)
                                 : DEFAULT_S3_PREFIXES;
+        this.roleArn = (roleArn != null && !roleArn.isBlank()) ? roleArn : null;
     }
 
     public int getCycleIntervalSeconds() { return cycleIntervalSeconds; }
@@ -106,6 +110,8 @@ public class SimulatorConfig {
     public String       getEmrfsServiceName() { return emrfsServiceName; }
     public String       getTagServiceName()   { return tagServiceName; }
     public List<String> getS3Prefixes()       { return s3Prefixes; }
+    /** Returns the IAM role ARN to assume, or null to use the default credential chain. */
+    public String getRoleArn()                { return roleArn; }
 
     @Override
     public String toString() {

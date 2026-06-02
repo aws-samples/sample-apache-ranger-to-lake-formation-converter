@@ -8,10 +8,15 @@ import com.example.ranger.lakeformation.simulator.workload.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.glue.GlueClient;
 import software.amazon.awssdk.services.lakeformation.LakeFormationClient;
 import software.amazon.awssdk.services.s3control.S3ControlClient;
+import software.amazon.awssdk.services.sts.StsClient;
+import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider;
+import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -45,9 +50,13 @@ public class SimulatorMain {
     public void run(SimulatorConfig config) throws Exception {
         // Wire AWS clients
         Region region = Region.of(config.getAwsRegion());
-        LakeFormationClient lfClient = LakeFormationClient.builder().region(region).build();
-        S3ControlClient s3ControlClient = S3ControlClient.builder().region(region).build();
-        GlueClient glueClient = GlueClient.builder().region(region).build();
+        AwsCredentialsProvider credentialsProvider = buildCredentialsProvider(config, region);
+        LakeFormationClient lfClient = LakeFormationClient.builder()
+                .region(region).credentialsProvider(credentialsProvider).build();
+        S3ControlClient s3ControlClient = S3ControlClient.builder()
+                .region(region).credentialsProvider(credentialsProvider).build();
+        GlueClient glueClient = GlueClient.builder()
+                .region(region).credentialsProvider(credentialsProvider).build();
 
         // Wire simulator components
         RangerPolicyClient rangerClient = new RangerPolicyClient(
@@ -155,6 +164,25 @@ public class SimulatorMain {
                 LOG.info("Simulator interrupted, shutting down");
             }
         }
+    }
+
+    private static AwsCredentialsProvider buildCredentialsProvider(SimulatorConfig config, Region region) {
+        if (config.getRoleArn() != null) {
+            LOG.info("Using STS AssumeRole credentials: roleArn={}", config.getRoleArn());
+            StsClient stsClient = StsClient.builder()
+                    .region(region)
+                    .credentialsProvider(DefaultCredentialsProvider.create())
+                    .build();
+            return StsAssumeRoleCredentialsProvider.builder()
+                    .stsClient(stsClient)
+                    .refreshRequest(AssumeRoleRequest.builder()
+                            .roleArn(config.getRoleArn())
+                            .roleSessionName("ranger-lf-simulator")
+                            .build())
+                    .build();
+        }
+        LOG.info("Using default AWS credentials provider chain");
+        return DefaultCredentialsProvider.create();
     }
 
     private static List<String> buildAllServiceNames(SimulatorConfig config) {
