@@ -178,6 +178,7 @@ public class LakeFormationClient {
     public BatchResult applyBatch(List<LFPermissionOperation> operations, DeadLetterLogger deadLetterLogger) {
         // Consolidate operations before batching
         List<LFPermissionOperation> consolidated = consolidateOperations(operations);
+        consolidated = resolveTableColumnConflicts(consolidated);
         LOG.info("Consolidated {} operations into {} entries", operations.size(), consolidated.size());
 
         List<LFPermissionOperation> grants = new ArrayList<>();
@@ -238,6 +239,71 @@ public class LakeFormationClient {
         List<LFPermissionOperation> result = new ArrayList<>(merged.size());
         for (MergedOp m : merged.values()) {
             result.add(m.toOperation());
+        }
+        return result;
+    }
+
+    /**
+     * Resolve TABLE vs TABLE_WITH_COLUMNS conflicts within a batch. LF rejects a
+     * TABLE_WITH_COLUMNS grant when the same principal already holds (or is being
+     * granted) a plain TABLE grant on the same (principal, catalogId, db, table).
+     *
+     * <p>For within-batch conflicts: merges column-level permissions into the
+     * TABLE-level entry and removes the TABLE_WITH_COLUMNS entry.
+     *
+     * <p>Cross-cycle conflicts (TABLE grant already exists in LF from a prior
+     * cycle) are handled in {@link #processBatchFailures} via promotion fallback.
+     */
+    static List<LFPermissionOperation> resolveTableColumnConflicts(List<LFPermissionOperation> ops) {
+        // Map conflictKey → index of the TABLE-level entry in working list
+        Map<String, Integer> tableGrantIndex = new LinkedHashMap<>();
+        List<LFPermissionOperation> working = new ArrayList<>(ops);
+
+        for (int i = 0; i < working.size(); i++) {
+            LFPermissionOperation op = working.get(i);
+            LFResource r = op.getResource();
+            if (r.getTableName() != null
+                    && (r.getColumnNames() == null || r.getColumnNames().isEmpty())
+                    && !r.isAllTables()
+                    && r.getDataLocationPath() == null) {
+                String key = op.getOperationType() + "|" + op.getPrincipalArn() + "|"
+                        + r.getCatalogId() + "|" + r.getDatabaseName() + "|" + r.getTableName();
+                tableGrantIndex.put(key, i);
+            }
+        }
+
+        Set<Integer> removeIndices = new HashSet<>();
+        for (int i = 0; i < working.size(); i++) {
+            LFPermissionOperation op = working.get(i);
+            LFResource r = op.getResource();
+            if (r.getColumnNames() != null && !r.getColumnNames().isEmpty()) {
+                String key = op.getOperationType() + "|" + op.getPrincipalArn() + "|"
+                        + r.getCatalogId() + "|" + r.getDatabaseName() + "|" + r.getTableName();
+                Integer tableIdx = tableGrantIndex.get(key);
+                if (tableIdx != null) {
+                    // Merge column-level permissions into the existing TABLE entry
+                    LFPermissionOperation tableOp = working.get(tableIdx);
+                    EnumSet<LFPermission> merged = EnumSet.copyOf(tableOp.getPermissions());
+                    merged.addAll(op.getPermissions());
+                    working.set(tableIdx, new LFPermissionOperation(
+                            tableOp.getOperationType(), tableOp.getSourcePolicyId(),
+                            tableOp.getPrincipalArn(), tableOp.getResource(),
+                            merged, tableOp.isGrantable() || op.isGrantable()));
+                    removeIndices.add(i);
+                    LOG.debug("Resolved TABLE/TABLE_WITH_COLUMNS conflict: principal={}, db={}, table={}, merged perms={}",
+                            op.getPrincipalArn(), r.getDatabaseName(), r.getTableName(), op.getPermissions());
+                }
+            }
+        }
+
+        if (removeIndices.isEmpty()) {
+            return working;
+        }
+        List<LFPermissionOperation> result = new ArrayList<>(working.size() - removeIndices.size());
+        for (int i = 0; i < working.size(); i++) {
+            if (!removeIndices.contains(i)) {
+                result.add(working.get(i));
+            }
         }
         return result;
     }
@@ -667,10 +733,17 @@ public class LakeFormationClient {
         Resource.Builder builder = Resource.builder();
 
         if (lfResource.getDataLocationPath() != null) {
-            // Data location resource (S3 path)
+            // Data location resource: convert s3://bucket/path → arn:aws:s3:::bucket/path
+            String s3Path = lfResource.getDataLocationPath();
+            String resourceArn = s3Path.startsWith("s3://")
+                    ? "arn:aws:s3:::" + s3Path.substring("s3://".length())
+                    : s3Path;
+            if (resourceArn.endsWith("/")) {
+                resourceArn = resourceArn.substring(0, resourceArn.length() - 1);
+            }
             builder.dataLocation(DataLocationResource.builder()
                     .catalogId(lfResource.getCatalogId())
-                    .resourceArn(lfResource.getDataLocationPath())
+                    .resourceArn(resourceArn)
                     .build());
         } else if (lfResource.isAllTables()) {
             // All tables wildcard — applies to all current and future tables in the database
