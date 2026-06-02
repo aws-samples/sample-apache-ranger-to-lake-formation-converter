@@ -18,10 +18,18 @@ public class ExpectedPermissionsComputer {
 
     private final Map<String, String> principalMap;  // Ranger name → IAM ARN
     private final TableExpander tableExpander;
+    // When non-null, only policies whose service name is in this set are processed.
+    private final Set<String> managedServiceNames;
 
     public ExpectedPermissionsComputer(Map<String, String> principalMap, TableExpander tableExpander) {
+        this(principalMap, tableExpander, null);
+    }
+
+    public ExpectedPermissionsComputer(Map<String, String> principalMap, TableExpander tableExpander,
+                                       Set<String> managedServiceNames) {
         this.principalMap = Map.copyOf(principalMap);
         this.tableExpander = tableExpander;
+        this.managedServiceNames = managedServiceNames != null ? Set.copyOf(managedServiceNames) : null;
     }
 
     /**
@@ -58,6 +66,7 @@ public class ExpectedPermissionsComputer {
         if (!policy.path("isEnabled").asBoolean(true)) return false;
         String svc = policy.path("service").asText("").toLowerCase(Locale.ROOT);
         if (svc.contains("tag")) return false;
+        if (managedServiceNames != null && !managedServiceNames.contains(svc)) return false;
         if (policy.path("policyType").asInt(0) == 1) return false;
         JsonNode resources = policy.path("resources");
         if (resources.isMissingNode() || resources.isEmpty()) return false;

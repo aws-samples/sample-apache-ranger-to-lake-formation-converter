@@ -134,13 +134,18 @@ public class SimulatorMain {
         S3AgPermissionsFetcher s3AgFetcher = new S3AgPermissionsFetcher(s3ControlClient, accountId,
                 s3AgInstanceArn != null ? s3AgInstanceArn : "");
 
+        // Scope the validator to only the services the sync service actually processes.
+        // In single-service mode the sync service only subscribes to rangerServiceName.
+        Set<String> managedServiceNames = Set.of(
+                config.getRangerServiceName().toLowerCase(java.util.Locale.ROOT));
+
         // Use discovered/configured resource map for wildcard expansion in the independent validator
         ExpectedPermissionsComputer expectedComputer = new ExpectedPermissionsComputer(
                 principalMap, (db, pattern) -> {
                     List<String> tables = databaseTables.getOrDefault(db, List.of());
                     String regex = pattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
                     return tables.stream().filter(t -> t.matches(regex)).toList();
-                });
+                }, managedServiceNames);
 
         Phase1DriftValidator phase1 = new Phase1DriftValidator();
         Set<String> managedArns = new HashSet<>(principalMap.values());

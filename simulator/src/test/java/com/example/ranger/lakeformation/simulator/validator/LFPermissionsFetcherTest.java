@@ -105,7 +105,24 @@ class LFPermissionsFetcherTest {
                 .dataLocation(DataLocationResource.builder().resourceArn("arn:aws:s3:::bucket").build())
                 .build();
         assertEquals("DATA_LOCATION", fetcher.resolveResourceType(r));
-        assertEquals("arn:aws:s3:::bucket", fetcher.resolveResourceId(r));
+        // ARN is normalized back to s3:// URL with trailing slash to match Ranger policy values
+        assertEquals("s3://bucket/", fetcher.resolveResourceId(r));
+    }
+
+    @Test
+    void dataLocationWithPath_normalizesToS3Url() {
+        Resource r = Resource.builder()
+                .dataLocation(DataLocationResource.builder().resourceArn("arn:aws:s3:::my-bucket/data/path").build())
+                .build();
+        assertEquals("s3://my-bucket/data/path/", fetcher.resolveResourceId(r));
+    }
+
+    @Test
+    void dataLocationWithTrailingSlash_doesNotDoubleSlash() {
+        Resource r = Resource.builder()
+                .dataLocation(DataLocationResource.builder().resourceArn("arn:aws:s3:::my-bucket/data/").build())
+                .build();
+        assertEquals("s3://my-bucket/data/", fetcher.resolveResourceId(r));
     }
 
     @Test
