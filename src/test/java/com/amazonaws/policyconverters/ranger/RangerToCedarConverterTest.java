@@ -246,6 +246,34 @@ class RangerToCedarConverterTest {
         return policy;
     }
 
+    @Test
+    void delegateAdminTrueEmitsGrantableAnnotation() {
+        RangerPolicyItem item = buildItem("alice", "select");
+        item.setDelegateAdmin(true);
+        RangerPolicy policy = buildTablePolicy("lakeformation", 0);
+        policy.setPolicyItems(Collections.singletonList(item));
+
+        CedarPolicySet policySet = converter.convert(Collections.singletonList(policy));
+        String cedarText = policySet.toCedarString();
+
+        assertTrue(cedarText.contains("@grantable(\"true\")"),
+                "delegateAdmin=true must produce @grantable(\"true\") annotation in Cedar output");
+    }
+
+    @Test
+    void delegateAdminFalseDoesNotEmitGrantableAnnotation() {
+        RangerPolicyItem item = buildItem("alice", "select");
+        item.setDelegateAdmin(false);
+        RangerPolicy policy = buildTablePolicy("lakeformation", 0);
+        policy.setPolicyItems(Collections.singletonList(item));
+
+        CedarPolicySet policySet = converter.convert(Collections.singletonList(policy));
+        String cedarText = policySet.toCedarString();
+
+        assertFalse(cedarText.contains("@grantable"),
+                "delegateAdmin=false must NOT produce @grantable annotation");
+    }
+
     private static RangerPolicyItem buildItem(String user, String accessType) {
         RangerPolicyItem item = new RangerPolicyItem();
         RangerPolicyItemAccess access = new RangerPolicyItemAccess();

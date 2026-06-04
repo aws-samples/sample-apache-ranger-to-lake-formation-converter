@@ -310,4 +310,41 @@ class CedarToLFConverterTest {
         assertEquals(0, selectGrants,
                 "SELECT must NOT be granted — a deny-exception for a different action must not restore it");
     }
+
+    @Test
+    void grantableAnnotationProducesGrantableOperation() throws Exception {
+        String cedarText = """
+                @source("policy-grantable")
+                @grantable("true")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123:table/mydb/mytable"
+                );
+                """;
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size());
+        assertTrue(ops.get(0).isGrantable(),
+                "@grantable(\"true\") annotation must produce isGrantable=true on the LFPermissionOperation");
+    }
+
+    @Test
+    void missingGrantableAnnotationProducesNonGrantableOperation() throws Exception {
+        String cedarText = """
+                @source("policy-plain")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123:table/mydb/mytable"
+                );
+                """;
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size());
+        assertFalse(ops.get(0).isGrantable(),
+                "Absence of @grantable annotation must produce isGrantable=false");
+    }
 }

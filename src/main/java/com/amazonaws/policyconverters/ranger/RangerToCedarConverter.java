@@ -185,20 +185,8 @@ public class RangerToCedarConverter {
             ));
         }
 
-        // Delegated admin → gap (LF has no delegated admin model)
-        if (policy.getPolicyItems() != null) {
-            boolean hasDelegateAdmin = policy.getPolicyItems().stream()
-                    .anyMatch(item -> Boolean.TRUE.equals(item.getDelegateAdmin()));
-            if (hasDelegateAdmin) {
-                gapReporter.recordGap(new GapEntry(
-                        policyId, policyName, GapType.DELEGATED_ADMIN,
-                        buildResourcePath(policy),
-                        "Delegated admin flag detected on policy items. "
-                                + "Lake Formation has no equivalent concept.",
-                        "Manage Lake Formation administrative access through IAM policies or LF administrator settings."
-                ));
-            }
-        }
+        // delegateAdmin is propagated as @grantable("true") in Cedar statements and
+        // results in permissionsWithGrantOption being set on the LF grant.
 
         // Extract resources and determine resource level
         Map<String, RangerPolicyResource> resources = policy.getResources();
@@ -316,6 +304,9 @@ public class RangerToCedarConverter {
                             .append(":").append(policyId).append("\")\n");
                     if ("denyException".equals(extraAnnotation)) {
                         sb.append("@denyException(\"true\")\n");
+                    }
+                    if (Boolean.TRUE.equals(item.getDelegateAdmin())) {
+                        sb.append("@grantable(\"true\")\n");
                     }
 
                     // Effect and scope

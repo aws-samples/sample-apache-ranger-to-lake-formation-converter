@@ -59,6 +59,8 @@ public class CedarToLFConverter {
             "@source\\(\"([^\"]+)\"\\)");
     private static final Pattern DENY_EXCEPTION_PATTERN = Pattern.compile(
             "@denyException\\(\"true\"\\)");
+    private static final Pattern GRANTABLE_PATTERN = Pattern.compile(
+            "@grantable\\(\"true\"\\)");
     private static final Pattern ROW_FILTER_PATTERN = Pattern.compile(
             "resource\\.rowFilter\\s*==\\s*\"((?>[^\"\\\\]|\\\\.)*)\"");
 
@@ -198,7 +200,7 @@ public class CedarToLFConverter {
                     principal,
                     lfResource,
                     EnumSet.of(lfPermission),
-                    false
+                    permit.grantable
             );
             operations.add(op);
         }
@@ -353,6 +355,9 @@ public class CedarToLFConverter {
         // Check for deny-exception annotation
         boolean isDenyException = DENY_EXCEPTION_PATTERN.matcher(raw).find();
 
+        // Check for grantable annotation (delegateAdmin → LF permissionsWithGrantOption)
+        boolean grantable = GRANTABLE_PATTERN.matcher(raw).find();
+
         // Extract row filter
         Matcher rowFilterMatcher = ROW_FILTER_PATTERN.matcher(raw);
         String rowFilter = null;
@@ -361,7 +366,7 @@ public class CedarToLFConverter {
         }
 
         return new ParsedStatement(effect, principal, action, resourceType,
-                resourceId, sourcePolicyId, isDenyException, rowFilter);
+                resourceId, sourcePolicyId, isDenyException, rowFilter, grantable);
     }
 
     /**
@@ -386,10 +391,18 @@ public class CedarToLFConverter {
         final String sourcePolicyId;
         final boolean isDenyException;
         final String rowFilter;
+        final boolean grantable;    // from @grantable("true") annotation (delegateAdmin)
 
         ParsedStatement(String effect, String principal, String action,
                         String resourceType, String resourceId, String sourcePolicyId,
                         boolean isDenyException, String rowFilter) {
+            this(effect, principal, action, resourceType, resourceId,
+                    sourcePolicyId, isDenyException, rowFilter, false);
+        }
+
+        ParsedStatement(String effect, String principal, String action,
+                        String resourceType, String resourceId, String sourcePolicyId,
+                        boolean isDenyException, String rowFilter, boolean grantable) {
             this.effect = effect;
             this.principal = principal;
             this.action = action;
@@ -398,6 +411,7 @@ public class CedarToLFConverter {
             this.sourcePolicyId = sourcePolicyId;
             this.isDenyException = isDenyException;
             this.rowFilter = rowFilter;
+            this.grantable = grantable;
         }
     }
 

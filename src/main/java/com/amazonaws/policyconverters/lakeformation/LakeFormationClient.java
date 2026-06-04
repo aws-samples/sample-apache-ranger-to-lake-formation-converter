@@ -473,12 +473,18 @@ public class LakeFormationClient {
                 String entryId = failure.requestEntry().id();
                 String errorMsg = failure.error() != null ? failure.error().errorMessage() : "Unknown error";
 
-                // Treat "No permissions revoked" as a no-op success
+                // Treat idempotent revoke errors as no-op successes so the checkpoint
+                // advances and the operation is not retried forever:
+                // - "No permissions revoked": grantee already has no such permission
+                // - "Permissions modification is invalid": column spec doesn't match the actual
+                //   grant (e.g. revoking column-scoped SELECT when LF holds an all-columns grant
+                //   after resolveTableColumnConflicts merged them into a TABLE-level entry)
                 if ("REVOKE".equals(operationType) && errorMsg != null
-                        && errorMsg.contains("No permissions revoked")) {
+                        && (errorMsg.contains("No permissions revoked")
+                                || errorMsg.contains("Permissions modification is invalid"))) {
                     LFPermissionOperation op = entryIdToOp.get(entryId);
-                    LOG.info("Revoke is a no-op for policyId={}: grantee has no permissions on resource",
-                            op != null ? op.getSourcePolicyId() : entryId);
+                    LOG.info("Revoke treated as no-op for policyId={}: {}",
+                            op != null ? op.getSourcePolicyId() : entryId, errorMsg);
                     continue;
                 }
 
