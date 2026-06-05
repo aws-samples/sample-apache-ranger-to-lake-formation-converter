@@ -23,6 +23,7 @@ public class CompositePrincipalMapper implements PrincipalMapper {
     private final MetricsEmitter metricsEmitter;  // nullable
 
     public CompositePrincipalMapper(List<PrincipalMapper> delegates, MetricsEmitter metricsEmitter) {
+        if (delegates == null) throw new IllegalArgumentException("delegates must not be null");
         this.delegates = Collections.unmodifiableList(delegates);
         this.metricsEmitter = metricsEmitter;
     }

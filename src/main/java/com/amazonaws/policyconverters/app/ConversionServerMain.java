@@ -696,14 +696,17 @@ public class ConversionServerMain {
      */
     private static String resolveIdcRegion(PrincipalMappingConfig config) {
         if (config.getType() == PrincipalMapperType.IDENTITY_CENTER) {
-            return config.getIdcConfig().getRegion();
+            var idc = config.getIdcConfig();
+            if (idc == null) throw new IllegalArgumentException(
+                    "idcConfig is required when type is IDENTITY_CENTER");
+            return idc.getRegion();
         }
         // COMPOSITE — find the first IDC delegate
         return config.getDelegates().stream()
                 .filter(d -> d.getType() == PrincipalMapperType.IDENTITY_CENTER)
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("No IDENTITY_CENTER delegate found"))
-                .getIdcConfig()
+                .getIdcConfig()  // factory already validated this is non-null
                 .getRegion();
     }
 
