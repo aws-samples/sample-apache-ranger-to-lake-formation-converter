@@ -2,5 +2,6 @@ package com.amazonaws.policyconverters.config;
 
 public enum PrincipalMapperType {
     STATIC,
-    IDENTITY_CENTER
+    IDENTITY_CENTER,
+    COMPOSITE
 }

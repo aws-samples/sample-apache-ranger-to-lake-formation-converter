@@ -6,8 +6,13 @@ import com.amazonaws.policyconverters.config.PrincipalMapperType;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
+import com.amazonaws.policyconverters.lakeformation.CompositePrincipalMapper;
 
 class PrincipalMapperFactoryTest {
 
@@ -113,5 +118,94 @@ class PrincipalMapperFactoryTest {
                 () -> PrincipalMapperFactory.create(config, null, null));
         assertTrue(ex.getMessage().contains("identityStoreClient"),
                 "Expected message to contain 'identityStoreClient', got: " + ex.getMessage());
+    }
+
+    // --- COMPOSITE type ---
+
+    @Test
+    void create_compositeType_buildsChainInOrder() {
+        IdentitystoreClient idcClient = mock(IdentitystoreClient.class);
+
+        PrincipalMappingConfig staticDelegate = new PrincipalMappingConfig(
+                Map.of("alice", "arn:aws:iam::123:role/alice"),
+                Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.STATIC, null);
+
+        PrincipalMappingConfig idcDelegate = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.IDENTITY_CENTER, validIdcConfig());
+
+        PrincipalMappingConfig composite = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.COMPOSITE, null,
+                List.of(staticDelegate, idcDelegate));
+
+        PrincipalMapper result = PrincipalMapperFactory.create(composite, idcClient, null);
+        assertInstanceOf(CompositePrincipalMapper.class, result);
+    }
+
+    @Test
+    void create_compositeType_emptyDelegates_throwsIllegalArgument() {
+        PrincipalMappingConfig composite = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.COMPOSITE, null, Collections.emptyList());
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> PrincipalMapperFactory.create(composite, null, null));
+        assertTrue(ex.getMessage().contains("delegates"));
+    }
+
+    @Test
+    void create_compositeType_nestedCompositeDelegate_throwsIllegalArgument() {
+        PrincipalMappingConfig innerComposite = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.COMPOSITE, null,
+                List.of(new PrincipalMappingConfig(null, null, null)));
+
+        PrincipalMappingConfig outer = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.COMPOSITE, null, List.of(innerComposite));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> PrincipalMapperFactory.create(outer, null, null));
+    }
+
+    @Test
+    void create_compositeType_multipleIdcDelegates_throwsIllegalArgument() {
+        IdentitystoreClient idcClient = mock(IdentitystoreClient.class);
+
+        PrincipalMappingConfig idc1 = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.IDENTITY_CENTER, validIdcConfig());
+        PrincipalMappingConfig idc2 = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.IDENTITY_CENTER, validIdcConfig());
+
+        PrincipalMappingConfig composite = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.COMPOSITE, null, List.of(idc1, idc2));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> PrincipalMapperFactory.create(composite, idcClient, null));
+    }
+
+    @Test
+    void create_staticType_hasExplicitBranch_returnsStaticMapper() {
+        PrincipalMappingConfig config = new PrincipalMappingConfig(null, null, null,
+                PrincipalMapperType.STATIC, null);
+        PrincipalMapper result = PrincipalMapperFactory.create(config, null, null);
+        assertInstanceOf(StaticPrincipalMapper.class, result);
+    }
+
+    @Test
+    void create_compositeType_idcDelegateWithNullIdcConfig_throwsIllegalArgument() {
+        PrincipalMappingConfig idcNoConfig = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.IDENTITY_CENTER, null);
+        PrincipalMappingConfig composite = new PrincipalMappingConfig(
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(),
+                PrincipalMapperType.COMPOSITE, null, List.of(idcNoConfig));
+        assertThrows(IllegalArgumentException.class,
+                () -> PrincipalMapperFactory.create(composite, mock(IdentitystoreClient.class), null));
     }
 }
