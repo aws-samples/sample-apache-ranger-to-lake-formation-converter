@@ -135,4 +135,48 @@ class PrincipalMappingConfigTest {
 
         assertNotEquals(staticConfig, idcConfig);
     }
+
+    // --- delegates field tests ---
+
+    @Test
+    void delegates_defaultsToEmptyList() {
+        PrincipalMappingConfig config = new PrincipalMappingConfig(null, null, null);
+        assertNotNull(config.getDelegates());
+        assertTrue(config.getDelegates().isEmpty());
+    }
+
+    @Test
+    void delegates_jsonRoundTrip() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        String json = "{"
+                + "\"type\": \"COMPOSITE\","
+                + "\"delegates\": ["
+                + "  {\"type\": \"STATIC\", \"userMappings\": {\"alice\": \"arn:aws:iam::123:role/alice\"}},"
+                + "  {\"type\": \"IDENTITY_CENTER\", \"idcConfig\": {"
+                + "    \"identityStoreId\": \"d-test\", \"region\": \"us-east-1\","
+                + "    \"accountId\": \"123456789012\", \"cacheTtlMinutes\": 60}}"
+                + "]}";
+        PrincipalMappingConfig config = mapper.readValue(json, PrincipalMappingConfig.class);
+        assertEquals(PrincipalMapperType.COMPOSITE, config.getType());
+        assertEquals(2, config.getDelegates().size());
+        assertEquals(PrincipalMapperType.STATIC, config.getDelegates().get(0).getType());
+        assertEquals("arn:aws:iam::123:role/alice",
+                config.getDelegates().get(0).getUserMappings().get("alice"));
+        assertEquals(PrincipalMapperType.IDENTITY_CENTER, config.getDelegates().get(1).getType());
+    }
+
+    @Test
+    void delegates_existingConfigsUnaffected() throws Exception {
+        // Existing STATIC config without delegates still deserializes unchanged
+        ObjectMapper mapper = new ObjectMapper();
+        String json = "{\"type\": \"STATIC\", \"userMappings\": {\"bob\": \"arn:aws:iam::123:role/bob\"}}";
+        PrincipalMappingConfig config = mapper.readValue(json, PrincipalMappingConfig.class);
+        assertEquals(PrincipalMapperType.STATIC, config.getType());
+        assertTrue(config.getDelegates().isEmpty());
+        assertEquals("arn:aws:iam::123:role/bob", config.getUserMappings().get("bob"));
+        // delegates must be absent from the serialized form — NON_NULL excludes null fields
+        String serialized = mapper.writeValueAsString(config);
+        assertFalse(serialized.contains("delegates"),
+                "delegates key must be absent from serialized STATIC config: " + serialized);
+    }
 }
