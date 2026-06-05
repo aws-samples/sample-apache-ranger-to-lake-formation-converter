@@ -207,10 +207,10 @@ public class ConversionServerMain {
         // Build IdentitystoreClient only when needed
         final IdentitystoreClient identityStoreClient;
         PrincipalMappingConfig principalMappingConfig = syncConfig.getPrincipalMapping();
-        if (principalMappingConfig != null
-                && principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
+        if (needsIdentityStoreClient(principalMappingConfig)) {
+            String idcRegion = resolveIdcRegion(principalMappingConfig);
             identityStoreClient = IdentitystoreClient.builder()
-                    .region(Region.of(principalMappingConfig.getIdcConfig().getRegion()))
+                    .region(Region.of(idcRegion))
                     .credentialsProvider(credentialsProvider)
                     .build();
         } else {
@@ -673,6 +673,38 @@ public class ConversionServerMain {
                 conn.disconnect();
             }
         }
+    }
+
+    /**
+     * Returns true if the config requires an IdentitystoreClient — either because
+     * the top-level type is IDENTITY_CENTER, or because the config is COMPOSITE with
+     * at least one IDENTITY_CENTER delegate.
+     */
+    private static boolean needsIdentityStoreClient(PrincipalMappingConfig config) {
+        if (config == null) return false;
+        if (config.getType() == PrincipalMapperType.IDENTITY_CENTER) return true;
+        if (config.getType() == PrincipalMapperType.COMPOSITE) {
+            return config.getDelegates().stream()
+                    .anyMatch(d -> d.getType() == PrincipalMapperType.IDENTITY_CENTER);
+        }
+        return false;
+    }
+
+    /**
+     * Returns the IDC region to use when building the IdentitystoreClient.
+     * For COMPOSITE configs, uses the region from the first IDENTITY_CENTER delegate.
+     */
+    private static String resolveIdcRegion(PrincipalMappingConfig config) {
+        if (config.getType() == PrincipalMapperType.IDENTITY_CENTER) {
+            return config.getIdcConfig().getRegion();
+        }
+        // COMPOSITE — find the first IDC delegate
+        return config.getDelegates().stream()
+                .filter(d -> d.getType() == PrincipalMapperType.IDENTITY_CENTER)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("No IDENTITY_CENTER delegate found"))
+                .getIdcConfig()
+                .getRegion();
     }
 
     /**
