@@ -68,6 +68,26 @@ principalMapping:
   roleMappings:
     "admin_role": "arn:aws:iam::123456789012:role/LFAdminRole"
 
+  # --- Composite mapper (static overrides + IDC fallback) ---
+  # Use type: COMPOSITE to chain mappers. The first delegate to resolve a name wins.
+  # Static mappings are checked first (fast, no I/O); IDC is the fallback.
+  # Roles are only resolved by STATIC delegates — Identity Center has no role concept.
+  #
+  # type: COMPOSITE
+  # delegates:
+  #   - type: STATIC
+  #     userMappings:
+  #       "service-account": "arn:aws:iam::123456789012:role/ServiceAccountRole"
+  #     groupMappings: {}
+  #     roleMappings:
+  #       "etl_role": "arn:aws:iam::123456789012:role/EtlRole"
+  #   - type: IDENTITY_CENTER
+  #     idcConfig:
+  #       identityStoreId: "d-1234567890"
+  #       region: "us-east-1"
+  #       accountId: "123456789012"
+  #       cacheTtlMinutes: 60
+
 # -----------------------------------------------------------------------------
 # Sync Settings
 # Controls the sync loop behavior and Lake Formation retry logic.
