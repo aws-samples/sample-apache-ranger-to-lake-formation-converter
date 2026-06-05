@@ -11,6 +11,7 @@ import com.amazonaws.policyconverters.config.RetryConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import software.amazon.awssdk.services.lakeformation.model.ConcurrentModificationException;
@@ -23,6 +24,7 @@ import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsReque
 import software.amazon.awssdk.services.lakeformation.model.ErrorDetail;
 import software.amazon.awssdk.services.lakeformation.model.GrantPermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.LakeFormationException;
+import software.amazon.awssdk.services.lakeformation.model.Permission;
 import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
 
 import java.io.BufferedWriter;
@@ -473,6 +475,92 @@ class LakeFormationClientTest {
                 LakeFormationClient.resolveTableColumnConflicts(Arrays.asList(opA, opB));
 
         assertEquals(2, result.size(), "Different tables — no conflict, both entries kept");
+    }
+
+    private LFPermissionOperation makeRevoke(String policyId, String table) {
+        LFResource resource = new LFResource("catalog1", "mydb", table, null, null);
+        Set<LFPermission> perms = EnumSet.of(LFPermission.SELECT);
+        return new LFPermissionOperation(LFPermissionOperation.OperationType.REVOKE, policyId,
+                "arn:aws:iam::123456789012:role/TestRole", resource, perms, false);
+    }
+
+    @Test
+    void applyBatch_grantableOperation_setsPermissionsWithGrantOptionInBatchEntry() {
+        LFResource resource = new LFResource("catalog1", "mydb", "grantable-table", null, null);
+        Set<LFPermission> perms = EnumSet.of(LFPermission.SELECT);
+        LFPermissionOperation grantableOp = new LFPermissionOperation(
+                LFPermissionOperation.OperationType.GRANT, "pg1",
+                "arn:aws:iam::123456789012:role/TestRole", resource, perms, true);
+
+        when(awsClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class)))
+                .thenReturn(BatchGrantPermissionsResponse.builder().failures(List.of()).build());
+
+        client.applyBatch(List.of(grantableOp), null);
+
+        ArgumentCaptor<BatchGrantPermissionsRequest> captor =
+                ArgumentCaptor.forClass(BatchGrantPermissionsRequest.class);
+        verify(awsClient).batchGrantPermissions(captor.capture());
+        assertTrue(captor.getValue().entries().get(0).permissionsWithGrantOption()
+                        .contains(Permission.SELECT),
+                "Grantable batch entry must include SELECT in permissionsWithGrantOption");
+    }
+
+    @Test
+    void applyBatch_revokeFailure_noPermissionsRevoked_treatedAsSuccess() {
+        BatchPermissionsFailureEntry failure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("revoke-0").build())
+                .error(ErrorDetail.builder()
+                        .errorMessage("No permissions revoked. Grantee has no permissions.")
+                        .build())
+                .build();
+        when(awsClient.batchRevokePermissions(any(BatchRevokePermissionsRequest.class)))
+                .thenReturn(BatchRevokePermissionsResponse.builder().failures(List.of(failure)).build());
+
+        StringWriter sw = new StringWriter();
+        DeadLetterLogger dll = new DeadLetterLogger(new BufferedWriter(sw));
+
+        BatchResult result = client.applyBatch(List.of(makeRevoke("pr1", "t1")), dll);
+
+        assertFalse(result.hasFailures(), "No-permissions-revoked must be treated as success");
+        assertEquals(1, result.getAppliedOperations(), "Op must be counted as applied");
+        assertTrue(sw.toString().isEmpty(), "Dead-letter must not be written for no-op revoke");
+    }
+
+    @Test
+    void applyBatch_revokeFailure_permissionsModificationInvalid_treatedAsSuccess() {
+        BatchPermissionsFailureEntry failure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("revoke-0").build())
+                .error(ErrorDetail.builder()
+                        .errorMessage("Permissions modification is invalid.")
+                        .build())
+                .build();
+        when(awsClient.batchRevokePermissions(any(BatchRevokePermissionsRequest.class)))
+                .thenReturn(BatchRevokePermissionsResponse.builder().failures(List.of(failure)).build());
+
+        StringWriter sw = new StringWriter();
+        DeadLetterLogger dll = new DeadLetterLogger(new BufferedWriter(sw));
+
+        BatchResult result = client.applyBatch(List.of(makeRevoke("pr2", "t2")), dll);
+
+        assertFalse(result.hasFailures(), "Permissions-modification-invalid must be treated as success");
+        assertEquals(1, result.getAppliedOperations(), "Op must be counted as applied");
+        assertTrue(sw.toString().isEmpty(), "Dead-letter must not be written for no-op revoke");
+    }
+
+    @Test
+    void applyBatch_revokeFailure_realError_isReportedAsFailure() {
+        BatchPermissionsFailureEntry failure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("revoke-0").build())
+                .error(ErrorDetail.builder().errorMessage("Access denied").build())
+                .build();
+        when(awsClient.batchRevokePermissions(any(BatchRevokePermissionsRequest.class)))
+                .thenReturn(BatchRevokePermissionsResponse.builder().failures(List.of(failure)).build());
+
+        BatchResult result = client.applyBatch(List.of(makeRevoke("pr3", "t3")), null);
+
+        assertTrue(result.hasFailures(), "Real revoke error must be reported as failure");
+        assertTrue(result.getFailedPolicyIds().contains("pr3"),
+                "Failed policy ID must appear in getFailedPolicyIds");
     }
 
     @Test
