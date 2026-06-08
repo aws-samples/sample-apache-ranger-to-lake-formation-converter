@@ -360,12 +360,6 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         // Stage 2: Convert Cedar PolicySet to LF permission operations via partial evaluation
         List<LFPermissionOperation> currentOperations = cedarToLFConverter.convert(cedarPolicySet);
 
-        // Normalise the desired state: merge TABLE + TABLE_WITH_COLUMNS entries that share the
-        // same (principal, db, table) into a single TABLE entry. This ensures the diff generates
-        // an explicit TABLE_WITH_COLUMNS REVOKE alongside the TABLE GRANT when needed, which
-        // prevents "Permissions modification is invalid" from LF on the subsequent grant.
-        currentOperations = LakeFormationClient.resolveTableColumnConflicts(currentOperations);
-
         LOG.info("SyncService LF conversion complete: {} operations from Cedar PolicySet",
                 currentOperations.size());
 
@@ -521,7 +515,6 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
 
         // Stage 3: Convert Cedar PolicySet to LF permission operations
         List<LFPermissionOperation> currentOperations = cedarToLFConverter.convert(cedarPolicySet);
-        currentOperations = LakeFormationClient.resolveTableColumnConflicts(currentOperations);
 
         LOG.info("SyncService LF conversion complete: {} operations from Cedar PolicySet",
                 currentOperations.size());

@@ -20,7 +20,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsFailureEntry;
+import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsRequestEntry;
 import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.ErrorDetail;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -115,8 +119,7 @@ class ColumnRevokeIdempotencyTest {
                 .thenReturn(Collections.singletonList(tableGrant)); // cycle 2 and 3
 
         // --- Cycle 1: SyncService applies resolveTableColumnConflicts to currentOperations
-        //     before storing the checkpoint. TABLE + COLUMN ops with the same policy ID are
-        //     merged into a single TABLE op. Grant batch succeeds. ---
+        //     Grant batch succeeds, checkpoint = [tableGrant, colGrant] ---
         when(awsSdkClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class)))
                 .thenReturn(BatchGrantPermissionsResponse.builder()
                         .failures(Collections.emptyList()).build());
@@ -126,28 +129,38 @@ class ColumnRevokeIdempotencyTest {
         verify(awsSdkClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
         verify(awsSdkClient, never()).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
 
-        // resolveTableColumnConflicts merges TABLE+COLUMN into one TABLE op in the checkpoint.
-        // This is the structural fix for the cross-cycle TABLE/TABLE_WITH_COLUMNS conflict:
-        // the checkpoint never holds a column-scoped op that would generate a failing revoke.
         List<LFPermissionOperation> afterCycle1 = syncService.getPreviousOperations();
-        assertEquals(1, afterCycle1.size(),
-                "resolveTableColumnConflicts must merge TABLE+COLUMN ops into a single TABLE op "
-                + "before the checkpoint is stored — no column-scoped entry should survive.");
-        assertNull(afterCycle1.get(0).getResource().getColumnNames(),
-                "The merged op must be the TABLE-level grant (no column restriction)");
+        assertEquals(2, afterCycle1.size(),
+                "Checkpoint after cycle 1 must hold both TABLE and COLUMN ops");
 
-        // --- Cycle 2: TABLE-only in both checkpoint and converter.
-        //     computeDiff produces no delta — no API calls. ---
+        // --- Cycle 2: COLUMN gone, diff emits REVOKE for colGrant.
+        //     LF rejects with "Permissions modification is invalid". ---
+        BatchPermissionsFailureEntry invalidRevokeFailure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("revoke-0").build())
+                .error(ErrorDetail.builder()
+                        .errorMessage("Permissions modification is invalid")
+                        .build())
+                .build();
+        when(awsSdkClient.batchRevokePermissions(any(BatchRevokePermissionsRequest.class)))
+                .thenReturn(BatchRevokePermissionsResponse.builder()
+                        .failures(Collections.singletonList(invalidRevokeFailure)).build());
+
         syncService.onPoliciesUpdated(makeServicePolicies(2L));
 
-        verify(awsSdkClient, never()).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
-        // Grant count stays at 1 — no spurious re-grant.
+        verify(awsSdkClient, times(1)).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
         verify(awsSdkClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
 
-        // --- Cycle 3: same TABLE-only state. Still no delta. ---
+        // With the fix: failedPolicies is empty → previousOperations = [tableGrant].
+        List<LFPermissionOperation> afterCycle2 = syncService.getPreviousOperations();
+        assertEquals(1, afterCycle2.size(),
+                "Checkpoint after cycle 2 must contain only the TABLE op.");
+        assertNull(afterCycle2.get(0).getResource().getColumnNames(),
+                "Surviving op must be the TABLE-level grant (no column restriction)");
+
+        // --- Cycle 3: no delta → no API calls. ---
         syncService.onPoliciesUpdated(makeServicePolicies(3L));
 
-        verify(awsSdkClient, never()).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
+        verify(awsSdkClient, times(1)).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
         verify(awsSdkClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
     }
 
