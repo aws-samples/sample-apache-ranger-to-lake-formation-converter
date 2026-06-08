@@ -80,9 +80,9 @@ class Phase2CorrectnessValidatorTest {
         return arr;
     }
 
-    // Bare-table SELECT is a TABLE grant in LF (no column restriction)
+    // LF returns bare-table SELECT as TableWithColumns (cols=None) from ListPermissions
     private static final SimulatorPermission ALICE_SELECT_EVENTS = new SimulatorPermission(
-            "arn:aws:iam::123:role/alice", "TABLE", "mydb.events", "SELECT", false);
+            "arn:aws:iam::123:role/alice", "TABLE_WITH_COLUMNS", "mydb.events", "SELECT", false);
 
     // 1. actual equals expected → PASS
     @Test

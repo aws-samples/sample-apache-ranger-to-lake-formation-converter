@@ -108,11 +108,15 @@ public class ExpectedPermissionsComputer {
             }
             if (finalPerms.isEmpty()) continue;
             for (String arn : arns) {
-                // TABLE_WITH_COLUMNS is only used when a column filter is present (spec.isColumn()).
-                // A bare-table SELECT stays as TABLE — LF stores unconstrained SELECT as TABLE,
-                // not TABLE_WITH_COLUMNS. The two grant types are mutually exclusive per principal/table.
+                // LF's ListPermissions API returns bare-table SELECT as TableWithColumns (cols=None).
+                // Mirror that in the expected set so the comparison matches LF actual output.
+                // LFPermissionsFetcher normalizes TableWithColumns/cols=None → TABLE_WITH_COLUMNS.
                 for (String perm : finalPerms) {
-                    result.add(new SimulatorPermission(arn, spec.resourceType(), spec.resourceId(), perm, grantable));
+                    String resourceType = spec.resourceType();
+                    if ("TABLE".equals(resourceType) && "SELECT".equals(perm)) {
+                        resourceType = "TABLE_WITH_COLUMNS";
+                    }
+                    result.add(new SimulatorPermission(arn, resourceType, spec.resourceId(), perm, grantable));
                 }
             }
         }
