@@ -33,6 +33,7 @@ import software.amazon.awssdk.services.lakeformation.model.Resource;
 import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.TableResource;
 import software.amazon.awssdk.services.lakeformation.model.TableWildcard;
+import software.amazon.awssdk.services.lakeformation.model.ColumnWildcard;
 import software.amazon.awssdk.services.lakeformation.model.TableWithColumnsResource;
 
 import java.util.ArrayList;
@@ -429,8 +430,71 @@ public class LakeFormationClient {
         LOG.info("Sending BatchGrantPermissions with {} entries", entries.size());
         BatchGrantPermissionsResponse response = lfClient.batchGrantPermissions(request);
 
-        return processBatchFailures(response.failures(), entryIdToOp,
+        // Check for TABLE grants that failed with "Permissions modification is invalid".
+        // This means a conflicting TABLE_WITH_COLUMNS grant from a prior cycle exists for
+        // the same (principal, db, table). Revoke it and retry those grants.
+        List<LFPermissionOperation> retryGrants = new ArrayList<>();
+        List<LFPermissionOperation> conflictRevokes = new ArrayList<>();
+        if (response.failures() != null) {
+            for (BatchPermissionsFailureEntry failure : response.failures()) {
+                String errorMsg = failure.error() != null ? failure.error().errorMessage() : "";
+                if (errorMsg.contains("Permissions modification is invalid")) {
+                    LFPermissionOperation op = entryIdToOp.get(failure.requestEntry().id());
+                    if (op != null && op.getResource().getTableName() != null
+                            && (op.getResource().getColumnNames() == null
+                                || op.getResource().getColumnNames().isEmpty())) {
+                        // Build a TABLE_WITH_COLUMNS (all-columns wildcard) revoke to clear the
+                        // conflict. We issue this directly rather than via LFResource/buildResource
+                        // because buildResource has no representation for column-wildcard vs empty.
+                        conflictRevokes.add(op);  // carry original op for principal/table identity
+                        retryGrants.add(op);
+                        LOG.info("TABLE grant blocked by TABLE_WITH_COLUMNS conflict — will revoke and retry: "
+                                + "policyId={}, principal={}, db={}, table={}",
+                                op.getSourcePolicyId(), op.getPrincipalArn(),
+                                op.getResource().getDatabaseName(), op.getResource().getTableName());
+                    }
+                }
+            }
+        }
+
+        int[] result = processBatchFailures(response.failures(), entryIdToOp,
                 "GRANT", deadLetterLogger, succeededPolicies, failedPolicies);
+
+        if (!conflictRevokes.isEmpty()) {
+            // For each conflicting TABLE grant, revoke the existing TABLE_WITH_COLUMNS (all-columns)
+            // using a column wildcard, then retry the TABLE grant.
+            for (LFPermissionOperation conflictOp : conflictRevokes) {
+                LFResource r = conflictOp.getResource();
+                Resource twcResource = Resource.builder()
+                        .tableWithColumns(TableWithColumnsResource.builder()
+                                .catalogId(r.getCatalogId())
+                                .databaseName(r.getDatabaseName())
+                                .name(r.getTableName())
+                                .columnWildcard(ColumnWildcard.builder().build())
+                                .build())
+                        .build();
+                DataLakePrincipal principal = DataLakePrincipal.builder()
+                        .dataLakePrincipalIdentifier(conflictOp.getPrincipalArn())
+                        .build();
+                try {
+                    lfClient.revokePermissions(RevokePermissionsRequest.builder()
+                            .principal(principal)
+                            .resource(twcResource)
+                            .permissions(toLfPermissions(conflictOp.getPermissions()))
+                            .build());
+                    LOG.info("Revoked conflicting TABLE_WITH_COLUMNS grant: principal={}, db={}, table={}",
+                            conflictOp.getPrincipalArn(), r.getDatabaseName(), r.getTableName());
+                } catch (Exception e) {
+                    LOG.warn("Failed to revoke TABLE_WITH_COLUMNS conflict (will retry grant anyway): {}", e.getMessage());
+                }
+            }
+            // Retry the grants that were blocked by the TABLE_WITH_COLUMNS conflict
+            int[] retryResult = executeBatchGrant(retryGrants, deadLetterLogger,
+                    succeededPolicies, failedPolicies);
+            result[0] += retryResult[0];
+        }
+
+        return result;
     }
 
     /**
