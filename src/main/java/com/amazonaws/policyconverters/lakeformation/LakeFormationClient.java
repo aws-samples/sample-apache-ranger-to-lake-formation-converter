@@ -196,18 +196,20 @@ public class LakeFormationClient {
         int appliedOps = 0;
         int failedOps = 0;
 
-        // Process grants in chunks of MAX_BATCH_SIZE
-        for (int i = 0; i < grants.size(); i += MAX_BATCH_SIZE) {
-            List<LFPermissionOperation> chunk = grants.subList(i, Math.min(i + MAX_BATCH_SIZE, grants.size()));
-            int[] result = executeBatchGrant(chunk, deadLetterLogger, succeededPolicies, failedPolicies);
+        // Revokes run first so TABLE_WITH_COLUMNS conflicts are cleared before TABLE grants land.
+        // SyncService applies resolveTableColumnConflicts to currentOperations before diffing,
+        // which produces explicit TABLE_WITH_COLUMNS REVOKEs alongside TABLE GRANTs when needed.
+        for (int i = 0; i < revokes.size(); i += MAX_BATCH_SIZE) {
+            List<LFPermissionOperation> chunk = revokes.subList(i, Math.min(i + MAX_BATCH_SIZE, revokes.size()));
+            int[] result = executeBatchRevoke(chunk, deadLetterLogger, succeededPolicies, failedPolicies);
             appliedOps += result[0];
             failedOps += result[1];
         }
 
-        // Process revokes in chunks of MAX_BATCH_SIZE
-        for (int i = 0; i < revokes.size(); i += MAX_BATCH_SIZE) {
-            List<LFPermissionOperation> chunk = revokes.subList(i, Math.min(i + MAX_BATCH_SIZE, revokes.size()));
-            int[] result = executeBatchRevoke(chunk, deadLetterLogger, succeededPolicies, failedPolicies);
+        // Process grants in chunks of MAX_BATCH_SIZE
+        for (int i = 0; i < grants.size(); i += MAX_BATCH_SIZE) {
+            List<LFPermissionOperation> chunk = grants.subList(i, Math.min(i + MAX_BATCH_SIZE, grants.size()));
+            int[] result = executeBatchGrant(chunk, deadLetterLogger, succeededPolicies, failedPolicies);
             appliedOps += result[0];
             failedOps += result[1];
         }
@@ -254,7 +256,7 @@ public class LakeFormationClient {
      * <p>Cross-cycle conflicts (TABLE grant already exists in LF from a prior
      * cycle) are handled in {@link #processBatchFailures} via promotion fallback.
      */
-    static List<LFPermissionOperation> resolveTableColumnConflicts(List<LFPermissionOperation> ops) {
+    public static List<LFPermissionOperation> resolveTableColumnConflicts(List<LFPermissionOperation> ops) {
         // Map conflictKey → index of the TABLE-level entry in working list
         Map<String, Integer> tableGrantIndex = new LinkedHashMap<>();
         List<LFPermissionOperation> working = new ArrayList<>(ops);

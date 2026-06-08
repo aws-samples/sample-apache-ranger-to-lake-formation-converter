@@ -108,15 +108,11 @@ public class ExpectedPermissionsComputer {
             }
             if (finalPerms.isEmpty()) continue;
             for (String arn : arns) {
-                // LF models SELECT on a table as TABLE_WITH_COLUMNS (all columns).
-                // Non-SELECT table permissions stay as TABLE.
-                // Mirror that split so the expected set matches LF actual.
+                // TABLE_WITH_COLUMNS is only used when a column filter is present (spec.isColumn()).
+                // A bare-table SELECT stays as TABLE — LF stores unconstrained SELECT as TABLE,
+                // not TABLE_WITH_COLUMNS. The two grant types are mutually exclusive per principal/table.
                 for (String perm : finalPerms) {
-                    String resourceType = spec.resourceType();
-                    if ("TABLE".equals(resourceType) && "SELECT".equals(perm)) {
-                        resourceType = "TABLE_WITH_COLUMNS";
-                    }
-                    result.add(new SimulatorPermission(arn, resourceType, spec.resourceId(), perm, grantable));
+                    result.add(new SimulatorPermission(arn, spec.resourceType(), spec.resourceId(), perm, grantable));
                 }
             }
         }
@@ -184,7 +180,8 @@ public class ExpectedPermissionsComputer {
             for (String tablePattern : tablePatterns) {
                 List<String> tables = resolveTablePattern(db, tablePattern);
                 for (String table : tables) {
-                    specs.add(new ResourceSpec("TABLE", db + "." + table, hasColumn));
+                    specs.add(new ResourceSpec(hasColumn ? "TABLE_WITH_COLUMNS" : "TABLE",
+                            db + "." + table, hasColumn));
                 }
             }
         }
