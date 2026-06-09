@@ -3,6 +3,7 @@ package com.amazonaws.policyconverters.assessment;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapEntry.GapType;
 import com.amazonaws.policyconverters.model.GapReport;
+import com.amazonaws.policyconverters.assessment.AssessedService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -19,7 +20,7 @@ class AssessmentReporterTest {
 
     @Test
     void report_printsHeaderAndCounts() {
-        AssessmentResult result = buildResult(10, 7, 2, 1, 25, List.of());
+        AssessmentResult result = buildResult(10, 7, 2, 1, 25, List.of(), null, List.of());
         AssessmentConfig config = configConsoleOnly();
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -36,7 +37,7 @@ class AssessmentReporterTest {
     void report_withGaps_printsGapSummary() {
         GapEntry gap = new GapEntry("42", "policy-42", GapType.DATA_MASKING,
                 "db.table", "has masking item", "remove masking");
-        AssessmentResult result = buildResult(3, 1, 1, 1, 5, List.of(gap));
+        AssessmentResult result = buildResult(3, 1, 1, 1, 5, List.of(gap), null, List.of());
         AssessmentConfig config = configConsoleOnly();
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -48,7 +49,7 @@ class AssessmentReporterTest {
 
     @Test
     void report_writesJsonFile(@TempDir Path tempDir) throws IOException {
-        AssessmentResult result = buildResult(5, 5, 0, 0, 10, List.of());
+        AssessmentResult result = buildResult(5, 5, 0, 0, 10, List.of(), null, List.of());
         AssessmentConfig config = AssessmentConfig.builder()
                 .rangerAdminUrl("http://localhost:6080")
                 .outputDir(tempDir)
@@ -66,7 +67,7 @@ class AssessmentReporterTest {
 
     @Test
     void report_consoleOnly_doesNotWriteFile(@TempDir Path tempDir) throws IOException {
-        AssessmentResult result = buildResult(1, 1, 0, 0, 2, List.of());
+        AssessmentResult result = buildResult(1, 1, 0, 0, 2, List.of(), null, List.of());
         AssessmentConfig config = AssessmentConfig.builder()
                 .rangerAdminUrl("http://localhost:6080")
                 .outputDir(tempDir)
@@ -88,13 +89,35 @@ class AssessmentReporterTest {
         assertNotNull(config);
     }
 
+    @Test
+    void report_alwaysPrintsPreambleWithSourceAndServices() {
+        AssessedService svc1 = AssessedService.assessed("hive_prod", "hive", 16);
+        AssessedService svc2 = AssessedService.skipped("yarn_prod", "yarn", "unsupported service type");
+        AssessmentResult result = buildResult(16, 16, 0, 0, 5, List.of(),
+                "file:export.json", List.of(svc1, svc2));
+        AssessmentConfig config = AssessmentConfig.builder().consoleOnly(true).build();
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        new AssessmentReporter().report(result, config, new PrintStream(baos));
+        String output = baos.toString();
+
+        assertTrue(output.contains("Source:"), "Missing Source line");
+        assertTrue(output.contains("file:export.json"), "Missing source label");
+        assertTrue(output.contains("hive_prod"), "Missing assessed service");
+        assertTrue(output.contains("yarn_prod"), "Missing skipped service");
+        assertTrue(output.contains("skipped"), "Missing skipped status");
+    }
+
     // ---- helpers ----
 
     private AssessmentResult buildResult(int total, int fully, int partial, int notConv,
-                                         int grants, List<GapEntry> entries) {
+                                         int grants, List<GapEntry> entries,
+                                         String source, List<AssessedService> services) {
         GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
+        String resolvedSource = source != null ? source : "ranger-admin:http://localhost:6080";
+        List<AssessedService> resolvedServices = services != null ? services : List.of();
         return new AssessmentResult(total, fully, partial, notConv, grants, gapReport,
-                "ranger-admin:http://localhost:6080", List.of());
+                resolvedSource, resolvedServices);
     }
 
     private AssessmentConfig configConsoleOnly() {

@@ -103,8 +103,25 @@ public class AssessmentReporter {
 
         out.println();
         out.println("=== Apache Ranger → Lake Formation Assessment ===");
+        if (result.getSource() != null) {
+            out.println("Source:       " + result.getSource());
+        }
         out.println("Assessed at:  " + result.getGapReport().getGeneratedAt());
         out.println();
+
+        if (!result.getServices().isEmpty()) {
+            out.println("Services assessed:");
+            for (AssessedService svc : result.getServices()) {
+                if (svc.isSkipped()) {
+                    out.printf("  %-20s (%-16s) — skipped: %s%n",
+                            svc.getName(), svc.getServiceType(), svc.getSkipReason());
+                } else {
+                    out.printf("  %-20s (%-16s) — assessed  (%d policies)%n",
+                            svc.getName(), svc.getServiceType(), svc.getPoliciesScanned());
+                }
+            }
+            out.println();
+        }
         out.printf("Policies scanned:        %5d%n", total);
         out.printf("  Fully convertible:     %5d (%s)%n",
                 result.getFullyConvertible(), pct(result.getFullyConvertible(), total));
