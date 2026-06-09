@@ -4,6 +4,9 @@ import com.amazonaws.policyconverters.assessment.AssessmentConfig;
 import com.amazonaws.policyconverters.assessment.AssessmentReporter;
 import com.amazonaws.policyconverters.assessment.AssessmentResult;
 import com.amazonaws.policyconverters.assessment.AssessmentRunner;
+import com.amazonaws.policyconverters.assessment.PolicySource;
+import com.amazonaws.policyconverters.assessment.RangerAdminPolicySource;
+import com.amazonaws.policyconverters.assessment.RangerExportFilePolicySource;
 import com.amazonaws.policyconverters.config.AwsConfig;
 import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.config.ServerConfigLoader;
@@ -11,6 +14,7 @@ import com.amazonaws.policyconverters.config.SyncConfig;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -21,36 +25,38 @@ import java.util.List;
  * <p>
  * Usage:
  * <pre>
- *   assess [config-file] [options]
+ *   assess server [&lt;config-file&gt;] [options]
+ *     --ranger-url &lt;url&gt;        Ranger Admin URL (required if no config file)
+ *     --ranger-user &lt;user&gt;      Ranger Admin username
+ *     --ranger-password &lt;pass&gt;  Ranger Admin password
+ *     --services &lt;s1,s2,...&gt;    Comma-separated service instance names
+ *     --output-dir &lt;dir&gt;        Directory for JSON report (default: current dir)
+ *     --aws-region &lt;region&gt;     Enable Glue wildcard expansion
+ *     --console-only            Print report to console, skip JSON file
  *
- *   Options:
- *     --ranger-url &lt;url&gt;           Ranger Admin URL (required if no config file)
- *     --ranger-user &lt;user&gt;         Ranger Admin username
- *     --ranger-password &lt;pass&gt;     Ranger Admin password
- *     --services &lt;s1,s2,...&gt;       Comma-separated service instance names
- *     --output-dir &lt;dir&gt;           Directory for JSON report (default: current dir)
- *     --aws-region &lt;region&gt;        Enable Glue wildcard expansion with this region
- *     --aws-profile &lt;profile&gt;      AWS profile (reserved for future use)
- *     --console-only               Print report to console only, skip JSON file
+ *   assess file &lt;export-file.json&gt; [options]
+ *     --output-dir &lt;dir&gt;        Directory for JSON report (default: current dir)
+ *     --aws-region &lt;region&gt;     Enable Glue wildcard expansion
+ *     --console-only            Print report to console, skip JSON file
  * </pre>
- * <p>
- * If a config file path is given as the first argument, settings from the file
- * are used as defaults. CLI flags override individual config file values.
  */
 public class AssessmentMain {
 
     private static final String USAGE = String.join(System.lineSeparator(),
-            "Usage: assess [<config-file>] [options]",
+            "Usage:",
+            "  assess server [<config-file>] [options]",
+            "    --ranger-url <url>        Ranger Admin URL (required if no config file)",
+            "    --ranger-user <user>      Ranger Admin username",
+            "    --ranger-password <pass>  Ranger Admin password",
+            "    --services <s1,s2,...>    Comma-separated service instance names",
+            "    --output-dir <dir>        Directory for JSON report (default: current dir)",
+            "    --aws-region <region>     Enable Glue wildcard expansion",
+            "    --console-only            Print report to console, skip JSON file",
             "",
-            "Options:",
-            "  --ranger-url <url>        Ranger Admin URL (required if no config file)",
-            "  --ranger-user <user>      Ranger Admin username",
-            "  --ranger-password <pass>  Ranger Admin password",
-            "  --services <s1,s2,...>    Comma-separated service instance names",
-            "  --output-dir <dir>        Directory for JSON report (default: current dir)",
-            "  --aws-region <region>     Enable Glue wildcard expansion",
-            "  --aws-profile <profile>   AWS profile (reserved for future use)",
-            "  --console-only            Print report to console, skip JSON file"
+            "  assess file <export-file.json> [options]",
+            "    --output-dir <dir>        Directory for JSON report (default: current dir)",
+            "    --aws-region <region>     Enable Glue wildcard expansion",
+            "    --console-only            Print report to console, skip JSON file"
     );
 
     public static void main(String[] args) {
@@ -58,12 +64,22 @@ public class AssessmentMain {
         System.exit(exitCode);
     }
 
-    static int run(String[] args) {
+    public static int run(String[] args) {
         if (args.length == 0) {
             System.err.println(USAGE);
             return 1;
         }
+        switch (args[0]) {
+            case "server": return runServer(Arrays.copyOfRange(args, 1, args.length));
+            case "file":   return runFile(Arrays.copyOfRange(args, 1, args.length));
+            default:
+                System.err.println("Unknown subcommand: " + args[0]);
+                System.err.println(USAGE);
+                return 1;
+        }
+    }
 
+    private static int runServer(String[] args) {
         AssessmentConfig.Builder configBuilder = AssessmentConfig.builder();
         List<String> flagArgs = new ArrayList<>(Arrays.asList(args));
 
@@ -101,8 +117,6 @@ public class AssessmentMain {
                     for (String name : raw.split(",")) {
                         name = name.trim();
                         if (!name.isEmpty()) {
-                            // serviceType defaults to "lakeformation" for the assessment;
-                            // the actual adapter type is best-effort from the service name
                             services.add(new RangerServiceConfig(
                                     guessServiceType(name), name, null, null));
                         }
@@ -135,16 +149,76 @@ public class AssessmentMain {
 
         AssessmentConfig config = configBuilder.build();
 
-        // rangerAdminUrl is required for server mode (fetching from Ranger Admin)
         if (config.getRangerAdminUrl() == null || config.getRangerAdminUrl().isBlank()) {
-            System.err.println("Configuration error: rangerAdminUrl is required");
-            System.err.println(USAGE);
+            System.err.println("--ranger-url is required for 'assess server' (or provide a config file)");
             return 1;
         }
 
         try {
             AssessmentRunner runner = new AssessmentRunner();
-            AssessmentResult result = runner.run(config);
+            PolicySource source = new RangerAdminPolicySource(
+                    config.getRangerAdminUrl(),
+                    config.getRangerUsername(),
+                    config.getRangerPassword(),
+                    config.getServices());
+            AssessmentResult result = runner.run(config, source);
+            new AssessmentReporter().report(result, config, System.out);
+            return 0;
+        } catch (Exception e) {
+            System.err.println("Assessment failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    private static int runFile(String[] args) {
+        if (args.length == 0 || args[0].startsWith("--")) {
+            System.err.println("assess file requires a path to a Ranger export JSON file");
+            System.err.println(USAGE);
+            return 1;
+        }
+
+        Path exportFile = Paths.get(args[0]);
+        if (!Files.isReadable(exportFile)) {
+            System.err.println("Cannot read export file: " + exportFile);
+            return 1;
+        }
+
+        AssessmentConfig.Builder configBuilder = AssessmentConfig.builder();
+        String awsRegion = null;
+        List<String> flagArgs = new ArrayList<>(Arrays.asList(args).subList(1, args.length));
+
+        for (int i = 0; i < flagArgs.size(); i++) {
+            String flag = flagArgs.get(i);
+            switch (flag) {
+                case "--services":
+                    System.err.println("--services is not supported in file mode; " +
+                            "all services in the export are assessed automatically");
+                    return 1;
+                case "--output-dir":
+                    configBuilder.outputDir(Paths.get(nextArg(flagArgs, i++, flag)));
+                    break;
+                case "--aws-region":
+                    awsRegion = nextArg(flagArgs, i++, flag);
+                    break;
+                case "--console-only":
+                    configBuilder.consoleOnly(true);
+                    break;
+                default:
+                    System.err.println("Unknown flag: " + flag);
+                    System.err.println(USAGE);
+                    return 1;
+            }
+        }
+
+        if (awsRegion != null) {
+            configBuilder.awsConfig(new AwsConfig(awsRegion, null, null, null, null));
+        }
+
+        AssessmentConfig config = configBuilder.build();
+        PolicySource source = new RangerExportFilePolicySource(exportFile);
+
+        try {
+            AssessmentResult result = new AssessmentRunner().run(config, source);
             new AssessmentReporter().report(result, config, System.out);
             return 0;
         } catch (Exception e) {
