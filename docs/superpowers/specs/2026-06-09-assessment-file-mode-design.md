@@ -39,7 +39,7 @@ The old flat `assess [<config-file>] [--ranger-url ...]` syntax is removed. `arg
 
 ### File mode service selection
 
-In `assess file` mode, all services in the export file are assessed automatically. No `--services` flag is needed or supported. Services with unrecognized service types (e.g. `yarn`, `kafka`) are skipped and reported as `UNSUPPORTED_SERVICE_TYPE` gap entries.
+In `assess file` mode, all services in the export file are assessed automatically. The `--services` flag is not supported and will be rejected as an unknown flag (exit 1 + USAGE). Services with unrecognized service types (e.g. `yarn`, `kafka`) are skipped and reported as `UNSUPPORTED_SERVICE_TYPE` gap entries.
 
 ---
 
@@ -96,7 +96,8 @@ Immutable value object:
 |---|---|---|
 | `serviceName` | `String` | Ranger service instance name, e.g. `"hive_prod"` |
 | `serviceType` | `String` | Ranger service type, e.g. `"hive"` |
-| `policies` | `List<RangerPolicy>` | Empty list if service is skipped |
+| `policies` | `List<RangerPolicy>` | Enabled policies only (`isEnabled == true`); empty list if service is skipped |
+| `rawPolicyCount` | `int` | Total policies found in the source before filtering (used for skip-reason messages) |
 | `skipReason` | `String` | `null` if assessed; non-null description if skipped |
 
 ### `RangerAdminPolicySource` (`assessment` package)
@@ -104,18 +105,20 @@ Immutable value object:
 Implements `PolicySource` for the live Ranger Admin connection.
 
 - Wraps the existing `ConversionServerMain.fetchPoliciesFromRangerAdmin()` static method
-- Built from `AssessmentConfig` fields (`rangerAdminUrl`, `rangerUsername`, `rangerPassword`, `services`)
+- Constructor accepts `rangerAdminUrl`, `rangerUsername`, `rangerPassword`, and `List<RangerServiceConfig> services`; throws `IllegalArgumentException` if `rangerAdminUrl` is null or blank
 - `sourceLabel()` returns `"ranger-admin:<rangerAdminUrl>"`
 - One `ServicePolicyBatch` per configured service instance; fetch failures produce a batch with empty policies and a `skipReason`
+- `rawPolicyCount` is set to the count returned before `isEnabled` filtering; `policies` contains only enabled policies (matching existing `fetchPoliciesFromRangerAdmin` behavior)
 
 ### `RangerExportFilePolicySource` (`assessment` package)
 
 Implements `PolicySource` for the Ranger export JSON file.
 
 - Accepts a `Path` to the export file
-- Parses the file using `RangerExportModel` (see below) via Jackson
-- Groups policies by `service`+`serviceType`
-- Checks each `serviceType` against the set of known types (`lakeformation`, `hive`, `presto`, `trino`); unrecognized types produce a skipped `ServicePolicyBatch`
+- Parses the file using `RangerExportModel` (see below) via an `ObjectMapper` configured with `FAIL_ON_UNKNOWN_PROPERTIES = false` (the export format contains many fields beyond what `RangerPolicy` maps)
+- Filters out disabled policies (`isEnabled == false`) after parsing, before grouping; `rawPolicyCount` is set from the pre-filter count
+- Groups policies by `service` (instance name) + `serviceType`
+- Checks each `serviceType` against the set of known types (`lakeformation`, `hive`, `presto`, `trino`); unrecognized types produce a skipped `ServicePolicyBatch` with the original `rawPolicyCount` populated so the skip-reason message can report how many policies were bypassed
 - `sourceLabel()` returns `"file:<filename>"` (filename only, not full path)
 
 ### `RangerExportModel` (`assessment` package, package-private)
@@ -150,8 +153,9 @@ public AssessmentResult run(AssessmentConfig config, PolicySource source)
 Behavioral changes:
 - `fetchPolicies(AssessmentConfig)` protected method removed
 - `run()` calls `source.load()` to obtain `List<ServicePolicyBatch>`
-- Skipped batches (non-null `skipReason`) produce one `UNSUPPORTED_SERVICE_TYPE` `GapEntry` each, with the policy count from the export file noted in `details`
-- Adapter registry built from the `serviceType` values in non-skipped batches (not from `config.getServices()`)
+- Skipped batches (non-null `skipReason`) produce one `UNSUPPORTED_SERVICE_TYPE` `GapEntry` each; `details` includes `batch.getRawPolicyCount()` so the message reads e.g. `"All 12 policies in this service are skipped."`
+- Policies from skipped batches are excluded from `totalPolicies`, `fullyConvertible`, `partiallyConvertible`, and `notConvertible` counts
+- Adapter registry is keyed on `serviceName` (the instance name, e.g. `"hive_prod"`), not `serviceType` — this matches `RangerToCedarConverter`'s lookup key which uses `policy.getService()` (the instance name). One adapter entry is created per non-skipped batch: `registry.put(batch.getServiceName(), createAdapter(batch.getServiceType()))`
 - Passes `source.sourceLabel()` and the batch list into `AssessmentResult` constructor
 
 The `protected convertToS3AgOps()` and `protected createS3AccessGrantsClient()` override points are retained unchanged for tests.
@@ -164,7 +168,7 @@ The `protected convertToS3AgOps()` and `protected createS3AccessGrantsClient()` 
 
 ### `AssessmentResult`
 
-Two new fields added:
+Two new fields added as constructor parameters to the existing `@JsonCreator` constructor (with `@JsonProperty` annotations, consistent with the immutable pattern of the class). Adding new fields to a `@JsonCreator` constructor is a format-compatible addition: new fields are ignored by older readers, and treated as absent (null/default) when deserializing older JSON reports written before this change.
 
 | Field | Type | Description |
 |---|---|---|
