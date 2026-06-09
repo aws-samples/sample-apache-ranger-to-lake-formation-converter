@@ -32,6 +32,7 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.glue.GlueClient;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -137,7 +138,9 @@ public class AssessmentRunner {
                 counts[1],
                 counts[2],
                 ops.size(),
-                gapReport);
+                gapReport,
+                null,
+                Collections.emptyList());
     }
 
     /**

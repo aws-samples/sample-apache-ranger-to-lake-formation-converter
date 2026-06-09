@@ -93,7 +93,8 @@ class AssessmentReporterTest {
     private AssessmentResult buildResult(int total, int fully, int partial, int notConv,
                                          int grants, List<GapEntry> entries) {
         GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
-        return new AssessmentResult(total, fully, partial, notConv, grants, gapReport);
+        return new AssessmentResult(total, fully, partial, notConv, grants, gapReport,
+                "ranger-admin:http://localhost:6080", List.of());
     }
 
     private AssessmentConfig configConsoleOnly() {

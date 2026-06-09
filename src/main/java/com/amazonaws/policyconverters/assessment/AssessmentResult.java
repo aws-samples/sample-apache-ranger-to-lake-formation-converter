@@ -4,13 +4,13 @@ import com.amazonaws.policyconverters.model.GapReport;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-/**
- * The result of a one-time gap assessment run.
- * Contains policy-level convertibility counts, projected grant count, and the
- * full gap report with per-GapType breakdown.
- */
+import java.util.Collections;
+import java.util.List;
+
 public class AssessmentResult {
 
+    private final String source;
+    private final List<AssessedService> services;
     private final int totalPolicies;
     private final int fullyConvertible;
     private final int partiallyConvertible;
@@ -25,36 +25,25 @@ public class AssessmentResult {
             @JsonProperty("partiallyConvertible") int partiallyConvertible,
             @JsonProperty("notConvertible") int notConvertible,
             @JsonProperty("projectedGrantCount") int projectedGrantCount,
-            @JsonProperty("gapReport") GapReport gapReport) {
+            @JsonProperty("gapReport") GapReport gapReport,
+            @JsonProperty("source") String source,
+            @JsonProperty("services") List<AssessedService> services) {
         this.totalPolicies = totalPolicies;
         this.fullyConvertible = fullyConvertible;
         this.partiallyConvertible = partiallyConvertible;
         this.notConvertible = notConvertible;
         this.projectedGrantCount = projectedGrantCount;
         this.gapReport = gapReport;
+        this.source = source;
+        this.services = services != null ? Collections.unmodifiableList(services) : Collections.emptyList();
     }
 
-    public int getTotalPolicies() {
-        return totalPolicies;
-    }
-
-    public int getFullyConvertible() {
-        return fullyConvertible;
-    }
-
-    public int getPartiallyConvertible() {
-        return partiallyConvertible;
-    }
-
-    public int getNotConvertible() {
-        return notConvertible;
-    }
-
-    public int getProjectedGrantCount() {
-        return projectedGrantCount;
-    }
-
-    public GapReport getGapReport() {
-        return gapReport;
-    }
+    public String getSource()                    { return source; }
+    public List<AssessedService> getServices()   { return services; }
+    public int getTotalPolicies()                { return totalPolicies; }
+    public int getFullyConvertible()             { return fullyConvertible; }
+    public int getPartiallyConvertible()         { return partiallyConvertible; }
+    public int getNotConvertible()               { return notConvertible; }
+    public int getProjectedGrantCount()          { return projectedGrantCount; }
+    public GapReport getGapReport()              { return gapReport; }
 }
