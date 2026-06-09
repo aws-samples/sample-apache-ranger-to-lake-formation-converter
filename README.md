@@ -546,6 +546,16 @@ The gap report is a JSON file listing all unsupported features encountered durin
 
 ## Pre-Migration Assessment Tool
 
+> **Breaking change:** The `assess` CLI now requires a subcommand. Update any scripts using the old syntax:
+>
+> ```bash
+> # Before
+> java -jar target/assessment-jar-with-dependencies.jar --ranger-url http://... --console-only
+>
+> # After
+> java -jar target/assessment-jar-with-dependencies.jar server --ranger-url http://... --console-only
+> ```
+
 Before setting up the full sync pipeline, run the assessment tool to understand how your existing Ranger policies will migrate. It fetches policies from Ranger Admin, runs the complete conversion pipeline in read-only mode (no AWS Lake Formation calls are made), and produces a console summary plus an optional JSON report.
 
 ### Building
@@ -559,9 +569,7 @@ This produces `target/assessment-jar-with-dependencies.jar` in addition to the m
 ### Usage
 
 ```
-assess [<config-file>] [options]
-
-Options:
+assess server [<config-file>] [options]
   --ranger-url <url>        Ranger Admin URL (required if no config file)
   --ranger-user <user>      Ranger Admin username
   --ranger-password <pass>  Ranger Admin password
@@ -569,7 +577,16 @@ Options:
   --output-dir <dir>        Directory for JSON report (default: current dir)
   --aws-region <region>     Enable Glue wildcard expansion with this region
   --console-only            Print report to console only, skip JSON file
+
+assess file <export-file.json> [options]
+  --output-dir <dir>        Directory for JSON report (default: current dir)
+  --aws-region <region>     Enable Glue wildcard expansion with this region
+  --console-only            Print report to console only, skip JSON file
 ```
+
+### Obtaining a Ranger Export File
+
+In the Ranger Admin UI, navigate to the service policy list and use the **Export** button. Select **Export Type: JSON** and save the file. If your browser downloads a ZIP archive, unzip it first — only the `.json` file is supported.
 
 ### Examples
 
@@ -577,6 +594,7 @@ Options:
 
 ```bash
 java -jar target/assessment-jar-with-dependencies.jar \
+  server \
   --ranger-url http://ranger-admin:6080 \
   --ranger-user admin \
   --ranger-password rangerR0cks! \
@@ -587,7 +605,7 @@ java -jar target/assessment-jar-with-dependencies.jar \
 
 ```bash
 java -jar target/assessment-jar-with-dependencies.jar \
-  /path/to/server-config.yaml \
+  server /path/to/server-config.yaml \
   --console-only
 ```
 
@@ -595,6 +613,7 @@ java -jar target/assessment-jar-with-dependencies.jar \
 
 ```bash
 java -jar target/assessment-jar-with-dependencies.jar \
+  server \
   --ranger-url http://ranger-admin:6080 \
   --ranger-user admin \
   --ranger-password rangerR0cks! \
@@ -606,10 +625,19 @@ java -jar target/assessment-jar-with-dependencies.jar \
 
 ```bash
 java -jar target/assessment-jar-with-dependencies.jar \
+  server \
   --ranger-url http://ranger-admin:6080 \
   --ranger-user admin \
   --ranger-password rangerR0cks! \
   --aws-region us-east-1
+```
+
+**Assess from a Ranger export file (no Ranger Admin or AWS credentials needed):**
+
+```bash
+java -jar target/assessment-jar-with-dependencies.jar \
+  file ./ranger-export.json \
+  --console-only
 ```
 
 When `--aws-region` is provided, the tool queries the Glue Data Catalog to expand wildcard resource patterns (e.g., `db_*`) into explicit names before counting projected grants. Without it, wildcards are reported as-is and counted as `WILDCARD_PATTERN` gaps if they cannot be resolved.
@@ -641,6 +669,10 @@ Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
 
 ```json
 {
+  "source": "ranger-admin:http://ranger-admin:6080",
+  "services": [
+    { "name": "lf_prod", "serviceType": "lakeformation", "status": "assessed", "policiesScanned": 31 }
+  ],
   "totalPolicies": 47,
   "fullyConvertible": 31,
   "partiallyConvertible": 10,
@@ -687,7 +719,7 @@ Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
 | `SECURITY_ZONE` | Policy is scoped to a Ranger Security Zone. LF has no equivalent; the zone attribute is ignored. |
 | `DELEGATED_ADMIN` | Policy item has `delegateAdmin=true`. Partially supported — the flag is recorded but no `WITH GRANT OPTION` is applied to the resulting LF grants. |
 | `WILDCARD_PATTERN` | Resource pattern contains wildcards and could not be expanded (no AWS credentials). **Note:** this gap type is defined but is not currently emitted at runtime — wildcard expansion failures produce a log warning only. |
-| `UNSUPPORTED_SERVICE_TYPE` | No adapter registered for this Ranger service type. The entire policy is skipped. |
+| `UNSUPPORTED_SERVICE_TYPE` | No adapter registered for this Ranger service type. In `assess server` mode, the entire policy is skipped. In `assess file` mode, one gap entry is recorded per skipped service (not per policy), and the `details` field includes the count of bypassed policies. |
 | `UNSUPPORTED_ACTION` | One or more access types have no LF permission mapping. The unsupported action is dropped; other actions in the policy continue. |
 | `UNMAPPED_RESOURCE` | Resource ID cannot be mapped to an LF resource. The resource is skipped. |
 | `SCHEMA_VALIDATION_FAILURE` | A Cedar statement failed schema validation and was excluded. Valid statements in the same policy are retained. |
