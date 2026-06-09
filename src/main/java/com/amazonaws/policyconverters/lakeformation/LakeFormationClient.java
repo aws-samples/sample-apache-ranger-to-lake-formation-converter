@@ -440,15 +440,15 @@ public class LakeFormationClient {
                 String errorMsg = failure.error() != null ? failure.error().errorMessage() : "";
                 if (errorMsg.contains("Permissions modification is invalid")) {
                     LFPermissionOperation op = entryIdToOp.get(failure.requestEntry().id());
-                    if (op != null && op.getResource().getTableName() != null
-                            && (op.getResource().getColumnNames() == null
-                                || op.getResource().getColumnNames().isEmpty())) {
-                        // Build a TABLE_WITH_COLUMNS (all-columns wildcard) revoke to clear the
-                        // conflict. We issue this directly rather than via LFResource/buildResource
-                        // because buildResource has no representation for column-wildcard vs empty.
-                        conflictRevokes.add(op);  // carry original op for principal/table identity
+                    if (op != null && op.getResource().getTableName() != null) {
+                        // Two cases both require revoking the conflicting TABLE_WITH_COLUMNS with
+                        // a column wildcard before retrying:
+                        // 1. TABLE grant blocked by existing TABLE_WITH_COLUMNS (cols=None or cols=[...])
+                        // 2. TABLE_WITH_COLUMNS (column-specific) grant blocked by existing
+                        //    TABLE_WITH_COLUMNS (all-columns / different column set)
+                        conflictRevokes.add(op);
                         retryGrants.add(op);
-                        LOG.info("TABLE grant blocked by TABLE_WITH_COLUMNS conflict — will revoke and retry: "
+                        LOG.info("GRANT blocked by TABLE/TABLE_WITH_COLUMNS conflict — will revoke all-columns and retry: "
                                 + "policyId={}, principal={}, db={}, table={}",
                                 op.getSourcePolicyId(), op.getPrincipalArn(),
                                 op.getResource().getDatabaseName(), op.getResource().getTableName());
