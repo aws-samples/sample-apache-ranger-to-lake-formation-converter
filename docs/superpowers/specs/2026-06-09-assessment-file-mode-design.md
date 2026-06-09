@@ -152,6 +152,7 @@ public AssessmentResult run(AssessmentConfig config, PolicySource source)
 
 Behavioral changes:
 - `fetchPolicies(AssessmentConfig)` protected method removed
+- `buildAdapterRegistry(AssessmentConfig)` private method removed — the registry is now built entirely from the `ServicePolicyBatch` list returned by `source.load()`
 - `run()` calls `source.load()` to obtain `List<ServicePolicyBatch>`
 - Skipped batches (non-null `skipReason`) produce one `UNSUPPORTED_SERVICE_TYPE` `GapEntry` each; `details` includes `batch.getRawPolicyCount()` so the message reads e.g. `"All 12 policies in this service are skipped."`
 - Policies from skipped batches are excluded from `totalPolicies`, `fullyConvertible`, `partiallyConvertible`, and `notConvertible` counts
@@ -168,7 +169,7 @@ The `protected convertToS3AgOps()` and `protected createS3AccessGrantsClient()` 
 
 ### `AssessmentResult`
 
-Two new fields added as constructor parameters to the existing `@JsonCreator` constructor (with `@JsonProperty` annotations, consistent with the immutable pattern of the class). Adding new fields to a `@JsonCreator` constructor is a format-compatible addition: new fields are ignored by older readers, and treated as absent (null/default) when deserializing older JSON reports written before this change.
+Two new fields added as constructor parameters to the existing `@JsonCreator` constructor (with `@JsonProperty` annotations, consistent with the immutable pattern of the class). Adding new fields to a `@JsonCreator` constructor is format-compatible for serialization (older readers ignore unknown fields). For deserialization of old JSON reports (which lack `"source"` and `"services"`), Jackson passes `null` for those parameters — the constructor must initialize `services` to `Collections.emptyList()` when `null` is received, to prevent `NullPointerException` in `AssessmentReporter` when iterating services.
 
 | Field | Type | Description |
 |---|---|---|
