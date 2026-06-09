@@ -35,11 +35,13 @@ assess file <export-file.json> [options]
 
 ### Breaking change
 
-The old flat `assess [<config-file>] [--ranger-url ...]` syntax is removed. `args[0]` must be `"server"` or `"file"`. Any other value prints `USAGE` and exits with code 1.
+The old flat `assess [<config-file>] [--ranger-url ...]` syntax is removed. `args[0]` must be `"server"` or `"file"`. Any other value (including a bare `--ranger-url` flag where the subcommand was forgotten) prints `USAGE` and exits with code 1.
+
+The README must include an explicit migration callout with a before/after example so users with existing shell scripts can update them. See the Files Changed section.
 
 ### File mode service selection
 
-In `assess file` mode, all services in the export file are assessed automatically. The `--services` flag is not supported and will be rejected as an unknown flag (exit 1 + USAGE). Services with unrecognized service types (e.g. `yarn`, `kafka`) are skipped and reported as `UNSUPPORTED_SERVICE_TYPE` gap entries.
+In `assess file` mode, all services in the export file are assessed automatically. The `--services` flag is not supported; if provided, `parseFileArgs` must print a targeted message — `"--services is not supported in file mode; all services in the export are assessed automatically"` — and exit 1, rather than the generic unknown-flag error. Services with unrecognized service types (e.g. `yarn`, `kafka`) are skipped and reported as `UNSUPPORTED_SERVICE_TYPE` gap entries.
 
 ---
 
@@ -118,7 +120,9 @@ Implements `PolicySource` for the Ranger export JSON file.
 - Parses the file using `RangerExportModel` (see below) via an `ObjectMapper` configured with `FAIL_ON_UNKNOWN_PROPERTIES = false` (the export format contains many fields beyond what `RangerPolicy` maps)
 - Filters out disabled policies (`isEnabled == false`) after parsing, before grouping; `rawPolicyCount` is set from the pre-filter count
 - Groups policies by `service` (instance name) + `serviceType`
-- Checks each `serviceType` against the set of known types (`lakeformation`, `hive`, `presto`, `trino`); unrecognized types produce a skipped `ServicePolicyBatch` with the original `rawPolicyCount` populated so the skip-reason message can report how many policies were bypassed
+- Parses the file using UTF-8 encoding explicitly (`new InputStreamReader(Files.newInputStream(path), StandardCharsets.UTF_8)`) to avoid platform-locale issues on Windows
+- Policies with a null `service` or null `serviceType` field are skipped individually with a `WARN` log; they do not contribute to any batch's `rawPolicyCount` or `policies` list
+- Checks each `serviceType` against the set of known types (`lakeformation`, `hive`, `presto`, `trino`, `amazon-emr-emrfs`); unrecognized types produce a skipped `ServicePolicyBatch` with the original `rawPolicyCount` populated so the skip-reason message can report how many policies were bypassed
 - `sourceLabel()` returns `"file:<filename>"` (filename only, not full path)
 
 ### `RangerExportModel` (`assessment` package, package-private)
@@ -163,9 +167,7 @@ The `protected convertToS3AgOps()` and `protected createS3AccessGrantsClient()` 
 
 ### `AssessmentConfig`
 
-- `build()` no longer throws on blank `rangerAdminUrl` — validation moves to `AssessmentMain` per subcommand
-- Server-specific fields (`rangerAdminUrl`, `rangerUsername`, `rangerPassword`, `services`) remain on the builder but are unchecked at build time
-- Shared fields (`outputDir`, `consoleOnly`, `awsConfig`, `principalMapping`, `s3AccessGrants`) are unchanged
+The `rangerAdminUrl` required-check in `build()` must be removed (currently at `AssessmentConfig.java:140`). Validation moves to `AssessmentMain` per subcommand: `parseServerArgs` validates that `rangerAdminUrl` is non-blank before constructing `RangerAdminPolicySource`; `parseFileArgs` never sets it.
 
 ### `AssessmentResult`
 
@@ -296,7 +298,7 @@ Services assessed:
       {
         "gapType": "UNSUPPORTED_SERVICE_TYPE",
         "details": "Service 'yarn_prod' (serviceType='yarn') has no registered adapter. All 12 policies in this service are skipped.",
-        "recommendation": "Supported service types are: lakeformation, hive, presto, trino."
+        "recommendation": "Supported service types are: lakeformation, hive, presto, trino, amazon-emr-emrfs."
       }
     ],
     "summary": {
@@ -325,6 +327,34 @@ Services assessed:
 
 ---
 
+## Test Guidance
+
+### `AssessmentRunnerTest` — migrate existing tests
+
+All six existing tests in `AssessmentRunnerTest` inject policies by subclassing `AssessmentRunner` and overriding `fetchPolicies(AssessmentConfig)`. That method is removed. Each test must be rewritten to pass a `PolicySource` lambda or anonymous class as the second argument to `runner.run(config, source)`.
+
+### New: `RangerExportFilePolicySourceTest`
+
+Add unit tests covering:
+
+| Scenario | Assertion |
+|---|---|
+| Well-formed export with two known service types and one unknown type | Two assessed batches; one skipped batch with correct `rawPolicyCount`; `UNSUPPORTED_SERVICE_TYPE` gap in result |
+| Policies with `isEnabled=false` | Excluded from `policies`; counted in `rawPolicyCount` |
+| Export with `"policies": null` or missing `"policies"` key | Zero policies, warning logged, no exception |
+| Policy with null `service` or null `serviceType` field | Individual policy skipped with `WARN` log; not added to any batch |
+| Export containing `amazon-emr-emrfs` service type | Assessed (not skipped) |
+| Non-UTF-8 encoded file content | Parse error propagated as IOException |
+
+### New: `AssessmentMainTest` — subcommand dispatch
+
+- `assess server` with missing `--ranger-url` and no config file → exit 1
+- `assess file` with `--services` flag → exit 1 with specific message
+- `assess file` with non-existent file path → exit 1
+- Unknown subcommand → exit 1 + USAGE
+
+---
+
 ## Architecture Note
 
 The `PolicySource` interface sits between `AssessmentMain` (which knows the source) and `AssessmentRunner` (which only cares about policies). `AssessmentRunner` does not reference `RangerAdminPolicySource`, `RangerExportFilePolicySource`, or `ConversionServerMain` directly — all source coupling moves to `AssessmentMain`. This also makes `AssessmentRunner` easier to test: inject a `PolicySource` stub rather than subclassing and overriding `fetchPolicies`.
@@ -348,4 +378,7 @@ The production `RangerToCedarConverter` and `CedarToLFConverter` pipeline is unc
 | `assessment/AssessmentResult.java` | Modified — add `source` and `services` fields |
 | `assessment/AssessmentReporter.java` | Modified — always render source/services preamble |
 | `app/AssessmentMain.java` | Modified — subcommand dispatch, new `USAGE`, new parse methods |
-| `README.md` | Updated — replace flat `assess` CLI examples with `assess server` / `assess file` subcommand examples; update Pre-Migration Assessment Tool section |
+| `README.md` | Updated — (1) replace all flat `assess` CLI examples with `assess server` / `assess file` equivalents; (2) update the Pre-Migration Assessment Tool usage section; (3) add a "Obtaining a Ranger Export File" subsection explaining Ranger Admin UI export and that ZIP bundles must be extracted to JSON before use; (4) add a migration callout with before/after examples for users with existing scripts; (5) update the JSON report format example to include `source` and `services` fields; (6) update the `UNSUPPORTED_SERVICE_TYPE` row in the Gap Types table to clarify it appears at the service level in file mode |
+| `test/.../AssessmentRunnerTest.java` | Modified — rewrite all six `fetchPolicies`-override tests to use `PolicySource` stubs |
+| `test/.../RangerExportFilePolicySourceTest.java` | New — unit tests for file parsing, isEnabled filtering, null fields, unknown service types (see Test Guidance) |
+| `test/.../AssessmentMainTest.java` | New or modified — subcommand dispatch tests |
