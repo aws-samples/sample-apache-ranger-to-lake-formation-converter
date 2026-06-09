@@ -12,27 +12,25 @@ import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
 import com.amazonaws.policyconverters.config.PrincipalMapperType;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapperFactory;
-import com.amazonaws.policyconverters.model.GapEntry.GapType;
-import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantOperation;
-import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantsClient;
-import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 import com.amazonaws.policyconverters.model.GapEntry;
+import com.amazonaws.policyconverters.model.GapEntry.GapType;
 import com.amazonaws.policyconverters.model.GapReport;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.ranger.PassthroughCatalogResolver;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
 import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
 import com.amazonaws.policyconverters.reporting.GapReporter;
+import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantOperation;
+import com.amazonaws.policyconverters.s3accessgrants.S3AccessGrantsClient;
 import org.apache.ranger.plugin.model.RangerPolicy;
-import org.apache.ranger.plugin.util.ServicePolicies;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.glue.GlueClient;
+import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -40,7 +38,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Orchestrates a one-time gap assessment: fetches policies from Ranger Admin,
+ * Orchestrates a one-time gap assessment: loads policies from a {@link PolicySource},
  * runs the full conversion pipeline in read-only mode, and returns an
  * {@link AssessmentResult} with convertibility counts and the gap report.
  * <p>
@@ -53,15 +51,53 @@ public class AssessmentRunner {
     private static final Logger LOG = LoggerFactory.getLogger(AssessmentRunner.class);
 
     /**
-     * Runs the gap assessment against the Ranger Admin described in {@code config}.
+     * Runs the gap assessment using the supplied {@code source} to obtain policies.
      *
      * @param config assessment configuration
+     * @param source policy source (Ranger Admin, export file, etc.)
      * @return the assessment result with convertibility stats and gap report
      */
-    public AssessmentResult run(AssessmentConfig config) {
-        List<RangerPolicy> allPolicies = fetchPolicies(config);
+    public AssessmentResult run(AssessmentConfig config, PolicySource source) {
+        List<ServicePolicyBatch> batches = source.load();
+
+        // Build adapter registry keyed on serviceName (instance name) to match
+        // RangerToCedarConverter's lookup which uses policy.getService()
+        Map<String, SourcePolicyAdapter> adapterRegistry = new HashMap<>();
+        for (ServicePolicyBatch batch : batches) {
+            if (!batch.isSkipped()) {
+                AwsContext awsContext = config.getAwsConfig()
+                        .map(aws -> new AwsContext(aws.getRegion(), aws.getCatalogId(), aws.getCatalogId()))
+                        .orElse(new AwsContext("us-east-1", "000000000000", "000000000000"));
+                BaseRangerService service = ConversionServerMain.createRangerService(
+                        new RangerServiceConfig(batch.getServiceType(), batch.getServiceName(), null, null));
+                adapterRegistry.put(batch.getServiceName(), service.createAdapter(awsContext));
+            }
+        }
 
         GapReporter gapReporter = new GapReporter();
+
+        // Collect assessed policies; record gap entries for skipped services
+        List<RangerPolicy> allPolicies = new ArrayList<>();
+        List<AssessedService> assessedServices = new ArrayList<>();
+        for (ServicePolicyBatch batch : batches) {
+            if (batch.isSkipped()) {
+                gapReporter.recordGap(new GapEntry(
+                        null, null,
+                        GapEntry.GapType.UNSUPPORTED_SERVICE_TYPE,
+                        null,
+                        "Service '" + batch.getServiceName() + "' (serviceType='" + batch.getServiceType()
+                                + "') has no registered adapter. All " + batch.getRawPolicyCount()
+                                + " policies in this service are skipped.",
+                        "Supported service types are: lakeformation, hive, presto, trino, amazon-emr-emrfs."));
+                assessedServices.add(AssessedService.skipped(
+                        batch.getServiceName(), batch.getServiceType(), batch.getSkipReason()));
+            } else {
+                allPolicies.addAll(batch.getPolicies());
+                assessedServices.add(AssessedService.assessed(
+                        batch.getServiceName(), batch.getServiceType(), batch.getPolicies().size()));
+            }
+        }
+
         CedarSchemaProvider schemaProvider = new CedarSchemaProvider();
 
         // Build IdentitystoreClient only when needed
@@ -82,8 +118,6 @@ public class AssessmentRunner {
         PrincipalMapper principalMapper = PrincipalMapperFactory.create(
                 principalMappingConfig, identityStoreClient, null);
         CatalogResolver catalogResolver = buildCatalogResolver(config);
-
-        Map<String, SourcePolicyAdapter> adapterRegistry = buildAdapterRegistry(config);
 
         RangerToCedarConverter rangerConverter = new RangerToCedarConverter(
                 adapterRegistry, principalMapper, catalogResolver, gapReporter, schemaProvider);
@@ -139,8 +173,8 @@ public class AssessmentRunner {
                 counts[2],
                 ops.size(),
                 gapReport,
-                null,
-                Collections.emptyList());
+                source.sourceLabel(),
+                assessedServices);
     }
 
     /**
@@ -159,43 +193,6 @@ public class AssessmentRunner {
         return new S3AccessGrantsClient(s3Config, null /* no dead-letter in assessment */);
     }
 
-    protected List<RangerPolicy> fetchPolicies(AssessmentConfig config) {
-        List<RangerPolicy> allPolicies = new ArrayList<>();
-
-        if (config.getServices().isEmpty()) {
-            // Single-service (legacy) mode: fetch from the default "lakeformation" service
-            ServicePolicies sp = ConversionServerMain.fetchPoliciesFromRangerAdmin(
-                    config.getRangerAdminUrl(),
-                    config.getRangerUsername(),
-                    config.getRangerPassword(),
-                    "lakeformation");
-            if (sp != null && sp.getPolicies() != null) {
-                allPolicies.addAll(sp.getPolicies());
-            } else {
-                LOG.warn("Assessment: no policies returned from Ranger Admin for service 'lakeformation'");
-            }
-        } else {
-            for (RangerServiceConfig svcConfig : config.getServices()) {
-                String instanceName = svcConfig.getServiceInstanceName();
-                ServicePolicies sp = ConversionServerMain.fetchPoliciesFromRangerAdmin(
-                        config.getRangerAdminUrl(),
-                        config.getRangerUsername(),
-                        config.getRangerPassword(),
-                        instanceName);
-                if (sp != null && sp.getPolicies() != null) {
-                    allPolicies.addAll(sp.getPolicies());
-                    LOG.info("Assessment: fetched {} policies from service '{}'",
-                            sp.getPolicies().size(), instanceName);
-                } else {
-                    LOG.warn("Assessment: no policies returned for service '{}'", instanceName);
-                }
-            }
-        }
-
-        LOG.info("Assessment: total {} policies fetched across all services", allPolicies.size());
-        return allPolicies;
-    }
-
     private CatalogResolver buildCatalogResolver(AssessmentConfig config) {
         return config.getAwsConfig().map(awsConfig -> {
             AwsCredentialsProvider credentials = ConversionServerMain.buildCredentialsProvider(awsConfig);
@@ -209,28 +206,6 @@ public class AssessmentRunner {
             LOG.info("Assessment: no AWS credentials provided, using PassthroughCatalogResolver");
             return new PassthroughCatalogResolver();
         });
-    }
-
-    private Map<String, SourcePolicyAdapter> buildAdapterRegistry(AssessmentConfig config) {
-        Map<String, SourcePolicyAdapter> adapterRegistry = new HashMap<>();
-
-        if (config.getServices().isEmpty()) {
-            // Single-service mode: default lakeformation adapter with a no-op AWS context
-            AwsContext awsContext = new AwsContext("us-east-1", "000000000000", "000000000000");
-            BaseRangerService defaultService = ConversionServerMain.createRangerService(
-                    new RangerServiceConfig("lakeformation", "lakeformation", null, null));
-            adapterRegistry.put("lakeformation", defaultService.createAdapter(awsContext));
-        } else {
-            for (RangerServiceConfig svcConfig : config.getServices()) {
-                AwsContext awsContext = config.getAwsConfig()
-                        .map(aws -> new AwsContext(aws.getRegion(), aws.getCatalogId(), aws.getCatalogId()))
-                        .orElse(new AwsContext("us-east-1", "000000000000", "000000000000"));
-                BaseRangerService service = ConversionServerMain.createRangerService(svcConfig);
-                adapterRegistry.put(svcConfig.getServiceType(), service.createAdapter(awsContext));
-            }
-        }
-
-        return adapterRegistry;
     }
 
     /**

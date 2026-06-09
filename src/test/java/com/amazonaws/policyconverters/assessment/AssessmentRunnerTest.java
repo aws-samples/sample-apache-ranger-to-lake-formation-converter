@@ -31,15 +31,8 @@ class AssessmentRunnerTest {
 
     @Test
     void run_withEmptyPolicies_returnsZeroCounts() {
-        AssessmentConfig config = minimalConfig();
-        AssessmentRunner runner = new AssessmentRunner() {
-            @Override
-            protected List<RangerPolicy> fetchPolicies(AssessmentConfig cfg) {
-                return Collections.emptyList();
-            }
-        };
-
-        AssessmentResult result = runner.run(config);
+        PolicySource source = stubSource("lakeformation", "lakeformation", List.of());
+        AssessmentResult result = new AssessmentRunner().run(minimalConfig(), source);
 
         assertEquals(0, result.getTotalPolicies());
         assertEquals(0, result.getFullyConvertible());
@@ -52,24 +45,14 @@ class AssessmentRunnerTest {
     @Test
     void run_withDataMaskingPolicy_recordsGapAndCountsPartial() {
         RangerPolicy policy = buildLakeFormationPolicy(1L, "db1", "table1");
-        // policyType == 1 triggers DATA_MASKING gap in RangerToCedarConverter
         policy.setPolicyType(1);
-        RangerDataMaskPolicyItem maskItem = new RangerDataMaskPolicyItem();
-        policy.setDataMaskPolicyItems(List.of(maskItem));
+        policy.setDataMaskPolicyItems(List.of(new RangerDataMaskPolicyItem()));
 
-        AssessmentConfig config = minimalConfig();
-        AssessmentRunner runner = new AssessmentRunner() {
-            @Override
-            protected List<RangerPolicy> fetchPolicies(AssessmentConfig cfg) {
-                return List.of(policy);
-            }
-        };
-
-        AssessmentResult result = runner.run(config);
+        PolicySource source = stubSource("lakeformation", "lakeformation", List.of(policy));
+        AssessmentResult result = new AssessmentRunner().run(minimalConfig(), source);
 
         assertEquals(1, result.getTotalPolicies());
-        assertTrue(result.getGapReport().getSummary().containsKey(GapType.DATA_MASKING),
-                "Expected DATA_MASKING gap");
+        assertTrue(result.getGapReport().getSummary().containsKey(GapType.DATA_MASKING));
     }
 
     @Test
@@ -80,191 +63,140 @@ class AssessmentRunnerTest {
         item.setUsers(List.of("arn:aws:iam::" + ACCOUNT_ID + ":user/alice"));
         policy.setPolicyItems(List.of(item));
 
-        AssessmentConfig config = minimalConfig();
-        AssessmentRunner runner = new AssessmentRunner() {
-            @Override
-            protected List<RangerPolicy> fetchPolicies(AssessmentConfig cfg) {
-                return List.of(policy);
-            }
-        };
-
-        AssessmentResult result = runner.run(config);
+        PolicySource source = stubSource("lakeformation", "lakeformation", List.of(policy));
+        AssessmentResult result = new AssessmentRunner().run(minimalConfig(), source);
 
         assertEquals(1, result.getTotalPolicies());
-        // A fully convertible policy should produce at least one projected grant
-        assertTrue(result.getProjectedGrantCount() >= 0,
-                "Projected grant count must be non-negative");
+        assertTrue(result.getProjectedGrantCount() >= 0);
     }
 
     @Test
     void run_withTagBasedPolicy_countedAsNotConvertible() {
         RangerPolicy policy = buildLakeFormationPolicy(3L, "db1", "table1");
-        policy.setService("lakeformation_tag"); // contains "tag" → skipped entirely
+        policy.setService("lakeformation_tag");
         policy.setPolicyItems(List.of());
 
-        AssessmentConfig config = minimalConfig();
-        AssessmentRunner runner = new AssessmentRunner() {
-            @Override
-            protected List<RangerPolicy> fetchPolicies(AssessmentConfig cfg) {
-                return List.of(policy);
-            }
-        };
-
-        AssessmentResult result = runner.run(config);
+        PolicySource source = stubSource("lakeformation_tag", "lakeformation", List.of(policy));
+        AssessmentResult result = new AssessmentRunner().run(minimalConfig(), source);
 
         assertEquals(1, result.getTotalPolicies());
         assertTrue(result.getGapReport().getSummary().getOrDefault(GapType.TAG_BASED_POLICY, 0) > 0
-                || result.getNotConvertible() == 1,
-                "Tag-based policy should be recorded as gap or not convertible");
+                || result.getNotConvertible() == 1);
     }
 
-    // ---- S3 Access Grants gap tests ----
+    @Test
+    void run_withSkippedBatch_recordsUnsupportedServiceTypeGap() {
+        PolicySource source = () -> List.of(
+                ServicePolicyBatch.skipped("yarn_prod", "yarn", 5, "unsupported service type"));
+        AssessmentResult result = new AssessmentRunner().run(minimalConfig(), source);
+
+        assertEquals(0, result.getTotalPolicies(), "skipped policies must not count toward total");
+        assertTrue(result.getGapReport().getSummary().containsKey(GapType.UNSUPPORTED_SERVICE_TYPE));
+    }
 
     @Test
     void run_withUnregisteredS3Location_recordsUnregisteredS3LocationGap() {
-        String unregisteredPrefix = "s3://other-bucket/data/";
-
-        // Mock S3AccessGrantsClient returning a location that does NOT cover the prefix
         S3AccessGrantsClient mockS3AgClient = mock(S3AccessGrantsClient.class);
-        when(mockS3AgClient.listRegisteredLocations())
-                .thenReturn(Set.of("s3://registered-bucket/"));
+        when(mockS3AgClient.listRegisteredLocations()).thenReturn(Set.of("s3://registered-bucket/"));
 
-        // Build a pre-constructed S3AG operation whose prefix is NOT covered
         S3AccessGrantOperation emrfsOp = new S3AccessGrantOperation(
-                OperationType.GRANT,
-                "arn:aws:iam::123456789012:user/alice",
-                unregisteredPrefix,
-                S3AccessGrantPermission.READ,
-                null);
+                OperationType.GRANT, "arn:aws:iam::123456789012:user/alice",
+                "s3://other-bucket/data/", S3AccessGrantPermission.READ, null);
 
-        AssessmentConfig config = s3AgConfig();
+        PolicySource source = stubSource("emrfs_prod", "amazon-emr-emrfs", List.of());
         AssessmentRunner runner = new AssessmentRunner() {
             @Override
-            protected List<RangerPolicy> fetchPolicies(AssessmentConfig cfg) {
-                return Collections.emptyList();
-            }
-
-            @Override
-            protected List<S3AccessGrantOperation> convertToS3AgOps(CedarPolicySet cedarPolicySet) {
+            protected List<S3AccessGrantOperation> convertToS3AgOps(CedarPolicySet s) {
                 return List.of(emrfsOp);
             }
-
             @Override
-            protected S3AccessGrantsClient createS3AccessGrantsClient(
-                    S3AccessGrantsConfig s3Config) {
+            protected S3AccessGrantsClient createS3AccessGrantsClient(S3AccessGrantsConfig c) {
                 return mockS3AgClient;
             }
         };
+        AssessmentResult result = runner.run(s3AgConfig(), source);
 
-        AssessmentResult result = runner.run(config);
-
-        assertTrue(
-                result.getGapReport().getSummary()
-                        .containsKey(GapType.UNREGISTERED_S3_LOCATION),
-                "Expected UNREGISTERED_S3_LOCATION gap when prefix is not covered by registered locations");
-
-        long count = result.getGapReport().getEntries().stream()
-                .filter(g -> g.getGapType() == GapType.UNREGISTERED_S3_LOCATION)
-                .count();
-        assertEquals(1, count, "Should record exactly one UNREGISTERED_S3_LOCATION gap");
+        assertTrue(result.getGapReport().getSummary().containsKey(GapType.UNREGISTERED_S3_LOCATION));
+        assertEquals(1, result.getGapReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNREGISTERED_S3_LOCATION).count());
     }
 
     @Test
     void run_withoutS3AgConfig_recordsCannotValidateS3LocationGap() {
-        // Build a pre-constructed S3AG operation
         S3AccessGrantOperation emrfsOp = new S3AccessGrantOperation(
-                OperationType.GRANT,
-                "arn:aws:iam::123456789012:user/alice",
-                "s3://my-bucket/data/",
-                S3AccessGrantPermission.READ,
-                null);
+                OperationType.GRANT, "arn:aws:iam::123456789012:user/alice",
+                "s3://my-bucket/data/", S3AccessGrantPermission.READ, null);
 
-        // Config WITHOUT s3AccessGrants configured
-        AssessmentConfig config = minimalConfig();
+        PolicySource source = stubSource("lakeformation", "lakeformation", List.of());
         AssessmentRunner runner = new AssessmentRunner() {
             @Override
-            protected List<RangerPolicy> fetchPolicies(AssessmentConfig cfg) {
-                return Collections.emptyList();
-            }
-
-            @Override
-            protected List<S3AccessGrantOperation> convertToS3AgOps(CedarPolicySet cedarPolicySet) {
+            protected List<S3AccessGrantOperation> convertToS3AgOps(CedarPolicySet s) {
                 return List.of(emrfsOp);
             }
         };
+        AssessmentResult result = runner.run(minimalConfig(), source);
 
-        AssessmentResult result = runner.run(config);
-
-        assertTrue(
-                result.getGapReport().getSummary()
-                        .containsKey(GapType.CANNOT_VALIDATE_S3_LOCATION),
-                "Expected CANNOT_VALIDATE_S3_LOCATION gap when s3AccessGrants config is absent");
-
-        long count = result.getGapReport().getEntries().stream()
-                .filter(g -> g.getGapType() == GapType.CANNOT_VALIDATE_S3_LOCATION)
-                .count();
-        assertEquals(1, count, "Should record exactly one CANNOT_VALIDATE_S3_LOCATION gap");
+        assertTrue(result.getGapReport().getSummary().containsKey(GapType.CANNOT_VALIDATE_S3_LOCATION));
+        assertEquals(1, result.getGapReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.CANNOT_VALIDATE_S3_LOCATION).count());
     }
 
     @Test
     void run_withRegisteredS3Location_noUnregisteredGap() {
-        String prefix = "s3://my-bucket/data/";
-
-        // Mock S3AccessGrantsClient returning a location that COVERS the prefix
         S3AccessGrantsClient mockS3AgClient = mock(S3AccessGrantsClient.class);
-        when(mockS3AgClient.listRegisteredLocations())
-                .thenReturn(Set.of("s3://my-bucket/"));
+        when(mockS3AgClient.listRegisteredLocations()).thenReturn(Set.of("s3://my-bucket/"));
 
         S3AccessGrantOperation emrfsOp = new S3AccessGrantOperation(
-                OperationType.GRANT,
-                "arn:aws:iam::123456789012:user/alice",
-                prefix,
-                S3AccessGrantPermission.READ,
-                null);
+                OperationType.GRANT, "arn:aws:iam::123456789012:user/alice",
+                "s3://my-bucket/data/", S3AccessGrantPermission.READ, null);
 
-        AssessmentConfig config = s3AgConfig();
+        PolicySource source = stubSource("emrfs_prod", "amazon-emr-emrfs", List.of());
         AssessmentRunner runner = new AssessmentRunner() {
             @Override
-            protected List<RangerPolicy> fetchPolicies(AssessmentConfig cfg) {
-                return Collections.emptyList();
-            }
-
-            @Override
-            protected List<S3AccessGrantOperation> convertToS3AgOps(CedarPolicySet cedarPolicySet) {
+            protected List<S3AccessGrantOperation> convertToS3AgOps(CedarPolicySet s) {
                 return List.of(emrfsOp);
             }
-
             @Override
-            protected S3AccessGrantsClient createS3AccessGrantsClient(
-                    S3AccessGrantsConfig s3Config) {
+            protected S3AccessGrantsClient createS3AccessGrantsClient(S3AccessGrantsConfig c) {
                 return mockS3AgClient;
             }
         };
+        AssessmentResult result = runner.run(s3AgConfig(), source);
 
-        AssessmentResult result = runner.run(config);
-
-        assertFalse(
-                result.getGapReport().getSummary()
-                        .containsKey(GapType.UNREGISTERED_S3_LOCATION),
-                "Should not record UNREGISTERED_S3_LOCATION when prefix is covered");
+        assertFalse(result.getGapReport().getSummary().containsKey(GapType.UNREGISTERED_S3_LOCATION));
     }
 
     // ---- helpers ----
 
+    private PolicySource stubSource(String serviceName, String serviceType, List<RangerPolicy> policies) {
+        for (RangerPolicy p : policies) {
+            p.setService(serviceName);
+        }
+        return () -> List.of(ServicePolicyBatch.assessed(serviceName, serviceType,
+                policies, policies.size()));
+    }
+
     private AssessmentConfig minimalConfig() {
         Map<String, String> userMappings = new HashMap<>();
         userMappings.put("alice", "arn:aws:iam::" + ACCOUNT_ID + ":user/alice");
-        PrincipalMappingConfig principalMapping = new PrincipalMappingConfig(
-                userMappings, Collections.emptyMap(), Collections.emptyMap());
-
         return AssessmentConfig.builder()
-                .rangerAdminUrl("http://localhost:6080")
-                .rangerUsername("admin")
-                .rangerPassword("admin")
-                .services(List.of(new RangerServiceConfig(
-                        "lakeformation", "lakeformation", null, null)))
-                .principalMapping(principalMapping)
+                .services(List.of(new RangerServiceConfig("lakeformation", "lakeformation", null, null)))
+                .principalMapping(new PrincipalMappingConfig(
+                        userMappings, Collections.emptyMap(), Collections.emptyMap()))
                 .consoleOnly(true)
+                .build();
+    }
+
+    private AssessmentConfig s3AgConfig() {
+        Map<String, String> userMappings = new HashMap<>();
+        userMappings.put("alice", "arn:aws:iam::" + ACCOUNT_ID + ":user/alice");
+        return AssessmentConfig.builder()
+                .services(List.of(new RangerServiceConfig("amazon-emr-emrfs", "emrfs_prod", null, null)))
+                .principalMapping(new PrincipalMappingConfig(
+                        userMappings, Collections.emptyMap(), Collections.emptyMap()))
+                .consoleOnly(true)
+                .s3AccessGrants(new S3AccessGrantsConfig(
+                        "arn:aws:s3:us-east-1:" + ACCOUNT_ID + ":access-grants/default", ACCOUNT_ID))
                 .build();
     }
 
@@ -274,34 +206,11 @@ class AssessmentRunnerTest {
         policy.setName("policy-" + id);
         policy.setService("lakeformation");
         policy.setIsEnabled(true);
-
         Map<String, RangerPolicyResource> resources = new HashMap<>();
         resources.put("database", new RangerPolicyResource(db));
         resources.put("table", new RangerPolicyResource(table));
         policy.setResources(resources);
-
         return policy;
-    }
-
-    private AssessmentConfig s3AgConfig() {
-        Map<String, String> userMappings = new HashMap<>();
-        userMappings.put("alice", "arn:aws:iam::" + ACCOUNT_ID + ":user/alice");
-        PrincipalMappingConfig principalMapping = new PrincipalMappingConfig(
-                userMappings, Collections.emptyMap(), Collections.emptyMap());
-        S3AccessGrantsConfig s3AgConfig = new S3AccessGrantsConfig(
-                "arn:aws:s3:us-east-1:" + ACCOUNT_ID + ":access-grants/default",
-                ACCOUNT_ID);
-
-        return AssessmentConfig.builder()
-                .rangerAdminUrl("http://localhost:6080")
-                .rangerUsername("admin")
-                .rangerPassword("admin")
-                .services(List.of(new RangerServiceConfig(
-                        "amazon-emr-emrfs", "emrfs_prod", null, null)))
-                .principalMapping(principalMapping)
-                .consoleOnly(true)
-                .s3AccessGrants(s3AgConfig)
-                .build();
     }
 
     private RangerPolicyItemAccess access(String type) {
