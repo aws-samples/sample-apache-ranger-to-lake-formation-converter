@@ -133,11 +133,11 @@ public class AssessmentMain {
             configBuilder.awsConfig(new AwsConfig(awsRegion, null, null, null, null));
         }
 
-        AssessmentConfig config;
-        try {
-            config = configBuilder.build();
-        } catch (IllegalStateException e) {
-            System.err.println("Configuration error: " + e.getMessage());
+        AssessmentConfig config = configBuilder.build();
+
+        // rangerAdminUrl is required for server mode (fetching from Ranger Admin)
+        if (config.getRangerAdminUrl() == null || config.getRangerAdminUrl().isBlank()) {
+            System.err.println("Configuration error: rangerAdminUrl is required");
             System.err.println(USAGE);
             return 1;
         }

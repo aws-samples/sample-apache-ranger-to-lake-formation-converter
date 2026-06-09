@@ -137,9 +137,6 @@ public class AssessmentConfig {
         }
 
         public AssessmentConfig build() {
-            if (rangerAdminUrl == null || rangerAdminUrl.isBlank()) {
-                throw new IllegalStateException("rangerAdminUrl is required");
-            }
             return new AssessmentConfig(this);
         }
     }

@@ -79,6 +79,15 @@ class AssessmentReporterTest {
         assertEquals(0, fileCount, "Expected no files written in console-only mode");
     }
 
+    @Test
+    void assessmentConfig_buildsWithoutRangerAdminUrl() {
+        // Should not throw — validation moves to AssessmentMain per subcommand
+        AssessmentConfig config = AssessmentConfig.builder()
+                .consoleOnly(true)
+                .build();
+        assertNotNull(config);
+    }
+
     // ---- helpers ----
 
     private AssessmentResult buildResult(int total, int fully, int partial, int notConv,
