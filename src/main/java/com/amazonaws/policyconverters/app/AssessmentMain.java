@@ -266,6 +266,7 @@ public class AssessmentMain {
      */
     static String guessServiceType(String instanceName) {
         String lower = instanceName.toLowerCase();
+        if (lower.contains("emrfs")) return "amazon-emr-emrfs";
         if (lower.contains("hive")) return "hive";
         if (lower.contains("presto")) return "presto";
         if (lower.contains("trino")) return "trino";

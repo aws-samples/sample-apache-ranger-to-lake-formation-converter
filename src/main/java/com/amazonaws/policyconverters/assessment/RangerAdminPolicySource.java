@@ -54,6 +54,9 @@ public class RangerAdminPolicySource implements PolicySource {
                         "fetch failed or returned no data"));
             } else {
                 List<RangerPolicy> policies = sp.getPolicies();
+                // fetchPoliciesFromRangerAdmin already strips disabled policies, so
+                // rawPolicyCount == policies.size() (post-filter). The "pre-filter" semantic
+                // of rawPolicyCount only holds for RangerExportFilePolicySource.
                 batches.add(ServicePolicyBatch.assessed(
                         instanceName, svc.getServiceType(), policies, policies.size()));
             }

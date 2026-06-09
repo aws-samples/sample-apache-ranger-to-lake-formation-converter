@@ -86,8 +86,11 @@ class AssessmentRunnerTest {
 
     @Test
     void run_withSkippedBatch_recordsUnsupportedServiceTypeGap() {
-        PolicySource source = () -> List.of(
-                ServicePolicyBatch.skipped("yarn_prod", "yarn", 5, "unsupported service type"));
+        ServicePolicyBatch skipped = ServicePolicyBatch.skipped("yarn_prod", "yarn", 5, "unsupported service type");
+        PolicySource source = new PolicySource() {
+            @Override public List<ServicePolicyBatch> load() { return List.of(skipped); }
+            @Override public String sourceLabel() { return "stub:yarn_prod"; }
+        };
         AssessmentResult result = new AssessmentRunner().run(minimalConfig(), source);
 
         assertEquals(0, result.getTotalPolicies(), "skipped policies must not count toward total");
@@ -172,8 +175,12 @@ class AssessmentRunnerTest {
         for (RangerPolicy p : policies) {
             p.setService(serviceName);
         }
-        return () -> List.of(ServicePolicyBatch.assessed(serviceName, serviceType,
-                policies, policies.size()));
+        ServicePolicyBatch batch = ServicePolicyBatch.assessed(serviceName, serviceType,
+                policies, policies.size());
+        return new PolicySource() {
+            @Override public List<ServicePolicyBatch> load() { return List.of(batch); }
+            @Override public String sourceLabel() { return "stub:" + serviceName; }
+        };
     }
 
     private AssessmentConfig minimalConfig() {

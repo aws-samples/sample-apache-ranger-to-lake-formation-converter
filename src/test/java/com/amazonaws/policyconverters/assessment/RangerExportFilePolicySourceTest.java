@@ -108,6 +108,15 @@ class RangerExportFilePolicySourceTest {
     }
 
     @Test
+    void load_invalidJson_throwsRuntimeException(@TempDir Path dir) throws IOException {
+        Path file = dir.resolve("bad.json");
+        Files.writeString(file, "not valid json", StandardCharsets.UTF_8);
+
+        assertThrows(RuntimeException.class,
+                () -> new RangerExportFilePolicySource(file).load());
+    }
+
+    @Test
     void load_sourceLabel_returnsFilenameOnly() throws IOException {
         Path file = writeExport(tempDir, "{\"policies\":[]}");
         String label = new RangerExportFilePolicySource(file).sourceLabel();

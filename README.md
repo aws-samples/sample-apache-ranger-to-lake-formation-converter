@@ -646,7 +646,12 @@ When `--aws-region` is provided, the tool queries the Glue Data Catalog to expan
 
 ```
 === Apache Ranger → Lake Formation Assessment ===
+Source:       ranger-admin:http://ranger-admin:6080
 Assessed at:  2024-06-01T10:30:00Z
+
+Services assessed:
+  lf_prod              (lakeformation)  — assessed  (31 policies)
+  hive_prod            (hive)           — assessed  (16 policies)
 
 Policies scanned:           47
   Fully convertible:        31 (66%)
