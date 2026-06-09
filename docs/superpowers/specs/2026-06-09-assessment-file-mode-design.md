@@ -348,3 +348,4 @@ The production `RangerToCedarConverter` and `CedarToLFConverter` pipeline is unc
 | `assessment/AssessmentResult.java` | Modified — add `source` and `services` fields |
 | `assessment/AssessmentReporter.java` | Modified — always render source/services preamble |
 | `app/AssessmentMain.java` | Modified — subcommand dispatch, new `USAGE`, new parse methods |
+| `README.md` | Updated — replace flat `assess` CLI examples with `assess server` / `assess file` subcommand examples; update Pre-Migration Assessment Tool section |
