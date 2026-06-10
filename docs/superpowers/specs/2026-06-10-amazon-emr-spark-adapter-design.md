@@ -91,32 +91,78 @@ default Set<String> mapAccessTypeToCedarActions(String accessType, String resour
 
 #### `RangerToCedarConverter.java`
 
-Four targeted changes:
+Six targeted changes:
 
-1. **`determineResourceLevel`** — add `url` detection before the database fallback:
+1. **`determineResourceLevel`** — add `url` detection as the first check, before `datalocation`. The `url` resource is standalone (not in the db/table/column hierarchy); it takes priority over all catalog keys:
    ```java
    if (hasResource(resources, "url")) return "url";
+   // then existing: datalocation, column, table, database
    ```
 
-2. **`expandResources`** — add `url` branch between `datalocation` and `database`:
-   - Iterate url values directly (no Glue catalog expansion needed)
-   - For each value, call `buildEntityRef(adapter, "url", null, null, null, urlValue)`
-   - If a url value contains a wildcard (`*` or `?`), record a `WILDCARD_PATTERN` gap (same pattern as table/column wildcards) and pass through as-is
+2. **`expandResources`** — add `url` early-return branch immediately after the `datalocation` branch (lines 436–443), and before the `dbPatterns` guard (line 445). This is required because url-only policies have no `database` resource; if the url branch is placed after the `dbPatterns` guard, the policy is silently dropped:
+   ```java
+   if ("url".equals(resourceLevel)) {
+       List<String> urls = getResourceValues(resources, "url");
+       for (String url : urls) {
+           if (isWildcard(url)) {
+               gapReporter.recordGap(new GapEntry(
+                       policyId, null, GapType.WILDCARD_PATTERN,
+                       url,
+                       "URL pattern '" + url + "' cannot be expanded. ARN is a placeholder.",
+                       "Register specific S3 paths in Lake Formation as data locations."
+               ));
+           }
+           CedarEntityRef ref = buildEntityRef(adapter, "url", null, null, null, url);
+           combinations.add(new ResourceCombination(ref));
+       }
+       return combinations;
+   }
+   ```
 
-3. **`buildEntityRef`** — add `instanceof EmrSparkServiceAdapter` routing:
+3. **`buildEntityRef`** — add `instanceof EmrSparkServiceAdapter` routing immediately before the `instanceof HiveServiceAdapter` check (ordering matters: Hive's `buildEntityRefFromValues` throws on `"url"` resourceLevel, so the EMR Spark branch must be reached first):
    ```java
    if (adapter instanceof EmrSparkServiceAdapter) {
        return ((EmrSparkServiceAdapter) adapter).buildEntityRefFromValues(
                resourceLevel, database, table, column, dataLocation);
    }
    ```
+   Also add a `"url"` case to the fallback `switch` (reached when neither EMR Spark nor Hive nor LakeFormation) as a safety net:
+   ```java
+   case "url":
+       entityType = "DataCatalog::DataLocation";
+       entityId = dataLocation != null ? dataLocation.replaceFirst("^s3://", "arn:aws:s3:::") : dataLocation;
+       break;
+   ```
    Note: the `dataLocation` parameter carries the url value (reusing the existing parameter slot — `url` is semantically a data location).
 
-4. **`extractCedarActions`** — call the resource-level-aware overload:
+4. **`ResourceCombination`** — add `resourceLevel` field so it travels with each expanded ref. This is the mechanism for threading resource level into action mapping without adding a new parameter to `generateStatements`:
    ```java
-   Set<String> mapped = adapter.mapAccessTypeToCedarActions(access.getType(), resourceLevel);
+   static class ResourceCombination {
+       final CedarEntityRef entityRef;
+       final String resourceLevel;
+
+       ResourceCombination(CedarEntityRef entityRef, String resourceLevel) {
+           this.entityRef = entityRef;
+           this.resourceLevel = resourceLevel;
+       }
+   }
    ```
-   `resourceLevel` is already available in `convertSinglePolicy`; it must be threaded through to `generateStatements` and then to `extractCedarActions`.
+   All existing `new ResourceCombination(ref)` call sites must be updated to `new ResourceCombination(ref, resourceLevel)`, passing the level already computed at the call site.
+
+5. **`extractCedarActions`** — change signature to accept `resourceLevel`, call the resource-level-aware overload:
+   ```java
+   private Set<String> extractCedarActions(RangerPolicyItem item, SourcePolicyAdapter adapter, String resourceLevel) {
+       // ...
+       Set<String> mapped = adapter.mapAccessTypeToCedarActions(access.getType(), resourceLevel);
+       // ...
+   }
+   ```
+   `generateStatements` already receives `resourceCombinations`; update the inner loop to call `extractCedarActions(item, adapter, rc.resourceLevel)` per combination (since resource level can theoretically vary per combination, though in practice it is uniform for a given policy).
+
+6. **`buildResourcePath`** — add `url` key so gap messages for url-only policies show the resource path instead of `<no resources>`:
+   ```java
+   appendResourcePart(sb, resources, "url");
+   ```
 
 #### `ConversionServerMain.java`
 
@@ -211,6 +257,8 @@ No new gap types needed. `UNSUPPORTED_ACTION` already exists and fires if `mapAc
 
 - **`dataLocation` parameter reuse**: `buildEntityRefFromValues` already accepts a `dataLocation` parameter (unused by Hive). The url value is passed in that slot — semantically correct since a Spark URL is a data location.
 
-- **`promoteResourceLevel` unchanged**: `url` resources are standalone (not part of the db→table→column hierarchy) so promotion logic doesn't apply. Because `determineResourceLevel` returns `"url"` only when the `url` key is present (it is a standalone resource, not in the hierarchy), `promoteResourceLevel` will not match `"column"` or `"table"` for url policies and returns `"url"` unchanged.
+- **`promoteResourceLevel` unchanged**: `url` resources are standalone (not part of the db→table→column hierarchy) so promotion logic doesn't apply. `promoteResourceLevel` only acts on `"column"` and `"table"` resourceLevels; any other input (including `"url"`) is returned unchanged. This is already correct without modification.
 
 - **No Glue catalog expansion for url resources**: S3 paths are not registered in the Glue catalog. Wildcard expansion is impossible; wildcards are passed through with a `WILDCARD_PATTERN` gap.
+
+- **`create` maps to `CREATE_TABLE` only (no `CREATE_DATABASE`)**: The `amazon-emr-spark` service definition has a single `create` access type (no separate `create_database`). Mapping it to `CREATE_TABLE` is consistent with how `HiveServiceAdapter` handles the same access type. There is no `CREATE_DATABASE` mapping because the service definition does not define a database-create operation distinct from table-create.
