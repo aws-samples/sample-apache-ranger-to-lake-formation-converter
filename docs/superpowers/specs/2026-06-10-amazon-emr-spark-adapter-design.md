@@ -149,7 +149,9 @@ Six targeted changes:
    ```
    All existing `new ResourceCombination(ref)` call sites must be updated to `new ResourceCombination(ref, resourceLevel)`, passing the level already computed at the call site.
 
-5. **`extractCedarActions`** — change signature to accept `resourceLevel`, call the resource-level-aware overload:
+5. **`extractCedarActions`** and **`generateStatements`** — move action extraction inside the resource combination loop so each combination uses its own resource level. This requires two coordinated changes:
+
+   a. Change `extractCedarActions` signature to accept `resourceLevel` and call the resource-level-aware overload:
    ```java
    private Set<String> extractCedarActions(RangerPolicyItem item, SourcePolicyAdapter adapter, String resourceLevel) {
        // ...
@@ -157,7 +159,18 @@ Six targeted changes:
        // ...
    }
    ```
-   `generateStatements` already receives `resourceCombinations`; update the inner loop to call `extractCedarActions(item, adapter, rc.resourceLevel)` per combination (since resource level can theoretically vary per combination, though in practice it is uniform for a given policy).
+
+   b. In `generateStatements`, **remove** the pre-loop `extractCedarActions(item, adapter)` call and its `isEmpty()` early-return guard. Move action extraction **inside** the `for (ResourceCombination rc : resourceCombinations)` loop, binding the result to a local `cedarActions` variable used immediately in `for (String action : cedarActions)`:
+   ```java
+   for (ResourceCombination rc : resourceCombinations) {
+       Set<String> cedarActions = extractCedarActions(item, adapter, rc.resourceLevel);
+       if (cedarActions.isEmpty()) continue;
+       for (String action : cedarActions) {
+           // ... build statement ...
+       }
+   }
+   ```
+   This ensures url-resource combinations get `DATA_LOCATION_ACCESS` and catalog-resource combinations get the catalog actions — driven by the per-combination resource level, not a pre-computed single value.
 
 6. **`buildResourcePath`** — add `url` key so gap messages for url-only policies show the resource path instead of `<no resources>`:
    ```java
