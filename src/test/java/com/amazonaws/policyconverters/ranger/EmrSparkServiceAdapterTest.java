@@ -142,4 +142,36 @@ class EmrSparkServiceAdapterTest {
         adapter.mapAccessTypeToCedarActions("bogus_type");
         verify(emitter).recordUnmappedAccessType("bogus_type");
     }
+
+    // ---- mapAccessTypeToCedarActions (two-arg, url resource level) ----
+
+    @Test
+    void twoArg_urlLevel_select_mapsToDataLocationAccess() {
+        assertEquals(Set.of("DATA_LOCATION_ACCESS"),
+                adapter.mapAccessTypeToCedarActions("select", "url"));
+    }
+
+    @Test
+    void twoArg_urlLevel_read_mapsToDataLocationAccess() {
+        assertEquals(Set.of("DATA_LOCATION_ACCESS"),
+                adapter.mapAccessTypeToCedarActions("read", "url"));
+    }
+
+    @Test
+    void twoArg_urlLevel_write_mapsToDataLocationAccess() {
+        assertEquals(Set.of("DATA_LOCATION_ACCESS"),
+                adapter.mapAccessTypeToCedarActions("write", "url"));
+    }
+
+    @Test
+    void twoArg_tableLevel_select_mapsToCatalogSelect() {
+        assertEquals(Set.of("SELECT"),
+                adapter.mapAccessTypeToCedarActions("select", "table"));
+    }
+
+    @Test
+    void twoArg_databaseLevel_alter_mapsToAlter() {
+        assertEquals(Set.of("ALTER"),
+                adapter.mapAccessTypeToCedarActions("alter", "database"));
+    }
 }

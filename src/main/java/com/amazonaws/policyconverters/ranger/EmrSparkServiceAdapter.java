@@ -79,6 +79,14 @@ public class EmrSparkServiceAdapter implements SourcePolicyAdapter {
     }
 
     @Override
+    public Set<String> mapAccessTypeToCedarActions(String sourceAccessType, String resourceLevel) {
+        if ("url".equals(resourceLevel)) {
+            return mapUrlAccessType(sourceAccessType);
+        }
+        return mapAccessTypeToCedarActions(sourceAccessType);
+    }
+
+    @Override
     public CedarEntityRef buildEntityRef(RangerPolicy policy, String resourceLevel) {
         Map<String, RangerPolicyResource> resources = policy.getResources();
         if (resources == null || resources.isEmpty()) {

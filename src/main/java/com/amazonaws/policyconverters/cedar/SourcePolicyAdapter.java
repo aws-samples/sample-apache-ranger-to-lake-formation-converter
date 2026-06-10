@@ -28,6 +28,15 @@ public interface SourcePolicyAdapter {
     Set<String> mapAccessTypeToCedarActions(String sourceAccessType);
 
     /**
+     * Map a source access type to Cedar actions, with awareness of the resource level.
+     * The default delegates to the single-arg overload; adapters that vary behaviour
+     * by resource level (e.g., EMR Spark url vs catalog) override this method.
+     */
+    default Set<String> mapAccessTypeToCedarActions(String sourceAccessType, String resourceLevel) {
+        return mapAccessTypeToCedarActions(sourceAccessType);
+    }
+
+    /**
      * Build a Cedar entity identifier for the given resource.
      * Returns the entity type (e.g., "DataCatalog::Database") and
      * the identifier string (e.g., an ARN or URN).
