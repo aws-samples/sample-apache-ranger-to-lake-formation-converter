@@ -6,8 +6,10 @@ import com.amazonaws.policyconverters.cedar.CedarSchemaProvider;
 import com.amazonaws.policyconverters.cedar.CedarToLFConverter;
 import com.amazonaws.policyconverters.cedar.CedarToS3AccessGrantsConverter;
 import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
+import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
+import com.amazonaws.policyconverters.lakeformation.PassthroughPrincipalMapper;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
 import com.amazonaws.policyconverters.config.PrincipalMapperType;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
@@ -31,7 +33,6 @@ import software.amazon.awssdk.services.glue.GlueClient;
 import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -101,23 +102,32 @@ public class AssessmentRunner {
 
         CedarSchemaProvider schemaProvider = new CedarSchemaProvider();
 
-        // Build IdentitystoreClient only when needed
+        List<String> warnings = new ArrayList<>();
+        // Build PrincipalMapper — use passthrough when no mapping is configured
         IdentitystoreClient identityStoreClient = null;
-        com.amazonaws.policyconverters.config.PrincipalMappingConfig principalMappingConfig =
-                config.getPrincipalMapping();
-        if (principalMappingConfig != null
-                && principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
-            identityStoreClient = config.getAwsConfig().map(awsConfig -> {
-                software.amazon.awssdk.auth.credentials.AwsCredentialsProvider credentials =
-                        ConversionServerMain.buildCredentialsProvider(awsConfig);
-                return IdentitystoreClient.builder()
-                        .region(Region.of(principalMappingConfig.getIdcConfig().getRegion()))
-                        .credentialsProvider(credentials)
-                        .build();
-            }).orElse(null);
+        PrincipalMappingConfig principalMappingConfig = config.getPrincipalMapping();
+        PrincipalMapper principalMapper;
+        if (isDefaultEmptyMapping(principalMappingConfig)) {
+            principalMapper = new PassthroughPrincipalMapper();
+            String warning = "No principal mapping configured. Ranger usernames are passed through as-is "
+                    + "(e.g. \"ranger-user:alice\", \"ranger-group:analysts\"). Re-run with a config file "
+                    + "that includes a principalMapping section to produce accurate LF grant output.";
+            warnings.add(warning);
+            LOG.warn(warning);
+        } else {
+            if (principalMappingConfig != null
+                    && principalMappingConfig.getType() == PrincipalMapperType.IDENTITY_CENTER) {
+                identityStoreClient = config.getAwsConfig().map(awsConfig -> {
+                    software.amazon.awssdk.auth.credentials.AwsCredentialsProvider credentials =
+                            ConversionServerMain.buildCredentialsProvider(awsConfig);
+                    return IdentitystoreClient.builder()
+                            .region(Region.of(principalMappingConfig.getIdcConfig().getRegion()))
+                            .credentialsProvider(credentials)
+                            .build();
+                }).orElse(null);
+            }
+            principalMapper = PrincipalMapperFactory.create(principalMappingConfig, identityStoreClient, null);
         }
-        PrincipalMapper principalMapper = PrincipalMapperFactory.create(
-                principalMappingConfig, identityStoreClient, null);
         CatalogResolver catalogResolver = buildCatalogResolver(config);
 
         RangerToCedarConverter rangerConverter = new RangerToCedarConverter(
@@ -176,7 +186,7 @@ public class AssessmentRunner {
                 gapReport,
                 source.sourceLabel(),
                 assessedServices,
-                Collections.emptyList());
+                warnings);
     }
 
     /**
@@ -208,6 +218,15 @@ public class AssessmentRunner {
             LOG.info("Assessment: no AWS credentials provided, using PassthroughCatalogResolver");
             return new PassthroughCatalogResolver();
         });
+    }
+
+    private static boolean isDefaultEmptyMapping(PrincipalMappingConfig cfg) {
+        return cfg != null
+                && cfg.getType() == PrincipalMapperType.STATIC
+                && cfg.getUserMappings().isEmpty()
+                && cfg.getGroupMappings().isEmpty()
+                && cfg.getRoleMappings().isEmpty()
+                && cfg.getDelegates().isEmpty();
     }
 
     /**

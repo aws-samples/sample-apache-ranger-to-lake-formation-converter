@@ -226,4 +226,33 @@ class AssessmentRunnerTest {
         a.setIsAllowed(true);
         return a;
     }
+
+    @Test
+    void run_withDefaultEmptyMapping_usesPassthroughAndWarns() {
+        // Config with no principal mapping — builder default is empty STATIC
+        AssessmentConfig config = AssessmentConfig.builder().consoleOnly(true).build();
+
+        RangerPolicy policy = buildLakeFormationPolicy(99L, "db1", "table1");
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setAccesses(List.of(access("select")));
+        item.setUsers(List.of("alice"));  // unmapped — passthrough produces ranger-user:alice
+        policy.setPolicyItems(List.of(item));
+
+        PolicySource source = stubSource("lakeformation", "lakeformation", List.of(policy));
+        AssessmentResult result = new AssessmentRunner().run(config, source);
+
+        assertEquals(1, result.getWarnings().size(), "Expected exactly one passthrough warning");
+        assertTrue(result.getWarnings().get(0).contains("No principal mapping"),
+                "Warning must mention missing principal mapping");
+        assertEquals(1, result.getTotalPolicies());
+        assertTrue(result.getFullyConvertible() + result.getPartiallyConvertible() > 0,
+                "Passthrough must produce at least one convertible policy");
+    }
+
+    @Test
+    void run_withNonEmptyStaticMapping_noWarning() {
+        AssessmentResult result = new AssessmentRunner().run(minimalConfig(),
+                stubSource("lakeformation", "lakeformation", List.of()));
+        assertTrue(result.getWarnings().isEmpty(), "No warning expected when principal mapping is configured");
+    }
 }
