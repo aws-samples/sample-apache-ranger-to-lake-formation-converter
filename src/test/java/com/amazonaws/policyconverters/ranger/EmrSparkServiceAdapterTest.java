@@ -2,12 +2,15 @@ package com.amazonaws.policyconverters.ranger;
 
 import com.amazonaws.policyconverters.cedar.CedarEntityRef;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
+import com.amazonaws.policyconverters.reporting.MetricsEmitter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class EmrSparkServiceAdapterTest {
 
@@ -130,5 +133,13 @@ class EmrSparkServiceAdapterTest {
     void getAwsContext_returnsNonEmpty() {
         assertTrue(adapter.getAwsContext().isPresent());
         assertEquals("us-east-1", adapter.getAwsContext().get().getRegion());
+    }
+
+    @Test
+    void setMetricsEmitter_recordsUnmappedAccessType() {
+        MetricsEmitter emitter = mock(MetricsEmitter.class);
+        adapter.setMetricsEmitter(emitter);
+        adapter.mapAccessTypeToCedarActions("bogus_type");
+        verify(emitter).recordUnmappedAccessType("bogus_type");
     }
 }
