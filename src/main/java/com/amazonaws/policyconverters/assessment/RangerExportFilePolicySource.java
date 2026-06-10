@@ -22,7 +22,7 @@ public class RangerExportFilePolicySource implements PolicySource {
     private static final Logger LOG = LoggerFactory.getLogger(RangerExportFilePolicySource.class);
 
     private static final Set<String> KNOWN_SERVICE_TYPES = Set.of(
-            "lakeformation", "hive", "presto", "trino", "amazon-emr-emrfs");
+            "lakeformation", "hive", "presto", "trino", "amazon-emr-emrfs", "amazon-emr-spark");
 
     private final Path exportFile;
 
