@@ -214,6 +214,9 @@ public class RangerServiceAdapter implements SourcePolicyAdapter {
                 return new CedarEntityRef("DataCatalog::Column", buildColumnArn(database, table, column));
             case "datalocation":
                 return new CedarEntityRef("DataCatalog::DataLocation", buildDataLocationArn(dataLocation));
+            case "url":
+                return new CedarEntityRef("DataCatalog::DataLocation",
+                        dataLocation != null ? buildDataLocationArn(dataLocation) : "");
             default:
                 throw new IllegalArgumentException("Unknown resource level: " + resourceLevel);
         }

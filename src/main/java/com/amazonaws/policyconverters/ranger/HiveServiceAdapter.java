@@ -190,6 +190,9 @@ public class HiveServiceAdapter implements SourcePolicyAdapter {
                 return new CedarEntityRef("DataCatalog::Table", buildTableArn(database, table));
             case "column":
                 return new CedarEntityRef("DataCatalog::Column", buildColumnArn(database, table, column));
+            case "url":
+                return new CedarEntityRef("DataCatalog::DataLocation",
+                        dataLocation != null ? dataLocation.replaceFirst("^s3://", "arn:aws:s3:::") : "");
             default:
                 throw new IllegalArgumentException("Unknown resource level: " + resourceLevel);
         }
