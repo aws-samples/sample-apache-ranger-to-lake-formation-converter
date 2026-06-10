@@ -101,6 +101,12 @@ public class AssessmentReporter {
         Map<GapEntry.GapType, Integer> summary = result.getGapReport().getSummary();
         int totalGaps = summary.values().stream().mapToInt(Integer::intValue).sum();
 
+        // Warning banner — printed before the report header
+        for (String warning : result.getWarnings()) {
+            out.println("⚠  " + warning);
+            out.println();
+        }
+
         out.println();
         out.println("=== Apache Ranger → Lake Formation Assessment ===");
         if (result.getSource() != null) {

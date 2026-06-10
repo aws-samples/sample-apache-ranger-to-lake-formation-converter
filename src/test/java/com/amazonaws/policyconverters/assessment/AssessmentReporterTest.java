@@ -107,6 +107,34 @@ class AssessmentReporterTest {
         assertTrue(output.contains("skipped"), "Missing skipped status");
     }
 
+    @Test
+    void report_withWarnings_printsBannerBeforeHeader() {
+        AssessmentResult result = buildResult(5, 5, 0, 0, 10, List.of(), null, List.of(),
+                List.of("No principal mapping configured. Ranger usernames are passed through as-is."));
+        AssessmentConfig config = configConsoleOnly();
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        new AssessmentReporter().report(result, config, new PrintStream(baos));
+        String output = baos.toString();
+
+        int warningIdx = output.indexOf("⚠");
+        int headerIdx = output.indexOf("=== Apache Ranger");
+        assertTrue(warningIdx >= 0, "Warning banner (⚠) must appear in output");
+        assertTrue(warningIdx < headerIdx, "Warning banner must appear before the report header");
+    }
+
+    @Test
+    void report_withoutWarnings_noBannerInOutput() {
+        AssessmentResult result = buildResult(5, 5, 0, 0, 10, List.of(), null, List.of(), List.of());
+        AssessmentConfig config = configConsoleOnly();
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        new AssessmentReporter().report(result, config, new PrintStream(baos));
+        String output = baos.toString();
+
+        assertFalse(output.contains("⚠"), "No warning banner expected when warnings list is empty");
+    }
+
     // ---- helpers ----
 
     private AssessmentResult buildResult(int total, int fully, int partial, int notConv,
