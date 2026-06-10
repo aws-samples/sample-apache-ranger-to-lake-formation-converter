@@ -24,17 +24,17 @@ class PassthroughPrincipalMapperTest {
     }
 
     @Test
-    void resolveUser_neverReturnsEmpty() {
-        assertTrue(mapper.resolveUser("any-user").isPresent());
+    void resolveUser_nullInput_returnsEmpty() {
+        assertTrue(mapper.resolveUser(null).isEmpty());
     }
 
     @Test
-    void resolveGroup_neverReturnsEmpty() {
-        assertTrue(mapper.resolveGroup("any-group").isPresent());
+    void resolveGroup_nullInput_returnsEmpty() {
+        assertTrue(mapper.resolveGroup(null).isEmpty());
     }
 
     @Test
-    void resolveRole_neverReturnsEmpty() {
-        assertTrue(mapper.resolveRole("any-role").isPresent());
+    void resolveRole_nullInput_returnsEmpty() {
+        assertTrue(mapper.resolveRole(null).isEmpty());
     }
 }
