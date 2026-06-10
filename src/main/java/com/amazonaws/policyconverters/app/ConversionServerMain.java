@@ -10,12 +10,14 @@ import com.amazonaws.policyconverters.config.ServerConfigLoader;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
 import com.amazonaws.policyconverters.cedar.CedarToLFConverter;
 import com.amazonaws.policyconverters.model.SyncCycleResult;
+import com.amazonaws.policyconverters.ranger.EmrSparkServiceAdapter;
 import com.amazonaws.policyconverters.ranger.HiveServiceAdapter;
 import com.amazonaws.policyconverters.ranger.PrestoServiceAdapter;
 import com.amazonaws.policyconverters.ranger.TrinoServiceAdapter;
 import com.amazonaws.policyconverters.lakeformation.TagMetadataSyncer;
 import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
 import com.amazonaws.policyconverters.ranger.service.EmrfsRangerService;
+import com.amazonaws.policyconverters.ranger.service.EmrSparkRangerService;
 import com.amazonaws.policyconverters.ranger.service.HiveRangerService;
 import com.amazonaws.policyconverters.ranger.service.LakeFormationRangerService;
 import com.amazonaws.policyconverters.ranger.service.PrestoRangerService;
@@ -393,6 +395,8 @@ public class ConversionServerMain {
                 ((PrestoServiceAdapter) adapter).setMetricsEmitter(metricsEmitter);
             } else if (adapter instanceof TrinoServiceAdapter) {
                 ((TrinoServiceAdapter) adapter).setMetricsEmitter(metricsEmitter);
+            } else if (adapter instanceof EmrSparkServiceAdapter) {
+                ((EmrSparkServiceAdapter) adapter).setMetricsEmitter(metricsEmitter);
             }
         }
         AccessTypeMapper.setMetricsEmitter(metricsEmitter);
@@ -495,6 +499,8 @@ public class ConversionServerMain {
                 return new TrinoRangerService(instanceName, config.getGdcCatalogName());
             case "amazon-emr-emrfs":
                 return new EmrfsRangerService(instanceName);
+            case "amazon-emr-spark":
+                return new EmrSparkRangerService(instanceName);
             default:
                 throw new IllegalArgumentException("Unknown Ranger service type: " + serviceType);
         }

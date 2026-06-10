@@ -1,9 +1,11 @@
 package com.amazonaws.policyconverters.app;
 
 import com.amazonaws.policyconverters.config.AwsConfig;
+import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.config.ServerConfigLoader;
 import com.amazonaws.policyconverters.config.RangerConnectionConfig;
 import com.amazonaws.policyconverters.config.SyncConfig;
+import com.amazonaws.policyconverters.ranger.service.BaseRangerService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -163,5 +165,15 @@ class ConversionServerMainTest {
                 null, null, null);
         var provider = ConversionServerMain.buildCredentialsProvider(config);
         assertNotNull(provider);
+    }
+
+    @Test
+    void createRangerService_amazonEmrSpark_returnsEmrSparkRangerService() {
+        RangerServiceConfig config = new RangerServiceConfig(
+                "amazon-emr-spark", "spark-instance", null, null);
+        BaseRangerService service = ConversionServerMain.createRangerService(config);
+        assertNotNull(service);
+        assertEquals("amazon-emr-spark", service.getServiceType());
+        assertEquals("spark-instance", service.getServiceInstanceName());
     }
 }
