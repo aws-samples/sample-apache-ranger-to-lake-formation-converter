@@ -336,6 +336,7 @@ class RangerToCedarConverterTest {
 
     @Test
     void hive_columnAndTableWildcard_promotesToDatabaseLevel() {
+        // ALTER is valid on DataCatalog::Database in the Cedar schema; SELECT is not
         RangerPolicy policy = buildHivePolicyWithAccess("mydb", "*", "*", "alter");
         CedarPolicySet result = hiveConverter.convert(List.of(policy));
         String cedar = result.toCedarString();
