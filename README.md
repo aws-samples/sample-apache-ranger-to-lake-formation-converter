@@ -642,6 +642,30 @@ java -jar target/assessment-jar-with-dependencies.jar \
 
 When `--aws-region` is provided, the tool queries the Glue Data Catalog to expand wildcard resource patterns (e.g., `db_*`) into explicit names before counting projected grants. Without it, wildcards are reported as-is and counted as `WILDCARD_PATTERN` gaps if they cannot be resolved.
 
+#### Principal Mapping in Assessment Mode
+
+When you run `assess file` without a config file, the tool has no information about how
+Ranger usernames map to IAM ARNs. In this case it automatically uses a **passthrough mapper**
+that echoes Ranger names as placeholder identifiers:
+
+| Ranger principal | Placeholder in report |
+|---|---|
+| user `alice` | `ranger-user:alice` |
+| group `analysts` | `ranger-group:analysts` |
+| role `admin` | `ranger-role:admin` |
+
+This lets the tool measure structural convertibility (which policies have gaps) without
+requiring IAM configuration upfront. A warning banner is printed at the top of the report:
+
+```
+⚠  No principal mapping configured. Ranger usernames are passed through as-is
+   (e.g. "ranger-user:alice", "ranger-group:analysts"). Re-run with a config file
+   that includes a principalMapping section to produce accurate LF grant output.
+```
+
+Once you know which policies are convertible, add a `principalMapping` section to your
+config file and re-run with `assess server` to generate accurate LF grant output.
+
 ### Sample Console Output
 
 ```
@@ -678,6 +702,9 @@ Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
   "services": [
     { "name": "lf_prod", "serviceType": "lakeformation", "status": "assessed", "policiesScanned": 31 }
   ],
+  "warnings": [
+    "No principal mapping configured. Ranger usernames are passed through as-is ..."
+  ],
   "totalPolicies": 47,
   "fullyConvertible": 31,
   "partiallyConvertible": 10,
@@ -702,6 +729,8 @@ Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
   }
 }
 ```
+
+`warnings` is omitted when the list is empty (configured runs are unaffected).
 
 ### Convertibility Classification
 
