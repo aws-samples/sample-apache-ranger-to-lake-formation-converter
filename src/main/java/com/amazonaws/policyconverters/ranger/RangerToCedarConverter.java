@@ -8,6 +8,7 @@ import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapEntry.GapType;
 import com.amazonaws.policyconverters.reporting.GapReporter;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
+import com.amazonaws.policyconverters.ranger.EmrSparkServiceAdapter;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
 import com.cedarpolicy.model.exception.InternalException;
 import org.apache.ranger.plugin.model.RangerPolicy;
@@ -283,12 +284,6 @@ public class RangerToCedarConverter {
             return statements;
         }
 
-        // Extract Cedar actions
-        Set<String> cedarActions = extractCedarActions(item, adapter);
-        if (cedarActions.isEmpty()) {
-            return statements;
-        }
-
         // Check for custom conditions on this item
         if (item.getConditions() != null && !item.getConditions().isEmpty()) {
             // Gap already recorded at policy level; conditions are excluded from Cedar
@@ -297,6 +292,8 @@ public class RangerToCedarConverter {
         for (String principalArn : principalArns) {
             String principalRef = adapter.buildPrincipalRef(principalArn);
             for (ResourceCombination rc : resourceCombinations) {
+                Set<String> cedarActions = extractCedarActions(item, adapter, rc.resourceLevel);
+                if (cedarActions.isEmpty()) continue;
                 for (String action : cedarActions) {
                     StringBuilder sb = new StringBuilder();
 
@@ -335,14 +332,14 @@ public class RangerToCedarConverter {
         return statements;
     }
 
-    private Set<String> extractCedarActions(RangerPolicyItem item, SourcePolicyAdapter adapter) {
+    private Set<String> extractCedarActions(RangerPolicyItem item, SourcePolicyAdapter adapter, String resourceLevel) {
         if (item.getAccesses() == null || item.getAccesses().isEmpty()) {
             return Collections.emptySet();
         }
         java.util.LinkedHashSet<String> actions = new java.util.LinkedHashSet<>();
         for (RangerPolicyItemAccess access : item.getAccesses()) {
             if (access.getIsAllowed() == null || access.getIsAllowed()) {
-                Set<String> mapped = adapter.mapAccessTypeToCedarActions(access.getType());
+                Set<String> mapped = adapter.mapAccessTypeToCedarActions(access.getType(), resourceLevel);
                 actions.addAll(mapped);
             }
         }
@@ -377,6 +374,9 @@ public class RangerToCedarConverter {
     }
 
     private String determineResourceLevel(Map<String, RangerPolicyResource> resources) {
+        if (hasResource(resources, "url")) {
+            return "url";
+        }
         if (hasResource(resources, "datalocation")) {
             return "datalocation";
         }
@@ -437,7 +437,24 @@ public class RangerToCedarConverter {
             List<String> locations = getResourceValues(resources, "datalocation");
             for (String loc : locations) {
                 CedarEntityRef ref = buildEntityRef(adapter, "datalocation", null, null, null, loc);
-                combinations.add(new ResourceCombination(ref));
+                combinations.add(new ResourceCombination(ref, resourceLevel));
+            }
+            return combinations;
+        }
+
+        if ("url".equals(resourceLevel)) {
+            List<String> urls = getResourceValues(resources, "url");
+            for (String url : urls) {
+                if (isWildcard(url)) {
+                    gapReporter.recordGap(new GapEntry(
+                            policyId, null, GapType.WILDCARD_PATTERN,
+                            url,
+                            "URL pattern '" + url + "' cannot be expanded. ARN is a placeholder.",
+                            "Register specific S3 paths in Lake Formation as data locations."
+                    ));
+                }
+                CedarEntityRef ref = buildEntityRef(adapter, "url", null, null, null, url);
+                combinations.add(new ResourceCombination(ref, resourceLevel));
             }
             return combinations;
         }
@@ -452,7 +469,7 @@ public class RangerToCedarConverter {
         if ("database".equals(resourceLevel)) {
             for (String db : expandedDatabases) {
                 CedarEntityRef ref = buildEntityRef(adapter, "database", db, null, null, null);
-                combinations.add(new ResourceCombination(ref));
+                combinations.add(new ResourceCombination(ref, resourceLevel));
             }
             return combinations;
         }
@@ -464,7 +481,7 @@ public class RangerToCedarConverter {
                 List<String> expandedTables = expandTablePatterns(tablePatterns, db, policyId);
                 for (String table : expandedTables) {
                     CedarEntityRef ref = buildEntityRef(adapter, "table", db, table, null, null);
-                    combinations.add(new ResourceCombination(ref));
+                    combinations.add(new ResourceCombination(ref, resourceLevel));
                 }
             }
             return combinations;
@@ -478,7 +495,7 @@ public class RangerToCedarConverter {
                 List<String> expandedColumns = expandColumnPatterns(columnPatterns, db, table, policyId);
                 for (String col : expandedColumns) {
                     CedarEntityRef ref = buildEntityRef(adapter, "column", db, table, col, null);
-                    combinations.add(new ResourceCombination(ref));
+                    combinations.add(new ResourceCombination(ref, resourceLevel));
                 }
             }
         }
@@ -494,6 +511,10 @@ public class RangerToCedarConverter {
                                           String dataLocation) {
         if (adapter instanceof RangerServiceAdapter) {
             return ((RangerServiceAdapter) adapter).buildEntityRefFromValues(
+                    resourceLevel, database, table, column, dataLocation);
+        }
+        if (adapter instanceof EmrSparkServiceAdapter) {
+            return ((EmrSparkServiceAdapter) adapter).buildEntityRefFromValues(
                     resourceLevel, database, table, column, dataLocation);
         }
         if (adapter instanceof HiveServiceAdapter) {
@@ -519,6 +540,10 @@ public class RangerToCedarConverter {
             case "datalocation":
                 entityType = "DataCatalog::DataLocation";
                 entityId = dataLocation;
+                break;
+            case "url":
+                entityType = "DataCatalog::DataLocation";
+                entityId = dataLocation != null ? dataLocation.replaceFirst("^s3://", "arn:aws:s3:::") : "";
                 break;
             default:
                 throw new IllegalArgumentException("Unknown resource level: " + resourceLevel);
@@ -749,6 +774,7 @@ public class RangerToCedarConverter {
         appendResourcePart(sb, resources, "database");
         appendResourcePart(sb, resources, "table");
         appendResourcePart(sb, resources, "column");
+        appendResourcePart(sb, resources, "url");
         return sb.length() > 0 ? sb.toString() : "<no resources>";
     }
 
@@ -771,9 +797,11 @@ public class RangerToCedarConverter {
      */
     static class ResourceCombination {
         final CedarEntityRef entityRef;
+        final String resourceLevel;
 
-        ResourceCombination(CedarEntityRef entityRef) {
+        ResourceCombination(CedarEntityRef entityRef, String resourceLevel) {
             this.entityRef = entityRef;
+            this.resourceLevel = resourceLevel;
         }
     }
 }
