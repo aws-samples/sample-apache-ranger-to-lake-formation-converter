@@ -113,11 +113,18 @@ class AssessmentReporterTest {
     private AssessmentResult buildResult(int total, int fully, int partial, int notConv,
                                          int grants, List<GapEntry> entries,
                                          String source, List<AssessedService> services) {
+        return buildResult(total, fully, partial, notConv, grants, entries, source, services, List.of());
+    }
+
+    private AssessmentResult buildResult(int total, int fully, int partial, int notConv,
+                                         int grants, List<GapEntry> entries,
+                                         String source, List<AssessedService> services,
+                                         List<String> warnings) {
         GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
         String resolvedSource = source != null ? source : "ranger-admin:http://localhost:6080";
         List<AssessedService> resolvedServices = services != null ? services : List.of();
         return new AssessmentResult(total, fully, partial, notConv, grants, gapReport,
-                resolvedSource, resolvedServices);
+                resolvedSource, resolvedServices, warnings != null ? warnings : List.of());
     }
 
     private AssessmentConfig configConsoleOnly() {

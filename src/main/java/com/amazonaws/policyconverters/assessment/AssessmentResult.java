@@ -2,6 +2,7 @@ package com.amazonaws.policyconverters.assessment;
 
 import com.amazonaws.policyconverters.model.GapReport;
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Collections;
@@ -17,6 +18,7 @@ public class AssessmentResult {
     private final int notConvertible;
     private final int projectedGrantCount;
     private final GapReport gapReport;
+    private final List<String> warnings;
 
     @JsonCreator
     public AssessmentResult(
@@ -27,7 +29,8 @@ public class AssessmentResult {
             @JsonProperty("projectedGrantCount") int projectedGrantCount,
             @JsonProperty("gapReport") GapReport gapReport,
             @JsonProperty("source") String source,
-            @JsonProperty("services") List<AssessedService> services) {
+            @JsonProperty("services") List<AssessedService> services,
+            @JsonProperty("warnings") List<String> warnings) {
         this.totalPolicies = totalPolicies;
         this.fullyConvertible = fullyConvertible;
         this.partiallyConvertible = partiallyConvertible;
@@ -36,6 +39,7 @@ public class AssessmentResult {
         this.gapReport = gapReport;
         this.source = source;
         this.services = services != null ? Collections.unmodifiableList(services) : Collections.emptyList();
+        this.warnings = warnings != null ? Collections.unmodifiableList(warnings) : Collections.emptyList();
     }
 
     public String getSource()                    { return source; }
@@ -46,4 +50,7 @@ public class AssessmentResult {
     public int getNotConvertible()               { return notConvertible; }
     public int getProjectedGrantCount()          { return projectedGrantCount; }
     public GapReport getGapReport()              { return gapReport; }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    public List<String> getWarnings()            { return warnings; }
 }

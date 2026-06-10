@@ -31,6 +31,7 @@ import software.amazon.awssdk.services.glue.GlueClient;
 import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -174,7 +175,8 @@ public class AssessmentRunner {
                 ops.size(),
                 gapReport,
                 source.sourceLabel(),
-                assessedServices);
+                assessedServices,
+                Collections.emptyList());
     }
 
     /**
