@@ -373,6 +373,17 @@ class RangerToCedarConverterTest {
         assertFalse(cedar.contains("DataCatalog::Column"), "Must not produce column-level entity");
     }
 
+    @Test
+    void hive_partialWildcardTable_recordsWildcardPatternGap() {
+        // tbl_* can't be promoted away (table is not all-wildcard), so col=* → table level
+        // but tbl_* gets returned as-is by PassthroughCatalogResolver → WILDCARD_PATTERN gap
+        RangerPolicy policy = buildHivePolicy("mydb", "tbl_*", "*");
+        hiveConverter.convert(List.of(policy));
+        List<GapEntry> gaps = gapReporter.getReport().getEntries();
+        assertTrue(gaps.stream().anyMatch(g -> g.getGapType() == GapType.WILDCARD_PATTERN),
+                "Expected WILDCARD_PATTERN gap for unresolvable table pattern");
+    }
+
     // --- Hive policy builder helpers ---
 
     private RangerPolicy buildHivePolicy(String db, String table, String col) {

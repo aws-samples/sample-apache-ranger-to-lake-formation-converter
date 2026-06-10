@@ -461,7 +461,7 @@ public class RangerToCedarConverter {
 
         if ("table".equals(resourceLevel)) {
             for (String db : expandedDatabases) {
-                List<String> expandedTables = expandTablePatterns(tablePatterns, db);
+                List<String> expandedTables = expandTablePatterns(tablePatterns, db, policyId);
                 for (String table : expandedTables) {
                     CedarEntityRef ref = buildEntityRef(adapter, "table", db, table, null, null);
                     combinations.add(new ResourceCombination(ref));
@@ -473,9 +473,9 @@ public class RangerToCedarConverter {
         // column level
         List<String> columnPatterns = getResourceValues(resources, "column");
         for (String db : expandedDatabases) {
-            List<String> expandedTables = expandTablePatterns(tablePatterns, db);
+            List<String> expandedTables = expandTablePatterns(tablePatterns, db, policyId);
             for (String table : expandedTables) {
-                List<String> expandedColumns = expandColumnPatterns(columnPatterns, db, table);
+                List<String> expandedColumns = expandColumnPatterns(columnPatterns, db, table, policyId);
                 for (String col : expandedColumns) {
                     CedarEntityRef ref = buildEntityRef(adapter, "column", db, table, col, null);
                     combinations.add(new ResourceCombination(ref));
@@ -539,14 +539,25 @@ public class RangerToCedarConverter {
         return expanded;
     }
 
-    private List<String> expandTablePatterns(List<String> patterns, String database) {
+    private List<String> expandTablePatterns(List<String> patterns, String database, String policyId) {
         if (patterns == null || patterns.isEmpty()) {
             return Collections.emptyList();
         }
         List<String> expanded = new ArrayList<>();
         for (String pattern : patterns) {
             if (isWildcard(pattern)) {
-                expanded.addAll(catalogResolver.expandTables(database, pattern));
+                List<String> resolved = catalogResolver.expandTables(database, pattern);
+                expanded.addAll(resolved);
+                if (resolved.size() == 1 && resolved.get(0).equals(pattern)) {
+                    gapReporter.recordGap(new GapEntry(
+                            policyId, null, GapType.WILDCARD_PATTERN,
+                            database + "/" + pattern,
+                            "Table pattern '" + pattern + "' in database '" + database
+                                    + "' could not be expanded (no AWS credentials). "
+                                    + "The ARN produced is a placeholder.",
+                            "Re-run with AWS credentials configured to expand wildcard table patterns."
+                    ));
+                }
             } else {
                 expanded.add(pattern);
             }
@@ -554,14 +565,26 @@ public class RangerToCedarConverter {
         return expanded;
     }
 
-    private List<String> expandColumnPatterns(List<String> patterns, String database, String table) {
+    private List<String> expandColumnPatterns(List<String> patterns, String database,
+                                              String table, String policyId) {
         if (patterns == null || patterns.isEmpty()) {
             return Collections.emptyList();
         }
         List<String> expanded = new ArrayList<>();
         for (String pattern : patterns) {
             if (isWildcard(pattern)) {
-                expanded.addAll(catalogResolver.expandColumns(database, table, pattern));
+                List<String> resolved = catalogResolver.expandColumns(database, table, pattern);
+                expanded.addAll(resolved);
+                if (resolved.size() == 1 && resolved.get(0).equals(pattern)) {
+                    gapReporter.recordGap(new GapEntry(
+                            policyId, null, GapType.WILDCARD_PATTERN,
+                            database + "/" + table + "/" + pattern,
+                            "Column pattern '" + pattern + "' in " + database + "." + table
+                                    + " could not be expanded (no AWS credentials). "
+                                    + "The ARN produced is a placeholder.",
+                            "Re-run with AWS credentials configured to expand wildcard column patterns."
+                    ));
+                }
             } else {
                 expanded.add(pattern);
             }
