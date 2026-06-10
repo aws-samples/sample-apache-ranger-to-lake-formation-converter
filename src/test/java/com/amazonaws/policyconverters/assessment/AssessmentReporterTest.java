@@ -3,7 +3,6 @@ package com.amazonaws.policyconverters.assessment;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapEntry.GapType;
 import com.amazonaws.policyconverters.model.GapReport;
-import com.amazonaws.policyconverters.assessment.AssessedService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -124,7 +123,7 @@ class AssessmentReporterTest {
         String resolvedSource = source != null ? source : "ranger-admin:http://localhost:6080";
         List<AssessedService> resolvedServices = services != null ? services : List.of();
         return new AssessmentResult(total, fully, partial, notConv, grants, gapReport,
-                resolvedSource, resolvedServices, warnings != null ? warnings : List.of());
+                resolvedSource, resolvedServices, warnings);
     }
 
     private AssessmentConfig configConsoleOnly() {
