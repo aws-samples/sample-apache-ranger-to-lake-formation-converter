@@ -10,7 +10,10 @@ import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.reporting.GapReporter;
 import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
+import com.amazonaws.policyconverters.lakeformation.PassthroughPrincipalMapper;
 import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
+import com.amazonaws.policyconverters.ranger.HiveServiceAdapter;
+import com.amazonaws.policyconverters.ranger.PassthroughCatalogResolver;
 import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItem;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItemAccess;
@@ -40,6 +43,7 @@ import static org.mockito.Mockito.when;
 class RangerToCedarConverterTest {
 
     private RangerToCedarConverter converter;
+    private RangerToCedarConverter hiveConverter;
     private GapReporter gapReporter;
 
     @BeforeEach
@@ -59,6 +63,14 @@ class RangerToCedarConverterTest {
         CedarSchemaProvider schemaProvider = new CedarSchemaProvider();
 
         converter = new RangerToCedarConverter(registry, principalMapper, catalogResolver, gapReporter, schemaProvider);
+
+        AwsContext hiveCtx = new AwsContext("us-east-1", "123456789012", "123456789012");
+        HiveServiceAdapter hiveAdapter = new HiveServiceAdapter(hiveCtx);
+        Map<String, SourcePolicyAdapter> hiveRegistry = new HashMap<>();
+        hiveRegistry.put("hive", hiveAdapter);
+        PrincipalMapper passthroughMapper = new PassthroughPrincipalMapper();
+        hiveConverter = new RangerToCedarConverter(hiveRegistry, passthroughMapper,
+                new PassthroughCatalogResolver(), gapReporter, schemaProvider);
     }
 
     @Test
@@ -308,5 +320,125 @@ class RangerToCedarConverterTest {
             return Collections.singletonList(pattern);
         });
         return resolver;
+    }
+
+    // --- Hive wildcard promotion tests ---
+
+    @Test
+    void hive_columnWildcard_withLiteralTable_promotesToTableLevel() {
+        RangerPolicy policy = buildHivePolicy("mydb", "mytable", "*");
+        CedarPolicySet result = hiveConverter.convert(List.of(policy));
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::Table"), "Expected table-level entity");
+        assertFalse(cedar.contains("DataCatalog::Column"), "Must not produce column-level entity");
+        assertFalse(cedar.contains("column/mydb/mytable"), "Must not contain column-path ARN segment");
+    }
+
+    @Test
+    void hive_columnAndTableWildcard_promotesToDatabaseLevel() {
+        RangerPolicy policy = buildHivePolicyWithAccess("mydb", "*", "*", "alter");
+        CedarPolicySet result = hiveConverter.convert(List.of(policy));
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::Database"), "Expected database-level entity");
+        assertTrue(cedar.contains("arn:aws:glue:"), "Expected Glue ARN (not bare db name)");
+        assertFalse(cedar.contains("DataCatalog::Table"), "Must not produce table-level entity");
+        assertFalse(cedar.contains("DataCatalog::Column"), "Must not produce column-level entity");
+    }
+
+    @Test
+    void hive_tableWildcardOnly_promotesToDatabaseLevel() {
+        RangerPolicy policy = buildHivePolicyNoColumn("mydb", "*");
+        CedarPolicySet result = hiveConverter.convert(List.of(policy));
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::Database"), "Expected database-level entity");
+        assertTrue(cedar.contains("arn:aws:glue:"), "Expected Glue ARN (not bare db name)");
+    }
+
+    @Test
+    void hive_literalColumn_noPromotion() {
+        RangerPolicy policy = buildHivePolicy("mydb", "mytable", "mycol");
+        CedarPolicySet result = hiveConverter.convert(List.of(policy));
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::Column"), "Expected column-level entity");
+        assertTrue(cedar.contains("column/mydb/mytable/mycol"), "Expected full column ARN");
+    }
+
+    @Test
+    void hive_partialWildcardTable_noPromotionToDatabase_producesTableLevel() {
+        RangerPolicy policy = buildHivePolicy("mydb", "tbl_*", "*");
+        CedarPolicySet result = hiveConverter.convert(List.of(policy));
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::Table"), "Expected table-level entity after col=* promotion");
+        assertFalse(cedar.contains("DataCatalog::Column"), "Must not produce column-level entity");
+    }
+
+    // --- Hive policy builder helpers ---
+
+    private RangerPolicy buildHivePolicy(String db, String table, String col) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(999L);
+        policy.setName("test-hive-policy");
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", resource(db));
+        resources.put("table", resource(table));
+        resources.put("column", resource(col));
+        policy.setResources(resources);
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of("alice"));
+        RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+        access.setType("select");
+        access.setIsAllowed(true);
+        item.setAccesses(List.of(access));
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
+    private RangerPolicy buildHivePolicyNoColumn(String db, String table) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(998L);
+        policy.setName("test-hive-table-policy");
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", resource(db));
+        resources.put("table", resource(table));
+        policy.setResources(resources);
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of("alice"));
+        RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+        access.setType("alter");
+        access.setIsAllowed(true);
+        item.setAccesses(List.of(access));
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
+    private RangerPolicy buildHivePolicyWithAccess(String db, String table, String col, String accessType) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(997L);
+        policy.setName("test-hive-policy-access");
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", resource(db));
+        resources.put("table", resource(table));
+        resources.put("column", resource(col));
+        policy.setResources(resources);
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of("alice"));
+        RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+        access.setType(accessType);
+        access.setIsAllowed(true);
+        item.setAccesses(List.of(access));
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
+    private RangerPolicyResource resource(String value) {
+        RangerPolicyResource r = new RangerPolicyResource();
+        r.setValues(List.of(value));
+        return r;
     }
 }

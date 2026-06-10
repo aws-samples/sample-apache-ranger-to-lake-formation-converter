@@ -196,10 +196,11 @@ public class RangerToCedarConverter {
         }
 
         String resourceLevel = determineResourceLevel(resources);
+        resourceLevel = promoteResourceLevel(resourceLevel, resources);
 
         // Expand wildcards and build resource combinations
         List<ResourceCombination> resourceCombinations = expandResources(
-                resources, resourceLevel, adapter);
+                resources, resourceLevel, adapter, policyId);
 
         if (resourceCombinations.isEmpty()) {
             LOG.warn("Policy {} ({}) - no resources resolved after expansion", policyId, policyName);
@@ -393,13 +394,42 @@ public class RangerToCedarConverter {
         return res != null && res.getValues() != null && !res.getValues().isEmpty();
     }
 
+    private boolean isAllWildcard(List<String> values) {
+        if (values == null || values.isEmpty()) return false;
+        for (String v : values) {
+            if (v == null || !v.matches("[*?]+")) return false;
+        }
+        return true;
+    }
+
+    private String promoteResourceLevel(String resourceLevel,
+                                        Map<String, RangerPolicyResource> resources) {
+        if ("column".equals(resourceLevel)) {
+            List<String> colValues = getResourceValues(resources, "column");
+            if (isAllWildcard(colValues)) {
+                List<String> tableValues = getResourceValues(resources, "table");
+                if (isAllWildcard(tableValues)) {
+                    return "database";
+                }
+                return "table";
+            }
+        } else if ("table".equals(resourceLevel)) {
+            List<String> tableValues = getResourceValues(resources, "table");
+            if (isAllWildcard(tableValues)) {
+                return "database";
+            }
+        }
+        return resourceLevel;
+    }
+
     /**
      * Expand wildcard patterns in resources and produce all concrete resource combinations.
      */
     private List<ResourceCombination> expandResources(
             Map<String, RangerPolicyResource> resources,
             String resourceLevel,
-            SourcePolicyAdapter adapter) {
+            SourcePolicyAdapter adapter,
+            String policyId) {
 
         List<ResourceCombination> combinations = new ArrayList<>();
 
@@ -464,6 +494,10 @@ public class RangerToCedarConverter {
                                           String dataLocation) {
         if (adapter instanceof RangerServiceAdapter) {
             return ((RangerServiceAdapter) adapter).buildEntityRefFromValues(
+                    resourceLevel, database, table, column, dataLocation);
+        }
+        if (adapter instanceof HiveServiceAdapter) {
+            return ((HiveServiceAdapter) adapter).buildEntityRefFromValues(
                     resourceLevel, database, table, column, dataLocation);
         }
         // Fallback: construct a simple entity ref
