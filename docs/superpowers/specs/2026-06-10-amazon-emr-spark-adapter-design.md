@@ -113,7 +113,7 @@ Six targeted changes:
                ));
            }
            CedarEntityRef ref = buildEntityRef(adapter, "url", null, null, null, url);
-           combinations.add(new ResourceCombination(ref));
+           combinations.add(new ResourceCombination(ref, resourceLevel));
        }
        return combinations;
    }
