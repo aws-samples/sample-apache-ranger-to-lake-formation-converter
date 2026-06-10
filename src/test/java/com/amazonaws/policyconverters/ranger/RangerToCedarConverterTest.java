@@ -12,6 +12,7 @@ import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
 import com.amazonaws.policyconverters.lakeformation.PassthroughPrincipalMapper;
 import com.amazonaws.policyconverters.lakeformation.StaticPrincipalMapper;
+import com.amazonaws.policyconverters.ranger.EmrSparkServiceAdapter;
 import com.amazonaws.policyconverters.ranger.HiveServiceAdapter;
 import com.amazonaws.policyconverters.ranger.PassthroughCatalogResolver;
 import org.apache.ranger.plugin.model.RangerPolicy;
@@ -44,6 +45,7 @@ class RangerToCedarConverterTest {
 
     private RangerToCedarConverter converter;
     private RangerToCedarConverter hiveConverter;
+    private RangerToCedarConverter emrSparkConverter;
     private GapReporter gapReporter;
 
     @BeforeEach
@@ -70,6 +72,13 @@ class RangerToCedarConverterTest {
         hiveRegistry.put("hive", hiveAdapter);
         PrincipalMapper passthroughMapper = new PassthroughPrincipalMapper();
         hiveConverter = new RangerToCedarConverter(hiveRegistry, passthroughMapper,
+                new PassthroughCatalogResolver(), gapReporter, schemaProvider);
+
+        AwsContext emrCtx = new AwsContext("us-east-1", "123456789012", "123456789012");
+        EmrSparkServiceAdapter emrSparkAdapter = new EmrSparkServiceAdapter(emrCtx);
+        Map<String, SourcePolicyAdapter> emrRegistry = new HashMap<>();
+        emrRegistry.put("amazon-emr-spark", emrSparkAdapter);
+        emrSparkConverter = new RangerToCedarConverter(emrRegistry, new PassthroughPrincipalMapper(),
                 new PassthroughCatalogResolver(), gapReporter, schemaProvider);
     }
 
@@ -463,5 +472,132 @@ class RangerToCedarConverterTest {
         RangerPolicyResource r = new RangerPolicyResource();
         r.setValues(List.of(value));
         return r;
+    }
+
+    // ---- EMR Spark catalog policies ----
+
+    @Test
+    void emrSpark_tablePolicy_producesDataCatalogTableStatement() {
+        RangerPolicy policy = buildEmrSparkTablePolicy("mydb", "mytable", "select");
+
+        CedarPolicySet result = emrSparkConverter.convert(Collections.singletonList(policy));
+
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::Table::"), "Must reference DataCatalog::Table entity");
+        assertTrue(cedar.contains("arn:aws:glue:us-east-1:123456789012:table/mydb/mytable"),
+                "Must contain Glue table ARN");
+        assertTrue(cedar.contains("\"SELECT\""), "Must contain SELECT action");
+        assertTrue(cedar.contains("permit("), "Must be a permit statement");
+    }
+
+    @Test
+    void emrSpark_columnWildcard_promotesToTableLevel() {
+        RangerPolicy policy = buildEmrSparkPolicy("mydb", "mytable", "*", "select");
+
+        CedarPolicySet result = emrSparkConverter.convert(Collections.singletonList(policy));
+
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::Table::"),
+                "col=* should promote to table-level grant");
+        assertFalse(cedar.contains("DataCatalog::Column::"),
+                "Should not produce column-level grant when col=*");
+    }
+
+    // ---- EMR Spark url policies ----
+
+    @Test
+    void emrSpark_urlPolicy_producesDataLocationStatement() {
+        RangerPolicy policy = buildEmrSparkUrlPolicy("s3://my-bucket/data/", "read");
+
+        CedarPolicySet result = emrSparkConverter.convert(Collections.singletonList(policy));
+
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::DataLocation::"),
+                "URL policy must reference DataCatalog::DataLocation entity");
+        assertTrue(cedar.contains("arn:aws:s3:::my-bucket/data/"),
+                "Must contain S3 ARN with s3:// stripped");
+        assertTrue(cedar.contains("\"DATA_LOCATION_ACCESS\""),
+                "URL policy must use DATA_LOCATION_ACCESS action");
+    }
+
+    @Test
+    void emrSpark_wildcardUrl_recordsWildcardPatternGap() {
+        GapReporter freshGapReporter = new GapReporter();
+        CedarSchemaProvider freshSchemaProvider = new CedarSchemaProvider();
+        Map<String, SourcePolicyAdapter> emrRegistry = new HashMap<>();
+        emrRegistry.put("amazon-emr-spark",
+                new EmrSparkServiceAdapter(new AwsContext("us-east-1", "123456789012", "123456789012")));
+        RangerToCedarConverter freshConverter = new RangerToCedarConverter(
+                emrRegistry, new PassthroughPrincipalMapper(),
+                new PassthroughCatalogResolver(), freshGapReporter, freshSchemaProvider);
+
+        RangerPolicy policy = buildEmrSparkUrlPolicy("s3://bucket/*", "read");
+        freshConverter.convert(Collections.singletonList(policy));
+
+        boolean hasWildcardGap = freshGapReporter.getReport().getEntries().stream()
+                .anyMatch(e -> e.getGapType() == GapType.WILDCARD_PATTERN);
+        assertTrue(hasWildcardGap, "Wildcard URL should record WILDCARD_PATTERN gap");
+    }
+
+    private RangerPolicy buildEmrSparkPolicy(String db, String table, String col, String accessType) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(1001L);
+        policy.setName("test-emr-spark-policy");
+        policy.setService("amazon-emr-spark");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", resource(db));
+        resources.put("table", resource(table));
+        resources.put("column", resource(col));
+        policy.setResources(resources);
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of("alice"));
+        RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+        access.setType(accessType);
+        access.setIsAllowed(true);
+        item.setAccesses(List.of(access));
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
+    private RangerPolicy buildEmrSparkTablePolicy(String db, String table, String accessType) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(1002L);
+        policy.setName("test-emr-spark-table-policy");
+        policy.setService("amazon-emr-spark");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", resource(db));
+        resources.put("table", resource(table));
+        policy.setResources(resources);
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of("alice"));
+        RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+        access.setType(accessType);
+        access.setIsAllowed(true);
+        item.setAccesses(List.of(access));
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
+    private RangerPolicy buildEmrSparkUrlPolicy(String url, String accessType) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(1003L);
+        policy.setName("test-emr-spark-url-policy");
+        policy.setService("amazon-emr-spark");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource urlRes = new RangerPolicyResource();
+        urlRes.setValues(List.of(url));
+        resources.put("url", urlRes);
+        policy.setResources(resources);
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of("alice"));
+        RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+        access.setType(accessType);
+        access.setIsAllowed(true);
+        item.setAccesses(List.of(access));
+        policy.setPolicyItems(List.of(item));
+        return policy;
     }
 }
