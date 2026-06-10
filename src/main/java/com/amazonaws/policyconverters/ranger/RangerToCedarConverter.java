@@ -553,7 +553,7 @@ public class RangerToCedarConverter {
                             policyId, null, GapType.WILDCARD_PATTERN,
                             database + "/" + pattern,
                             "Table pattern '" + pattern + "' in database '" + database
-                                    + "' could not be expanded (no AWS credentials). "
+                                    + "' could not be expanded (no Glue catalog access). "
                                     + "The ARN produced is a placeholder.",
                             "Re-run with AWS credentials configured to expand wildcard table patterns."
                     ));
@@ -580,7 +580,7 @@ public class RangerToCedarConverter {
                             policyId, null, GapType.WILDCARD_PATTERN,
                             database + "/" + table + "/" + pattern,
                             "Column pattern '" + pattern + "' in " + database + "." + table
-                                    + " could not be expanded (no AWS credentials). "
+                                    + " could not be expanded (no Glue catalog access). "
                                     + "The ARN produced is a placeholder.",
                             "Re-run with AWS credentials configured to expand wildcard column patterns."
                     ));

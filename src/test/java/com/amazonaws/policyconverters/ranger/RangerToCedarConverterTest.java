@@ -384,6 +384,17 @@ class RangerToCedarConverterTest {
                 "Expected WILDCARD_PATTERN gap for unresolvable table pattern");
     }
 
+    @Test
+    void hive_partialWildcardColumn_recordsWildcardPatternGap() {
+        // col_* is a partial wildcard — not promoted away, reaches expandColumnPatterns
+        // PassthroughCatalogResolver returns it unchanged → WILDCARD_PATTERN gap
+        RangerPolicy policy = buildHivePolicy("mydb", "mytable", "col_*");
+        hiveConverter.convert(List.of(policy));
+        List<GapEntry> gaps = gapReporter.getReport().getEntries();
+        assertTrue(gaps.stream().anyMatch(g -> g.getGapType() == GapType.WILDCARD_PATTERN),
+                "Expected WILDCARD_PATTERN gap for unresolvable column pattern");
+    }
+
     // --- Hive policy builder helpers ---
 
     private RangerPolicy buildHivePolicy(String db, String table, String col) {
