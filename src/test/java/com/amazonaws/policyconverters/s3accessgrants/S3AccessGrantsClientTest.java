@@ -80,7 +80,7 @@ class S3AccessGrantsClientTest {
 
         S3AccessGrantOperation op = new S3AccessGrantOperation(
                 OperationType.GRANT, PRINCIPAL_ARN, GRANT_PREFIX,
-                S3AccessGrantPermission.READ, null);
+                S3AccessGrantPermission.READ, null, null);
 
         String grantId = client.createGrant(op);
 
@@ -102,7 +102,7 @@ class S3AccessGrantsClientTest {
 
         S3AccessGrantOperation op = new S3AccessGrantOperation(
                 OperationType.GRANT, PRINCIPAL_ARN, GRANT_PREFIX,
-                S3AccessGrantPermission.READ, null);
+                S3AccessGrantPermission.READ, null, null);
 
         client.createGrant(op);
 
@@ -124,7 +124,7 @@ class S3AccessGrantsClientTest {
 
         S3AccessGrantOperation op = new S3AccessGrantOperation(
                 OperationType.GRANT, PRINCIPAL_ARN, UNREGISTERED_PREFIX,
-                S3AccessGrantPermission.READ, null);
+                S3AccessGrantPermission.READ, null, null);
 
         String grantId = client.createGrant(op);
 
@@ -138,7 +138,7 @@ class S3AccessGrantsClientTest {
 
         S3AccessGrantOperation op = new S3AccessGrantOperation(
                 OperationType.GRANT, PRINCIPAL_ARN, UNREGISTERED_PREFIX,
-                S3AccessGrantPermission.READ, null);
+                S3AccessGrantPermission.READ, null, null);
 
         client.createGrant(op);
 
@@ -208,7 +208,7 @@ class S3AccessGrantsClientTest {
 
         S3AccessGrantOperation revokeOp = new S3AccessGrantOperation(
                 OperationType.REVOKE, PRINCIPAL_ARN, GRANT_PREFIX,
-                S3AccessGrantPermission.READ, null);
+                S3AccessGrantPermission.READ, null, null);
 
         S3AccessGrantsClient.BatchResult result = client.applyBatch(
                 List.of(revokeOp), 0, 100L);

@@ -46,9 +46,11 @@ public class CedarToS3AccessGrantsConverter {
     private static final Pattern PRINCIPAL_PATTERN = Pattern.compile(
             "principal\\s*==\\s*DataCatalog::Principal::\"([^\"]+)\"");
     private static final Pattern ACTION_PATTERN = Pattern.compile(
-            "action\\s*==\\s*DataCatalog::Action::\"([^\"]+)\"");
+            "action\\s*==\\s*\\w+::Action::\"([^\"]+)\"");
     private static final Pattern RESOURCE_PATTERN = Pattern.compile(
             "resource\\s*==\\s*([\\w:]+)::\"([^\"]+)\"");
+    private static final Pattern SOURCE_PATTERN = Pattern.compile(
+            "@source\\(\"([^\"]+)\"\\)");
 
     private static final Set<String> S3_READ_ACTIONS;
     private static final Set<String> S3_WRITE_ACTIONS;
@@ -106,7 +108,7 @@ public class CedarToS3AccessGrantsConverter {
 
         for (ParsedStatement stmt : statements) {
             String key = stmt.principal + "\0" + stmt.s3Prefix;
-            keyToInfo.putIfAbsent(key, new PrincipalAndPrefix(stmt.principal, stmt.s3Prefix));
+            keyToInfo.putIfAbsent(key, new PrincipalAndPrefix(stmt.principal, stmt.s3Prefix, stmt.sourcePolicyId));
             if ("permit".equals(stmt.effect)) {
                 permitActions.computeIfAbsent(key, k -> new HashSet<>()).add(stmt.action);
             } else if ("forbid".equals(stmt.effect)) {
@@ -148,7 +150,8 @@ public class CedarToS3AccessGrantsConverter {
                     info.principal,
                     info.s3Prefix,
                     permission,
-                    null
+                    null,
+                    info.sourcePolicyId
             ));
         }
 
@@ -295,36 +298,45 @@ public class CedarToS3AccessGrantsConverter {
             return null;
         }
 
-        return new ParsedStatement(effect, principal, action, s3Prefix);
+        // Extract source policy ID from @source annotation
+        Matcher sourceMatcher = SOURCE_PATTERN.matcher(raw);
+        String sourcePolicyId = sourceMatcher.find() ? sourceMatcher.group(1) : null;
+
+        return new ParsedStatement(effect, principal, action, s3Prefix, sourcePolicyId);
     }
 
     /**
      * Minimal parsed Cedar statement holding only the fields needed for S3 Access Grants.
      */
     private static final class ParsedStatement {
-        final String effect;    // "permit" or "forbid"
-        final String principal; // IAM ARN
-        final String action;    // e.g., "s3:GetObject"
-        final String s3Prefix;  // e.g., "s3://my-bucket/my-prefix"
+        final String effect;          // "permit" or "forbid"
+        final String principal;       // IAM ARN
+        final String action;          // e.g., "s3:GetObject"
+        final String s3Prefix;        // e.g., "s3://my-bucket/my-prefix"
+        final String sourcePolicyId;  // from @source annotation, e.g., "amazon-emr-emrfs:42"
 
-        ParsedStatement(String effect, String principal, String action, String s3Prefix) {
+        ParsedStatement(String effect, String principal, String action, String s3Prefix,
+                        String sourcePolicyId) {
             this.effect = effect;
             this.principal = principal;
             this.action = action;
             this.s3Prefix = s3Prefix;
+            this.sourcePolicyId = sourcePolicyId;
         }
     }
 
     /**
-     * Holds the (principal, s3Prefix) pair reconstructed from a map key.
+     * Holds the (principal, s3Prefix, sourcePolicyId) triple reconstructed from a map key.
      */
     private static final class PrincipalAndPrefix {
         final String principal;
         final String s3Prefix;
+        final String sourcePolicyId;
 
-        PrincipalAndPrefix(String principal, String s3Prefix) {
+        PrincipalAndPrefix(String principal, String s3Prefix, String sourcePolicyId) {
             this.principal = principal;
             this.s3Prefix = s3Prefix;
+            this.sourcePolicyId = sourcePolicyId;
         }
     }
 }

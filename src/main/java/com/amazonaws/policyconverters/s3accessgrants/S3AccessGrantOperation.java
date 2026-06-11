@@ -15,7 +15,9 @@ public record S3AccessGrantOperation(
     @JsonProperty("s3Prefix") String s3Prefix,
     @JsonProperty("permission") S3AccessGrantPermission permission,
     /** Null when produced by the converter; populated from listGrants() live state. */
-    @JsonProperty("grantId") String grantId
+    @JsonProperty("grantId") String grantId,
+    /** Null when read from listGrants(); populated by the converter (format: "serviceType:policyId"). */
+    @JsonProperty("sourcePolicyId") String sourcePolicyId
 ) {
     @JsonCreator
     public S3AccessGrantOperation {}

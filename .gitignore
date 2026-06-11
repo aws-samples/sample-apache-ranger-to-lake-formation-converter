@@ -8,3 +8,4 @@ integration-test/docker/.env
 deploy/.env
 deploy/server-config-deploy.yaml
 .worktrees/
+Ranger_Policies_*

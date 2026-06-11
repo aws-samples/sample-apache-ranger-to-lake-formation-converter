@@ -30,7 +30,7 @@
 
     <property>
         <name>ranger.plugin.lakeformation.policy.rest.url</name>
-        <value>http://ranger-admin:6080</value>
+        <value>http://localhost:6080</value>
         <description>
             Comma-separated list of Ranger Admin REST endpoint URLs.
             Example: http://ranger-admin-1:6080,http://ranger-admin-2:6080

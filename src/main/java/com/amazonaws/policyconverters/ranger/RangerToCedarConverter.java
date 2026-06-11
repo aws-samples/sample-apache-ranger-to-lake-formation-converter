@@ -321,9 +321,10 @@ public class RangerToCedarConverter {
 
                     // Effect and scope
                     sb.append(effect).append("(\n");
+                    String actionNamespace = action.startsWith("s3:") ? "S3" : "DataCatalog";
                     sb.append("    principal == DataCatalog::Principal::\"")
                             .append(principalRef).append("\",\n");
-                    sb.append("    action == DataCatalog::Action::\"")
+                    sb.append("    action == ").append(actionNamespace).append("::Action::\"")
                             .append(action).append("\",\n");
                     sb.append("    resource == ").append(rc.entityRef.getEntityType())
                             .append("::\"").append(rc.entityRef.getEntityId()).append("\"\n");
@@ -406,6 +407,9 @@ public class RangerToCedarConverter {
     }
 
     private String determineResourceLevel(Map<String, RangerPolicyResource> resources) {
+        if (hasResource(resources, "sthreeresource")) {
+            return "sthreeresource";
+        }
         if (hasResource(resources, "url")) {
             return "url";
         }
@@ -465,6 +469,25 @@ public class RangerToCedarConverter {
 
         List<ResourceCombination> combinations = new ArrayList<>();
 
+        if ("sthreeresource".equals(resourceLevel)) {
+            if (!(adapter instanceof EmrfsServiceAdapter)) {
+                LOG.error("Resource level 'sthreeresource' encountered with non-EMRFS adapter '{}' "
+                        + "in policy {} — no Cedar statements will be produced.",
+                        adapter.getClass().getSimpleName(), policyId);
+                return combinations;
+            }
+            EmrfsServiceAdapter emrfsAdapter = (EmrfsServiceAdapter) adapter;
+            RangerPolicyResource s3Resource = resources.get("sthreeresource");
+            List<String> values = s3Resource != null ? s3Resource.getValues() : Collections.emptyList();
+            boolean isRecursive = s3Resource != null && Boolean.TRUE.equals(s3Resource.getIsRecursive());
+            List<CedarEntityRef> refs = emrfsAdapter.buildEntityRefFromValues(
+                    "sthreeresource", values, isRecursive);
+            for (CedarEntityRef ref : refs) {
+                combinations.add(new ResourceCombination(ref, resourceLevel));
+            }
+            return combinations;
+        }
+
         if ("datalocation".equals(resourceLevel)) {
             List<String> locations = getResourceValues(resources, "datalocation");
             for (String loc : locations) {
@@ -473,7 +496,7 @@ public class RangerToCedarConverter {
                     continue;
                 }
                 CedarEntityRef ref = buildEntityRef(adapter, "datalocation", null, null, null, normalized.get());
-                combinations.add(new ResourceCombination(ref, resourceLevel));
+                if (ref != null) combinations.add(new ResourceCombination(ref, resourceLevel));
             }
             return combinations;
         }
@@ -507,7 +530,7 @@ public class RangerToCedarConverter {
                     continue;
                 }
                 CedarEntityRef ref = buildEntityRef(adapter, "url", null, null, null, normalized.get());
-                combinations.add(new ResourceCombination(ref, resourceLevel));
+                if (ref != null) combinations.add(new ResourceCombination(ref, resourceLevel));
             }
             return combinations;
         }
@@ -522,7 +545,7 @@ public class RangerToCedarConverter {
         if ("database".equals(resourceLevel)) {
             for (String db : expandedDatabases) {
                 CedarEntityRef ref = buildEntityRef(adapter, "database", db, null, null, null);
-                combinations.add(new ResourceCombination(ref, resourceLevel));
+                if (ref != null) combinations.add(new ResourceCombination(ref, resourceLevel));
             }
             return combinations;
         }
@@ -534,7 +557,7 @@ public class RangerToCedarConverter {
                 List<String> expandedTables = expandTablePatterns(tablePatterns, db, policyId);
                 for (String table : expandedTables) {
                     CedarEntityRef ref = buildEntityRef(adapter, "table", db, table, null, null);
-                    combinations.add(new ResourceCombination(ref, resourceLevel));
+                    if (ref != null) combinations.add(new ResourceCombination(ref, resourceLevel));
                 }
             }
             return combinations;
@@ -548,7 +571,7 @@ public class RangerToCedarConverter {
                 List<String> expandedColumns = expandColumnPatterns(columnPatterns, db, table, policyId);
                 for (String col : expandedColumns) {
                     CedarEntityRef ref = buildEntityRef(adapter, "column", db, table, col, null);
-                    combinations.add(new ResourceCombination(ref, resourceLevel));
+                    if (ref != null) combinations.add(new ResourceCombination(ref, resourceLevel));
                 }
             }
         }
@@ -574,34 +597,20 @@ public class RangerToCedarConverter {
             return ((HiveServiceAdapter) adapter).buildEntityRefFromValues(
                     resourceLevel, database, table, column, dataLocation);
         }
-        // Fallback: construct a simple entity ref
-        String entityType;
-        String entityId;
-        switch (resourceLevel) {
-            case "database":
-                entityType = "DataCatalog::Database";
-                entityId = database;
-                break;
-            case "table":
-                entityType = "DataCatalog::Table";
-                entityId = database + "/" + table;
-                break;
-            case "column":
-                entityType = "DataCatalog::Column";
-                entityId = database + "/" + table + "/" + column;
-                break;
-            case "datalocation":
-                entityType = "DataCatalog::DataLocation";
-                entityId = dataLocation;
-                break;
-            case "url":
-                entityType = "DataCatalog::DataLocation";
-                entityId = dataLocation != null ? dataLocation.replaceFirst("^s3://", "arn:aws:s3:::") : "";
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown resource level: " + resourceLevel);
+        if (adapter instanceof PrestoServiceAdapter) {
+            return ((PrestoServiceAdapter) adapter).buildEntityRefFromValues(
+                    resourceLevel, database, table, column, dataLocation);
         }
-        return new CedarEntityRef(entityType, entityId);
+        if (adapter instanceof TrinoServiceAdapter) {
+            return ((TrinoServiceAdapter) adapter).buildEntityRefFromValues(
+                    resourceLevel, database, table, column, dataLocation);
+        }
+        // No instanceof matched — a new adapter was added without a corresponding case here.
+        LOG.error("No buildEntityRef case for adapter type '{}' at resource level '{}' — "
+                + "this policy will produce no Cedar statements. Add an instanceof case to "
+                + "RangerToCedarConverter.buildEntityRef().",
+                adapter.getClass().getSimpleName(), resourceLevel);
+        return null;
     }
 
     private List<String> expandPatterns(List<String> patterns) {

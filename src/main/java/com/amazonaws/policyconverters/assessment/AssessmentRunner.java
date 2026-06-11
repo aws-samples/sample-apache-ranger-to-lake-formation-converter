@@ -175,7 +175,7 @@ public class AssessmentRunner {
         }
 
         GapReport gapReport = gapReporter.getReport();
-        int[] counts = computeConvertibilityCounts(allPolicies, ops, gapReport);
+        int[] counts = computeConvertibilityCounts(allPolicies, ops, s3AgOps, gapReport);
 
         return new AssessmentResult(
                 allPolicies.size(),
@@ -238,6 +238,7 @@ public class AssessmentRunner {
     private int[] computeConvertibilityCounts(
             List<RangerPolicy> allPolicies,
             List<LFPermissionOperation> ops,
+            List<S3AccessGrantOperation> s3AgOps,
             GapReport gapReport) {
 
         // Build set of policy IDs that appear in gap entries
@@ -253,6 +254,16 @@ public class AssessmentRunner {
         Set<String> policiesWithOps = new HashSet<>();
         for (LFPermissionOperation op : ops) {
             String sourcePolicyId = op.getSourcePolicyId();
+            if (sourcePolicyId != null) {
+                int colonIdx = sourcePolicyId.indexOf(':');
+                String policyId = colonIdx >= 0
+                        ? sourcePolicyId.substring(colonIdx + 1)
+                        : sourcePolicyId;
+                policiesWithOps.add(policyId);
+            }
+        }
+        for (S3AccessGrantOperation op : s3AgOps) {
+            String sourcePolicyId = op.sourcePolicyId();
             if (sourcePolicyId != null) {
                 int colonIdx = sourcePolicyId.indexOf(':');
                 String policyId = colonIdx >= 0

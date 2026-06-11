@@ -104,7 +104,7 @@ class AssessmentRunnerTest {
 
         S3AccessGrantOperation emrfsOp = new S3AccessGrantOperation(
                 OperationType.GRANT, "arn:aws:iam::123456789012:user/alice",
-                "s3://other-bucket/data/", S3AccessGrantPermission.READ, null);
+                "s3://other-bucket/data/", S3AccessGrantPermission.READ, null, null);
 
         PolicySource source = stubSource("emrfs_prod", "amazon-emr-emrfs", List.of());
         AssessmentRunner runner = new AssessmentRunner() {
@@ -128,7 +128,7 @@ class AssessmentRunnerTest {
     void run_withoutS3AgConfig_recordsCannotValidateS3LocationGap() {
         S3AccessGrantOperation emrfsOp = new S3AccessGrantOperation(
                 OperationType.GRANT, "arn:aws:iam::123456789012:user/alice",
-                "s3://my-bucket/data/", S3AccessGrantPermission.READ, null);
+                "s3://my-bucket/data/", S3AccessGrantPermission.READ, null, null);
 
         PolicySource source = stubSource("lakeformation", "lakeformation", List.of());
         AssessmentRunner runner = new AssessmentRunner() {
@@ -151,7 +151,7 @@ class AssessmentRunnerTest {
 
         S3AccessGrantOperation emrfsOp = new S3AccessGrantOperation(
                 OperationType.GRANT, "arn:aws:iam::123456789012:user/alice",
-                "s3://my-bucket/data/", S3AccessGrantPermission.READ, null);
+                "s3://my-bucket/data/", S3AccessGrantPermission.READ, null, null);
 
         PolicySource source = stubSource("emrfs_prod", "amazon-emr-emrfs", List.of());
         AssessmentRunner runner = new AssessmentRunner() {

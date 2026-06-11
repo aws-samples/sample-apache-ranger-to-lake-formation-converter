@@ -427,7 +427,8 @@ public class S3AccessGrantsClient {
                 principalArn,
                 s3Prefix,
                 permission,
-                entry.accessGrantId());
+                entry.accessGrantId(),
+                null);
     }
 
     /**
