@@ -65,6 +65,8 @@ public class AssessmentReporter {
                 "S3 Access Grants location not registered for this prefix. Register the location in your S3 Access Grants instance before migrating (s3control:CreateAccessGrantsLocation).");
         GAP_EXPLANATIONS.put(GapEntry.GapType.CANNOT_VALIDATE_S3_LOCATION,
                 "No S3 Access Grants configuration provided. Cannot validate whether S3 locations are registered. Add s3AccessGrants config to enable validation.");
+        GAP_EXPLANATIONS.put(GapEntry.GapType.EXCLUDES_PATTERN,
+                "isExcludes=true (\"all except\") patterns have no Lake Formation equivalent; these policies are skipped.");
     }
 
     private final ObjectMapper objectMapper;

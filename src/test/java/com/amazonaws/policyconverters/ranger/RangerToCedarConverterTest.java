@@ -522,7 +522,7 @@ class RangerToCedarConverterTest {
     }
 
     @Test
-    void emrSpark_wildcardUrl_recordsWildcardPatternGap() {
+    void emrSpark_wildcardUrl_stripsWildcardAndProducesDataLocationStatement() {
         GapReporter freshGapReporter = new GapReporter();
         CedarSchemaProvider freshSchemaProvider = new CedarSchemaProvider();
         Map<String, SourcePolicyAdapter> emrRegistry = new HashMap<>();
@@ -532,12 +532,15 @@ class RangerToCedarConverterTest {
                 emrRegistry, new PassthroughPrincipalMapper(),
                 new PassthroughCatalogResolver(), freshGapReporter, freshSchemaProvider);
 
+        // s3://bucket/* should strip to s3://bucket/ and produce DATA_LOCATION_ACCESS (happy path)
         RangerPolicy policy = buildEmrSparkUrlPolicy("s3://bucket/*", "read");
-        freshConverter.convert(Collections.singletonList(policy));
+        String cedar = freshConverter.convert(Collections.singletonList(policy)).toCedarString();
 
         boolean hasWildcardGap = freshGapReporter.getReport().getEntries().stream()
                 .anyMatch(e -> e.getGapType() == GapType.WILDCARD_PATTERN);
-        assertTrue(hasWildcardGap, "Wildcard URL should record WILDCARD_PATTERN gap");
+        assertFalse(hasWildcardGap, "Wildcard URL with S3 prefix should NOT record a gap");
+        assertTrue(cedar.contains("DATA_LOCATION_ACCESS"),
+                "Stripped wildcard URL should produce DATA_LOCATION_ACCESS statement");
     }
 
     private RangerPolicy buildEmrSparkPolicy(String db, String table, String col, String accessType) {

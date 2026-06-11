@@ -417,35 +417,103 @@ The plugin supports simultaneous policy sync from multiple Ranger service types.
 
 For Presto and Trino, the adapter maps "schema" to "database" in the DataCatalog model and filters policies by the configured `gdcCatalogName`.
 
-### Hive Access Type Mapping
+### Permission Mapping Reference
 
-| Hive Access Type | Cedar Action | Notes |
+Each service adapter translates Ranger access types to Lake Formation permissions depending on the resource level at which the policy applies. The resource level is determined from the policy's resource hierarchy and may be promoted (e.g., `column=*` + `table=specific` → table level).
+
+**Resource level promotion rules:**
+
+| Ranger Resources | Resolved Level | LF Resource Type |
 |---|---|---|
-| `select` | SELECT | |
-| `update` | INSERT | |
-| `create` | CREATE_TABLE | |
-| `drop` | DROP | |
-| `alter` | ALTER | |
-| `read` | SELECT | Alias |
-| `write` | INSERT | Alias |
-| `all` | SUPER | Expanded |
-| `index` | _(unmapped)_ | Logged and skipped |
-| `lock` | _(unmapped)_ | Logged and skipped |
+| `column=specific` + `table=specific` | column | `DataCatalog::Column` → `TABLE_WITH_COLUMNS` |
+| `column=*` + `table=specific` | table | `DataCatalog::Table` |
+| `column=*` + `table=*` | database | `DataCatalog::Database` |
+| `table=specific` | table | `DataCatalog::Table` |
+| `table=*` | database | `DataCatalog::Database` |
+| `database=specific` | database | `DataCatalog::Database` |
+| `url` or `datalocation` (any) | datalocation | `DataCatalog::DataLocation` |
 
-### Presto / Trino Access Type Mapping
+**Gap conditions:**
 
-| Access Type | Cedar Action | Notes |
-|---|---|---|
-| `select` | SELECT | |
-| `insert` | INSERT | |
-| `delete` | DELETE | |
-| `create` | CREATE_TABLE | |
-| `drop` | DROP | |
-| `alter` | ALTER | |
-| `use` | DESCRIBE | |
-| `show` | DESCRIBE | |
-| `grant` | _(unmapped)_ | Logged and skipped |
-| `revoke` | _(unmapped)_ | Logged and skipped |
+| Pattern | Result |
+|---|---|
+| `isExcludes=true` on any resource | GAP — no "all except" in LF; policy skipped |
+| `column=specific` + `table=*` | GAP — no LF equivalent for column on wildcard table |
+| HDFS / `file://` / bare `/` paths | GAP — not convertible to LF data location |
+| `s3a://` or `s3n://` prefix | Normalized to `s3://` (happy path) |
+| Wildcard suffix on S3 URL (e.g., `s3://bucket/*`) | Suffix stripped → `s3://bucket/` (happy path) |
+
+---
+
+#### Hive
+
+| Ranger Access Type | Cedar Action (raw) | Valid at database level | Valid at table level | Valid at column level | URL / datalocation |
+|---|---|---|---|---|---|
+| `select` | SELECT | — | SELECT | SELECT | DATA_LOCATION_ACCESS |
+| `update` | INSERT | — | INSERT | — | DATA_LOCATION_ACCESS |
+| `create` | CREATE_TABLE | CREATE_TABLE | — | — | DATA_LOCATION_ACCESS |
+| `drop` | DROP | DROP | DROP | — | DATA_LOCATION_ACCESS |
+| `alter` | ALTER | ALTER | ALTER | — | DATA_LOCATION_ACCESS |
+| `read` | SELECT | — | SELECT | SELECT | DATA_LOCATION_ACCESS |
+| `write` | INSERT | — | INSERT | — | DATA_LOCATION_ACCESS |
+| `all` | ALL | ALL | ALL | ALL | DATA_LOCATION_ACCESS |
+| `index` | _(unmapped)_ | — | — | — | — |
+| `lock` | _(unmapped)_ | — | — | — | — |
+
+> Data location resources (`url` / `datalocation`) always produce `DATA_LOCATION_ACCESS` regardless of the Ranger access type. LF accepts only this permission for `DataLocationResource`.
+
+---
+
+#### EMR Spark (`amazon-emr-spark`)
+
+| Ranger Access Type | Cedar Action (raw) | Valid at database level | Valid at table level | Valid at column level | URL / datalocation |
+|---|---|---|---|---|---|
+| `select` | SELECT | — | SELECT | SELECT | DATA_LOCATION_ACCESS |
+| `update` | INSERT | — | INSERT | — | DATA_LOCATION_ACCESS |
+| `create` | CREATE_TABLE | CREATE_TABLE | — | — | DATA_LOCATION_ACCESS |
+| `drop` | DROP | DROP | DROP | — | DATA_LOCATION_ACCESS |
+| `alter` | ALTER | ALTER | ALTER | — | DATA_LOCATION_ACCESS |
+| `read` | SELECT | — | SELECT | SELECT | DATA_LOCATION_ACCESS |
+| `write` | INSERT | — | INSERT | — | DATA_LOCATION_ACCESS |
+| `all` | ALL | ALL | ALL | ALL | DATA_LOCATION_ACCESS |
+
+> EMR Spark uses the `url` resource type for S3 paths (not `datalocation`). The same normalization rules apply: `s3a://` and `s3n://` are rewritten to `s3://`; wildcard suffixes are stripped.
+
+---
+
+#### EMRFS / S3 Access Grants (`amazon-emrfs`)
+
+EMRFS policies do not interact with the Glue Data Catalog. They map S3 object operations directly to **S3 Access Grants** permissions, not Lake Formation permissions.
+
+| Ranger Access Type | S3 Action |
+|---|---|
+| `GetObject` | `s3:GetObject` |
+| `PutObject` | `s3:PutObject` |
+| `ListObjects` | `s3:ListObjects` |
+| `DeleteObject` | `s3:DeleteObject` |
+
+> S3 Access Grants are validated separately from LF grants. The `s3AccessGrants` section in the YAML config must be configured for the converter to verify that S3 locations are registered in the Access Grants instance.
+
+---
+
+#### Presto (`presto`) and Trino (`trino`)
+
+Presto and Trino use a `catalog → schema → table → column` hierarchy. The adapter maps "schema" to "database" in the Glue model and filters policies by `gdcCatalogName` (configured per service).
+
+| Ranger Access Type | Cedar Action (raw) | Valid at schema/database level | Valid at table level | Valid at column level |
+|---|---|---|---|---|
+| `select` | SELECT | — | SELECT | SELECT |
+| `insert` | INSERT | — | INSERT | — |
+| `delete` | DELETE | — | DELETE | — |
+| `create` | CREATE_TABLE | CREATE_TABLE | — | — |
+| `drop` | DROP | DROP | DROP | — |
+| `alter` | ALTER | ALTER | ALTER | — |
+| `use` | DESCRIBE | DESCRIBE | DESCRIBE | — |
+| `show` | DESCRIBE | DESCRIBE | DESCRIBE | — |
+| `grant` | _(unmapped)_ | — | — | — |
+| `revoke` | _(unmapped)_ | — | — | — |
+
+> Presto and Trino have no URL/data-location resource type. All access types without a Cedar equivalent are logged and skipped.
 
 ### Cedar Policy Namespace Isolation
 

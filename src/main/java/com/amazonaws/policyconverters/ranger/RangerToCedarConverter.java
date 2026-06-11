@@ -196,6 +196,20 @@ public class RangerToCedarConverter {
             return Collections.emptyList();
         }
 
+        // isExcludes=true means "all resources EXCEPT these" — LF has no such model
+        for (Map.Entry<String, RangerPolicyResource> entry : resources.entrySet()) {
+            if (entry.getValue() != null && Boolean.TRUE.equals(entry.getValue().getIsExcludes())) {
+                gapReporter.recordGap(new GapEntry(
+                        policyId, policyName, GapType.EXCLUDES_PATTERN,
+                        buildResourcePath(policy),
+                        "Resource '" + entry.getKey() + "' uses isExcludes=true. "
+                                + "Lake Formation has no 'all except' resource model.",
+                        "Replace exclusion patterns with explicit allow lists."
+                ));
+                return Collections.emptyList();
+            }
+        }
+
         String resourceLevel = determineResourceLevel(resources);
         resourceLevel = promoteResourceLevel(resourceLevel, resources);
 
@@ -449,16 +463,28 @@ public class RangerToCedarConverter {
         if ("url".equals(resourceLevel)) {
             List<String> urls = getResourceValues(resources, "url");
             for (String url : urls) {
+                // Strip trailing wildcard suffix — s3://bucket/* → s3://bucket/ (same LF semantics)
+                String effective = url;
                 if (isWildcard(url)) {
-                    gapReporter.recordGap(new GapEntry(
-                            policyId, null, GapType.WILDCARD_PATTERN,
-                            url,
-                            "URL pattern '" + url + "' cannot be expanded. ARN is a placeholder.",
-                            "Register specific S3 paths in Lake Formation as data locations."
-                    ));
-                    continue;
+                    // Only strip if this looks like an S3 URL with a trailing wildcard path component
+                    int starIdx = url.indexOf('*');
+                    int qIdx = url.indexOf('?');
+                    int wildcardIdx = (starIdx >= 0 && qIdx >= 0) ? Math.min(starIdx, qIdx)
+                            : (starIdx >= 0 ? starIdx : qIdx);
+                    effective = url.substring(0, wildcardIdx);
+                    // If stripping left nothing useful (e.g. just "s3://"), treat as wildcard gap
+                    if (!effective.startsWith("s3://") && !effective.startsWith("s3a://")
+                            && !effective.startsWith("s3n://")) {
+                        gapReporter.recordGap(new GapEntry(
+                                policyId, null, GapType.WILDCARD_PATTERN,
+                                url,
+                                "URL pattern '" + url + "' cannot be mapped to a Lake Formation data location.",
+                                "Register specific S3 paths in Lake Formation as data locations."
+                        ));
+                        continue;
+                    }
                 }
-                Optional<String> normalized = normalizeS3Location(url, policyId);
+                Optional<String> normalized = normalizeS3Location(effective, policyId);
                 if (!normalized.isPresent()) {
                     continue;
                 }

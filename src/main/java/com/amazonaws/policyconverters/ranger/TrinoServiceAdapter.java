@@ -116,6 +116,33 @@ public class TrinoServiceAdapter implements SourcePolicyAdapter {
         return result;
     }
 
+    private static final Set<String> TABLE_VALID_ACTIONS =
+            Set.of("SELECT", "INSERT", "DELETE", "DESCRIBE", "ALTER", "DROP", "ALL");
+    private static final Set<String> COLUMN_VALID_ACTIONS = Set.of("SELECT", "ALL");
+    private static final Set<String> DATABASE_VALID_ACTIONS =
+            Set.of("CREATE_TABLE", "ALTER", "DROP", "DESCRIBE", "ALL");
+
+    @Override
+    public Set<String> mapAccessTypeToCedarActions(String sourceAccessType, String resourceLevel) {
+        Set<String> actions = mapAccessTypeToCedarActions(sourceAccessType);
+        if ("column".equals(resourceLevel)) {
+            return actions.stream()
+                    .filter(COLUMN_VALID_ACTIONS::contains)
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+        if ("table".equals(resourceLevel)) {
+            return actions.stream()
+                    .filter(TABLE_VALID_ACTIONS::contains)
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+        if ("schema".equals(resourceLevel) || "database".equals(resourceLevel)) {
+            return actions.stream()
+                    .filter(DATABASE_VALID_ACTIONS::contains)
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+        return actions;
+    }
+
     @Override
     public boolean shouldProcessPolicy(RangerPolicy policy) {
         Map<String, RangerPolicyResource> resources = policy.getResources();

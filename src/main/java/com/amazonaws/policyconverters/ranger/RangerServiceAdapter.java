@@ -101,6 +101,37 @@ public class RangerServiceAdapter implements SourcePolicyAdapter {
         return result;
     }
 
+    private static final Set<String> TABLE_VALID_ACTIONS =
+            Set.of("SELECT", "INSERT", "DELETE", "DESCRIBE", "ALTER", "DROP", "ALL");
+    private static final Set<String> COLUMN_VALID_ACTIONS = Set.of("SELECT", "ALL");
+    private static final Set<String> DATABASE_VALID_ACTIONS =
+            Set.of("CREATE_TABLE", "CREATE_DATABASE", "ALTER", "DROP", "DESCRIBE", "ALL");
+
+    @Override
+    public Set<String> mapAccessTypeToCedarActions(String sourceAccessType, String resourceLevel) {
+        if ("datalocation".equals(resourceLevel) || "url".equals(resourceLevel)) {
+            Set<String> raw = mapAccessTypeToCedarActions(sourceAccessType);
+            return raw.isEmpty() ? Collections.emptySet() : Collections.singleton("DATA_LOCATION_ACCESS");
+        }
+        Set<String> actions = mapAccessTypeToCedarActions(sourceAccessType);
+        if ("column".equals(resourceLevel)) {
+            return actions.stream()
+                    .filter(COLUMN_VALID_ACTIONS::contains)
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+        if ("table".equals(resourceLevel)) {
+            return actions.stream()
+                    .filter(TABLE_VALID_ACTIONS::contains)
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+        if ("database".equals(resourceLevel)) {
+            return actions.stream()
+                    .filter(DATABASE_VALID_ACTIONS::contains)
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+        return actions;
+    }
+
     @Override
     public CedarEntityRef buildEntityRef(RangerPolicy policy, String resourceLevel) {
         Map<String, RangerPolicyResource> resources = policy.getResources();
