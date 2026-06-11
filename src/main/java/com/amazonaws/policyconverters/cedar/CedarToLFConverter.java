@@ -77,6 +77,7 @@ public class CedarToLFConverter {
         map.put("CREATE_DATABASE", LFPermission.CREATE_DATABASE);
         map.put("CREATE_TABLE", LFPermission.CREATE_TABLE);
         map.put("DATA_LOCATION_ACCESS", LFPermission.DATA_LOCATION_ACCESS);
+        map.put("ALL", LFPermission.ALL);
         ACTION_TO_PERMISSION = Collections.unmodifiableMap(map);
     }
 

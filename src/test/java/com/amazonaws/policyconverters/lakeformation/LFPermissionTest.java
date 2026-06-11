@@ -11,7 +11,7 @@ class LFPermissionTest {
 
     @Test
     void allPermissionValuesExist() {
-        assertEquals(9, LFPermission.values().length);
+        assertEquals(10, LFPermission.values().length);
     }
 
     @Test
