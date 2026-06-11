@@ -74,8 +74,8 @@ class PolicyConverterTest {
     // Test 2: "all" access type expands to SELECT, INSERT, DELETE, ALTER, DROP, DESCRIBE
     // -----------------------------------------------------------------------
     @Test
-    @DisplayName("all access type expands to SELECT, INSERT, DELETE, ALTER, DROP, DESCRIBE")
-    void allAccessTypeExpandsToFullPermissionSet() {
+    @DisplayName("all access type maps to ALL")
+    void allAccessTypeMapsToALL() {
         RangerPolicy policy = buildPolicy(2L, "mydb", "mytable",
                 Collections.singleton("all"), "analyst");
 
@@ -83,10 +83,7 @@ class PolicyConverterTest {
                 policy, principalMapper, catalogResolver, gapReporter);
 
         assertEquals(1, ops.size());
-        Set<LFPermission> expected = EnumSet.of(
-                LFPermission.SELECT, LFPermission.INSERT, LFPermission.DELETE,
-                LFPermission.ALTER, LFPermission.DROP, LFPermission.DESCRIBE);
-        assertEquals(expected, ops.get(0).getPermissions());
+        assertEquals(EnumSet.of(LFPermission.ALL), ops.get(0).getPermissions());
     }
 
     // -----------------------------------------------------------------------

@@ -41,8 +41,7 @@ class PolicyConverterPropertyTest {
         m.put("alter", EnumSet.of(LFPermission.ALTER));
         m.put("read", EnumSet.of(LFPermission.SELECT));
         m.put("write", EnumSet.of(LFPermission.INSERT));
-        m.put("all", EnumSet.of(LFPermission.SELECT, LFPermission.INSERT, LFPermission.DELETE,
-                LFPermission.ALTER, LFPermission.DROP, LFPermission.DESCRIBE));
+        m.put("all", EnumSet.of(LFPermission.ALL));
         ACCESS_TYPE_MAP = Collections.unmodifiableMap(m);
     }
 

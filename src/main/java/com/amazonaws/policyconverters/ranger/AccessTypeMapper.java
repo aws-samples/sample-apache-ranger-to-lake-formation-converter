@@ -59,9 +59,7 @@ public final class AccessTypeMapper {
         m.put("read", Collections.unmodifiableSet(EnumSet.of(LFPermission.SELECT)));
         m.put("write", Collections.unmodifiableSet(EnumSet.of(LFPermission.INSERT)));
 
-        m.put("all", Collections.unmodifiableSet(EnumSet.of(
-                LFPermission.SELECT, LFPermission.INSERT, LFPermission.DELETE,
-                LFPermission.ALTER, LFPermission.DROP, LFPermission.DESCRIBE)));
+        m.put("all", Collections.unmodifiableSet(EnumSet.of(LFPermission.ALL)));
         m.put("datalocation", Collections.unmodifiableSet(EnumSet.of(LFPermission.DATA_LOCATION_ACCESS)));
         m.put("data_location_access", Collections.unmodifiableSet(EnumSet.of(LFPermission.DATA_LOCATION_ACCESS)));
         MAPPING = Collections.unmodifiableMap(m);

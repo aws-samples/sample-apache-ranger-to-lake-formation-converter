@@ -33,6 +33,7 @@ public class EmrSparkServiceAdapter implements SourcePolicyAdapter {
         m.put("drop",   Collections.singleton("DROP"));
         m.put("read",   Collections.singleton("SELECT"));
         m.put("write",  Collections.singleton("INSERT"));
+        m.put("all",    Collections.singleton("ALL"));
         CATALOG_ACTION_MAPPING = Collections.unmodifiableMap(m);
     }
 

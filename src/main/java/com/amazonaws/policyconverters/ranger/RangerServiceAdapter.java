@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -50,14 +49,7 @@ public class RangerServiceAdapter implements SourcePolicyAdapter {
         m.put("read", Collections.singleton("SELECT"));
         m.put("write", Collections.singleton("INSERT"));
 
-        Set<String> allActions = new HashSet<>();
-        allActions.add("SELECT");
-        allActions.add("INSERT");
-        allActions.add("DELETE");
-        allActions.add("ALTER");
-        allActions.add("DROP");
-        allActions.add("DESCRIBE");
-        m.put("all", Collections.unmodifiableSet(allActions));
+        m.put("all", Collections.singleton("ALL"));
 
         m.put("datalocation", Collections.singleton("DATA_LOCATION_ACCESS"));
         m.put("data_location_access", Collections.singleton("DATA_LOCATION_ACCESS"));

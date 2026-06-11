@@ -16,7 +16,8 @@ public enum LFPermission {
     DROP("DROP"),
     CREATE_DATABASE("CREATE_DATABASE"),
     CREATE_TABLE("CREATE_TABLE"),
-    DATA_LOCATION_ACCESS("DATA_LOCATION_ACCESS");
+    DATA_LOCATION_ACCESS("DATA_LOCATION_ACCESS"),
+    ALL("ALL");
 
     private final String value;
 

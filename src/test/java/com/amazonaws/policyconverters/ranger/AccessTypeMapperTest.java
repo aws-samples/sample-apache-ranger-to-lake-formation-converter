@@ -54,11 +54,8 @@ class AccessTypeMapperTest {
     // --- mapAccessType: "all" expansion ---
 
     @Test
-    void allMapsToExpandedSet() {
-        Set<LFPermission> expected = EnumSet.of(
-                LFPermission.SELECT, LFPermission.INSERT, LFPermission.DELETE,
-                LFPermission.ALTER, LFPermission.DROP, LFPermission.DESCRIBE);
-        assertEquals(expected, AccessTypeMapper.mapAccessType("all"));
+    void allMapsToALL() {
+        assertEquals(EnumSet.of(LFPermission.ALL), AccessTypeMapper.mapAccessType("all"));
     }
 
     // --- mapAccessType: case insensitivity ---

@@ -70,9 +70,8 @@ class RangerServiceAdapterTest {
     }
 
     @Test
-    void allMapsToExpandedSet() {
-        Set<String> expected = Set.of("SELECT", "INSERT", "DELETE", "ALTER", "DROP", "DESCRIBE");
-        assertEquals(expected, adapter.mapAccessTypeToCedarActions("all"));
+    void allMapsToALL() {
+        assertEquals(Set.of("ALL"), adapter.mapAccessTypeToCedarActions("all"));
     }
 
     @Test

@@ -23,7 +23,7 @@ class AccessTypeMappingPropertyTest {
 
     private static final Set<String> VALID_CEDAR_ACTIONS = Set.of(
             "SELECT", "INSERT", "DELETE", "CREATE_TABLE", "DROP", "ALTER",
-            "DESCRIBE", "SUPER", "ALL", "CREATE_DATABASE", "DATA_LOCATION_ACCESS"
+            "DESCRIBE", "ALL", "CREATE_DATABASE", "DATA_LOCATION_ACCESS"
     );
 
     private final HiveServiceAdapter hiveAdapter = new HiveServiceAdapter(AWS_CONTEXT);

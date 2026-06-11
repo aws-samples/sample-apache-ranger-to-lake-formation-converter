@@ -42,6 +42,9 @@ namespace DataCatalog {
 
     action "DATA_LOCATION_ACCESS"
         appliesTo { principal: [Principal], resource: [DataLocation] };
+
+    action "ALL"
+        appliesTo { principal: [Principal], resource: [Catalog, Database, Table, Column, DataLocation] };
 }
 
 namespace S3 {

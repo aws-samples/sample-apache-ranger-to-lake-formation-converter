@@ -40,7 +40,7 @@ public class HiveServiceAdapter implements SourcePolicyAdapter {
         m.put("alter", Collections.singleton("ALTER"));
         m.put("read", Collections.singleton("SELECT"));
         m.put("write", Collections.singleton("INSERT"));
-        m.put("all", Collections.singleton("SUPER"));
+        m.put("all", Collections.singleton("ALL"));
         ACTION_MAPPING = Collections.unmodifiableMap(m);
     }
 
