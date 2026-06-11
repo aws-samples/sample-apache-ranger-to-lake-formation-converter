@@ -7,8 +7,6 @@ import com.amazonaws.policyconverters.cedar.SourcePolicyAdapter;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapEntry.GapType;
 import com.amazonaws.policyconverters.reporting.GapReporter;
-import com.amazonaws.policyconverters.ranger.CatalogResolver;
-import com.amazonaws.policyconverters.ranger.EmrSparkServiceAdapter;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
 import com.cedarpolicy.model.exception.InternalException;
 import org.apache.ranger.plugin.model.RangerPolicy;
@@ -306,7 +304,7 @@ public class RangerToCedarConverter {
         for (String principalArn : principalArns) {
             String principalRef = adapter.buildPrincipalRef(principalArn);
             for (ResourceCombination rc : resourceCombinations) {
-                Set<String> cedarActions = extractCedarActions(item, adapter, rc.resourceLevel);
+                Set<String> cedarActions = extractCedarActions(item, adapter, rc.resourceLevel, policyId);
                 if (cedarActions.isEmpty()) continue;
                 for (String action : cedarActions) {
                     StringBuilder sb = new StringBuilder();
@@ -346,15 +344,35 @@ public class RangerToCedarConverter {
         return statements;
     }
 
-    private Set<String> extractCedarActions(RangerPolicyItem item, SourcePolicyAdapter adapter, String resourceLevel) {
+    private Set<String> extractCedarActions(RangerPolicyItem item, SourcePolicyAdapter adapter,
+                                             String resourceLevel, String policyId) {
         if (item.getAccesses() == null || item.getAccesses().isEmpty()) {
             return Collections.emptySet();
         }
         java.util.LinkedHashSet<String> actions = new java.util.LinkedHashSet<>();
         for (RangerPolicyItemAccess access : item.getAccesses()) {
             if (access.getIsAllowed() == null || access.getIsAllowed()) {
-                Set<String> mapped = adapter.mapAccessTypeToCedarActions(access.getType(), resourceLevel);
-                actions.addAll(mapped);
+                String accessType = access.getType();
+                Set<String> mapped = adapter.mapAccessTypeToCedarActions(accessType, resourceLevel);
+                if (mapped.isEmpty()) {
+                    // If the 1-arg overload also returns empty, the type is genuinely unknown —
+                    // the adapter already logs it, but we must also surface a gap so it is
+                    // visible in the assessment report and not silently dropped.
+                    Set<String> rawMapped = adapter.mapAccessTypeToCedarActions(accessType);
+                    if (rawMapped.isEmpty()) {
+                        gapReporter.recordGap(new GapEntry(
+                                policyId, null, GapType.UNSUPPORTED_ACTION,
+                                null,
+                                "Access type '" + accessType + "' has no Cedar mapping for service '"
+                                        + adapter.getServiceType() + "' and will be skipped.",
+                                "Review the Ranger policy and remove or replace the unsupported access type."
+                        ));
+                    }
+                    // If rawMapped is non-empty the type is known but filtered at this resource
+                    // level (e.g. SELECT filtered from database level) — intentional, no gap.
+                } else {
+                    actions.addAll(mapped);
+                }
             }
         }
         return actions;
