@@ -48,6 +48,7 @@ public class RangerToCedarConverter {
     private final CatalogResolver catalogResolver;
     private final GapReporter gapReporter;
     private final CedarSchemaProvider schemaProvider;
+    private boolean skipCedarValidation = false;
 
     public RangerToCedarConverter(Map<String, SourcePolicyAdapter> adapterRegistry,
                                   PrincipalMapper principalMapper,
@@ -59,6 +60,10 @@ public class RangerToCedarConverter {
         this.catalogResolver = catalogResolver;
         this.gapReporter = gapReporter;
         this.schemaProvider = schemaProvider;
+    }
+
+    public void setSkipCedarValidation(boolean skip) {
+        this.skipCedarValidation = skip;
     }
 
     /**
@@ -743,6 +748,21 @@ public class RangerToCedarConverter {
                 return CedarPolicySet.fromCedarString("");
             } catch (InternalException e) {
                 throw new RuntimeException("Failed to create empty CedarPolicySet", e);
+            }
+        }
+
+        if (skipCedarValidation) {
+            LOG.info("Cedar schema validation skipped (--skip-validation flag set); "
+                    + "parsing {} statements without validation", individualStatements.size());
+            try {
+                return CedarPolicySet.fromCedarString(cedarText);
+            } catch (InternalException e) {
+                LOG.error("Failed to parse Cedar policy text: {}", e.getMessage());
+                try {
+                    return CedarPolicySet.fromCedarString("");
+                } catch (InternalException ex) {
+                    throw new RuntimeException("Failed to create empty CedarPolicySet", ex);
+                }
             }
         }
 

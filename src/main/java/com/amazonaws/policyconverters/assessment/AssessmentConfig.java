@@ -24,6 +24,7 @@ public class AssessmentConfig {
     private final PrincipalMappingConfig principalMapping;
     private final Path outputDir;
     private final boolean consoleOnly;
+    private final boolean skipCedarValidation;
     private final S3AccessGrantsConfig s3AccessGrants;
 
     private AssessmentConfig(Builder builder) {
@@ -35,6 +36,7 @@ public class AssessmentConfig {
         this.principalMapping = builder.principalMapping;
         this.outputDir = builder.outputDir;
         this.consoleOnly = builder.consoleOnly;
+        this.skipCedarValidation = builder.skipCedarValidation;
         this.s3AccessGrants = builder.s3AccessGrants;
     }
 
@@ -70,6 +72,10 @@ public class AssessmentConfig {
         return consoleOnly;
     }
 
+    public boolean isSkipCedarValidation() {
+        return skipCedarValidation;
+    }
+
     public S3AccessGrantsConfig getS3AccessGrants() {
         return s3AccessGrants;
     }
@@ -87,6 +93,7 @@ public class AssessmentConfig {
         private PrincipalMappingConfig principalMapping = new PrincipalMappingConfig(null, null, null);
         private Path outputDir = Paths.get(".");
         private boolean consoleOnly = false;
+        private boolean skipCedarValidation = false;
         private S3AccessGrantsConfig s3AccessGrants = null;
 
         public Builder rangerAdminUrl(String rangerAdminUrl) {
@@ -128,6 +135,11 @@ public class AssessmentConfig {
 
         public Builder consoleOnly(boolean consoleOnly) {
             this.consoleOnly = consoleOnly;
+            return this;
+        }
+
+        public Builder skipCedarValidation(boolean skipCedarValidation) {
+            this.skipCedarValidation = skipCedarValidation;
             return this;
         }
 

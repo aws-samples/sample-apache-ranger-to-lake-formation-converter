@@ -132,6 +132,7 @@ public class AssessmentRunner {
 
         RangerToCedarConverter rangerConverter = new RangerToCedarConverter(
                 adapterRegistry, principalMapper, catalogResolver, gapReporter, schemaProvider);
+        rangerConverter.setSkipCedarValidation(config.isSkipCedarValidation());
 
         CedarToLFConverter lfConverter = new CedarToLFConverter(schemaProvider, gapReporter, null);
 

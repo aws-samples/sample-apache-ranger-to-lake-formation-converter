@@ -25,7 +25,7 @@ import java.util.List;
  * <p>
  * Usage:
  * <pre>
- *   assess server [&lt;config-file&gt;] [options]
+ *   server [&lt;config-file&gt;] [options]
  *     --ranger-url &lt;url&gt;        Ranger Admin URL (required if no config file)
  *     --ranger-user &lt;user&gt;      Ranger Admin username
  *     --ranger-password &lt;pass&gt;  Ranger Admin password
@@ -33,18 +33,20 @@ import java.util.List;
  *     --output-dir &lt;dir&gt;        Directory for JSON report (default: current dir)
  *     --aws-region &lt;region&gt;     Enable Glue wildcard expansion
  *     --console-only            Print report to console, skip JSON file
+ *     --skip-validation         Skip Cedar schema validation (use for large policy sets)
  *
- *   assess file &lt;export-file.json&gt; [options]
+ *   file &lt;export-file.json&gt; [options]
  *     --output-dir &lt;dir&gt;        Directory for JSON report (default: current dir)
  *     --aws-region &lt;region&gt;     Enable Glue wildcard expansion
  *     --console-only            Print report to console, skip JSON file
+ *     --skip-validation         Skip Cedar schema validation (use for large policy sets)
  * </pre>
  */
 public class AssessmentMain {
 
     private static final String USAGE = String.join(System.lineSeparator(),
             "Usage:",
-            "  assess server [<config-file>] [options]",
+            "  server [<config-file>] [options]",
             "    --ranger-url <url>        Ranger Admin URL (required if no config file)",
             "    --ranger-user <user>      Ranger Admin username",
             "    --ranger-password <pass>  Ranger Admin password",
@@ -52,11 +54,13 @@ public class AssessmentMain {
             "    --output-dir <dir>        Directory for JSON report (default: current dir)",
             "    --aws-region <region>     Enable Glue wildcard expansion",
             "    --console-only            Print report to console, skip JSON file",
+            "    --skip-validation         Skip Cedar schema validation (use for large policy sets)",
             "",
-            "  assess file <export-file.json> [options]",
+            "  file <export-file.json> [options]",
             "    --output-dir <dir>        Directory for JSON report (default: current dir)",
             "    --aws-region <region>     Enable Glue wildcard expansion",
-            "    --console-only            Print report to console, skip JSON file"
+            "    --console-only            Print report to console, skip JSON file",
+            "    --skip-validation         Skip Cedar schema validation (use for large policy sets)"
     );
 
     public static void main(String[] args) {
@@ -136,6 +140,9 @@ public class AssessmentMain {
                 case "--console-only":
                     configBuilder.consoleOnly(true);
                     break;
+                case "--skip-validation":
+                    configBuilder.skipCedarValidation(true);
+                    break;
                 default:
                     System.err.println("Unknown flag: " + flag);
                     System.err.println(USAGE);
@@ -150,7 +157,7 @@ public class AssessmentMain {
         AssessmentConfig config = configBuilder.build();
 
         if (config.getRangerAdminUrl() == null || config.getRangerAdminUrl().isBlank()) {
-            System.err.println("--ranger-url is required for 'assess server' (or provide a config file)");
+            System.err.println("--ranger-url is required for 'server' subcommand (or provide a config file)");
             return 1;
         }
 
@@ -172,7 +179,7 @@ public class AssessmentMain {
 
     private static int runFile(String[] args) {
         if (args.length == 0 || args[0].startsWith("--")) {
-            System.err.println("assess file requires a path to a Ranger export JSON file");
+            System.err.println("'file' subcommand requires a path to a Ranger export JSON file");
             System.err.println(USAGE);
             return 1;
         }
@@ -202,6 +209,9 @@ public class AssessmentMain {
                     break;
                 case "--console-only":
                     configBuilder.consoleOnly(true);
+                    break;
+                case "--skip-validation":
+                    configBuilder.skipCedarValidation(true);
                     break;
                 default:
                     System.err.println("Unknown flag: " + flag);

@@ -437,7 +437,8 @@ Each service adapter translates Ranger access types to Lake Formation permission
 
 | Pattern | Result |
 |---|---|
-| `isExcludes=true` on any resource | GAP — no "all except" in LF; policy skipped |
+| `isExcludes=true` on table resource | GAP — no "all except" in LF; policy skipped (see Future Enhancements) |
+| `isExcludes=true` on column resource | GAP — LF supports `ColumnWildcard.ExcludedColumnNames` but column-level exclude is not yet implemented |
 | `column=specific` + `table=*` | GAP — no LF equivalent for column on wildcard table |
 | HDFS / `file://` / bare `/` paths | GAP — not convertible to LF data location |
 | `s3a://` or `s3n://` prefix | Normalized to `s3://` (happy path) |
@@ -588,6 +589,25 @@ The following Ranger features have no direct equivalent in Lake Formation. When 
 | LF tag-policy resources in reverse sync | Silently skipped | `LFPermissionFetcher` drops `CatalogResource` and `LFTagPolicyResource` entries returned by `ListPermissions` with only a log warning — no gap entry is recorded. Out-of-band LF-Tag grants will not be detected or corrected by reverse sync. |
 | `WILDCARD_PATTERN` gap not emitted at runtime | Known gap | The `WILDCARD_PATTERN` gap type is defined and documented but is never triggered at runtime. Wildcard expansion failures (when no AWS credentials are available) produce only a log warning; no gap entry is recorded. |
 | IDC mapper does not support roles | Limitation | When using the Identity Center principal mapper, Ranger role principals always produce an empty mapping and are silently skipped with an `UnmappedPrincipal` metric. Use the static mapper if you need role-to-IAM-ARN mappings. |
+
+## Future Enhancements
+
+### Table-Level `isExcludes` (Exclude-Pattern Sync)
+
+Ranger supports a policy pattern where a table list with `isExcludes=true` means "all tables in this database **except** the listed ones, including tables added in the future." For example:
+
+- Database = `analytics`, Tables = `[pii_table, restricted_table]` with `isExcludes=true`, Columns = `*`
+
+This effectively grants access to every current and future table in `analytics` except the two named ones.
+
+Lake Formation has no native `ExcludedTableNames` concept, but the sync loop already implements wildcard table expansion (resolving `db.*` to explicit table grants each cycle). The same mechanism could support table-level excludes:
+
+1. Each sync cycle, resolve all tables in the database from the Glue catalog.
+2. Subtract the excluded table list.
+3. Issue explicit LF grants for the remaining tables.
+4. When new tables are added to the database, the next sync cycle automatically picks them up and grants access — matching Ranger's forward-looking semantics.
+
+This approach is feasible but adds complexity: the exclude list must be stored and diffed each cycle, and stale grants for tables that are later added to the exclude list must be revoked promptly. Currently these policies are skipped and recorded as `EXCLUDES_PATTERN` gaps. Implementation is tracked as a future enhancement.
 
 ## Gap Report
 
