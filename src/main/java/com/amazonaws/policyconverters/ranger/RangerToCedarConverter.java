@@ -436,7 +436,11 @@ public class RangerToCedarConverter {
         if ("datalocation".equals(resourceLevel)) {
             List<String> locations = getResourceValues(resources, "datalocation");
             for (String loc : locations) {
-                CedarEntityRef ref = buildEntityRef(adapter, "datalocation", null, null, null, loc);
+                Optional<String> normalized = normalizeS3Location(loc, policyId);
+                if (!normalized.isPresent()) {
+                    continue;
+                }
+                CedarEntityRef ref = buildEntityRef(adapter, "datalocation", null, null, null, normalized.get());
                 combinations.add(new ResourceCombination(ref, resourceLevel));
             }
             return combinations;
@@ -452,8 +456,13 @@ public class RangerToCedarConverter {
                             "URL pattern '" + url + "' cannot be expanded. ARN is a placeholder.",
                             "Register specific S3 paths in Lake Formation as data locations."
                     ));
+                    continue;
                 }
-                CedarEntityRef ref = buildEntityRef(adapter, "url", null, null, null, url);
+                Optional<String> normalized = normalizeS3Location(url, policyId);
+                if (!normalized.isPresent()) {
+                    continue;
+                }
+                CedarEntityRef ref = buildEntityRef(adapter, "url", null, null, null, normalized.get());
                 combinations.add(new ResourceCombination(ref, resourceLevel));
             }
             return combinations;
@@ -790,6 +799,56 @@ public class RangerToCedarConverter {
 
     private String escapeQuotes(String value) {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /**
+     * Normalize a raw location value from a Ranger policy resource to a canonical
+     * {@code s3://} URL, or return empty if the scheme is not S3-compatible.
+     *
+     * <p>Supported normalizations:
+     * <ul>
+     *   <li>{@code s3://bucket/path}  → kept as-is</li>
+     *   <li>{@code s3a://bucket/path} → {@code s3://bucket/path}</li>
+     *   <li>{@code s3n://bucket/path} → {@code s3://bucket/path}</li>
+     * </ul>
+     *
+     * <p>HDFS paths ({@code hdfs://}, bare {@code /...}), {@code file://} URIs,
+     * and any other non-S3 scheme are not convertible to Lake Formation data
+     * locations and are returned as empty — callers must record a gap and skip.
+     *
+     * @param rawLocation the raw string value from the Ranger policy
+     * @param policyId    the source policy ID used when recording a gap
+     * @return {@code Optional.of(normalizedS3Url)} if S3-compatible, or
+     *         {@code Optional.empty()} if the location is unsupported (gap recorded)
+     */
+    Optional<String> normalizeS3Location(String rawLocation, String policyId) {
+        if (rawLocation == null || rawLocation.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        String loc = rawLocation.trim();
+
+        if (loc.startsWith("s3://")) {
+            return Optional.of(loc);
+        }
+        if (loc.startsWith("s3a://")) {
+            return Optional.of("s3://" + loc.substring("s3a://".length()));
+        }
+        if (loc.startsWith("s3n://")) {
+            return Optional.of("s3://" + loc.substring("s3n://".length()));
+        }
+
+        // Unsupported: HDFS, file://, bare paths, etc.
+        String scheme = loc.contains("://") ? loc.substring(0, loc.indexOf("://") + 3) : "(no scheme)";
+        LOG.warn("Skipping non-S3 location '{}' in policy {} — scheme {} is not supported by Lake Formation",
+                loc, policyId, scheme);
+        gapReporter.recordGap(new GapEntry(
+                policyId, null, GapType.UNMAPPED_RESOURCE,
+                loc,
+                "Location '" + loc + "' uses an unsupported scheme (" + scheme
+                        + ") and cannot be mapped to a Lake Formation data location.",
+                "Convert HDFS/file paths to S3 URIs (s3://) and re-run the assessment."
+        ));
+        return Optional.empty();
     }
 
     /**

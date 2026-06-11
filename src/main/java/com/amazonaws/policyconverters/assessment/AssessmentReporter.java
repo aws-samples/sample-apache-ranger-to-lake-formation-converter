@@ -18,6 +18,7 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Formats and outputs an {@link AssessmentResult} to console and optionally
@@ -57,7 +58,7 @@ public class AssessmentReporter {
         GAP_EXPLANATIONS.put(GapEntry.GapType.UNSUPPORTED_ACTION,
                 "One or more Ranger access types have no LF permission equivalent and will be dropped.");
         GAP_EXPLANATIONS.put(GapEntry.GapType.UNMAPPED_RESOURCE,
-                "Resource IDs are not ARNs and cannot be mapped to LF resources.");
+                "Resource paths cannot be mapped to LF data locations (HDFS/file:// not supported; see details below).");
         GAP_EXPLANATIONS.put(GapEntry.GapType.SCHEMA_VALIDATION_FAILURE,
                 "A Cedar statement failed schema validation and was excluded from conversion.");
         GAP_EXPLANATIONS.put(GapEntry.GapType.UNREGISTERED_S3_LOCATION,
@@ -147,6 +148,21 @@ public class AssessmentReporter {
                 if (count > 0) {
                     String explanation = GAP_EXPLANATIONS.getOrDefault(gapType, "");
                     out.printf("  %-28s: %3d  — %s%n", gapType.name(), count, explanation);
+                }
+            }
+
+            // List unmapped resource paths so operators can decide what to do with them
+            List<GapEntry> unmappedEntries = result.getGapReport().getEntries().stream()
+                    .filter(e -> e.getGapType() == GapEntry.GapType.UNMAPPED_RESOURCE)
+                    .collect(Collectors.toList());
+            if (!unmappedEntries.isEmpty()) {
+                out.println();
+                out.printf("Unmapped resource paths (%d) — convert to S3 URIs or ignore:%n",
+                        unmappedEntries.size());
+                for (GapEntry e : unmappedEntries) {
+                    String path = e.getResourcePath() != null ? e.getResourcePath() : "(unknown)";
+                    String policy = e.getPolicyId() != null ? e.getPolicyId() : "?";
+                    out.printf("  [%s] %s%n", policy, path);
                 }
             }
 

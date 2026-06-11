@@ -31,6 +31,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -574,6 +575,160 @@ class RangerToCedarConverterTest {
         item.setUsers(List.of("alice"));
         RangerPolicyItemAccess access = new RangerPolicyItemAccess();
         access.setType(accessType);
+        access.setIsAllowed(true);
+        item.setAccesses(List.of(access));
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
+    // --- normalizeS3Location unit tests ---
+
+    @Test
+    void normalizeS3Location_s3UrlPassedThrough() {
+        Optional<String> result = emrSparkConverter.normalizeS3Location("s3://my-bucket/path/", "policy-1");
+        assertTrue(result.isPresent());
+        assertEquals("s3://my-bucket/path/", result.get());
+    }
+
+    @Test
+    void normalizeS3Location_s3aUrlNormalizedToS3() {
+        Optional<String> result = emrSparkConverter.normalizeS3Location("s3a://my-bucket/path/", "policy-1");
+        assertTrue(result.isPresent());
+        assertEquals("s3://my-bucket/path/", result.get());
+    }
+
+    @Test
+    void normalizeS3Location_s3nUrlNormalizedToS3() {
+        Optional<String> result = emrSparkConverter.normalizeS3Location("s3n://my-bucket/path/", "policy-1");
+        assertTrue(result.isPresent());
+        assertEquals("s3://my-bucket/path/", result.get());
+    }
+
+    @Test
+    void normalizeS3Location_hdfsPathReturnsEmpty() {
+        GapReporter freshGapReporter = new GapReporter();
+        RangerToCedarConverter conv = makeEmrConverter(freshGapReporter);
+
+        Optional<String> result = conv.normalizeS3Location("hdfs://namenode/data/path/", "p1");
+        assertFalse(result.isPresent(), "HDFS path must return empty");
+        assertTrue(freshGapReporter.getReport().getEntries().stream()
+                .anyMatch(e -> e.getGapType() == GapType.UNMAPPED_RESOURCE),
+                "HDFS path must record UNMAPPED_RESOURCE gap");
+    }
+
+    @Test
+    void normalizeS3Location_fileUriReturnsEmpty() {
+        GapReporter freshGapReporter = new GapReporter();
+        RangerToCedarConverter conv = makeEmrConverter(freshGapReporter);
+
+        Optional<String> result = conv.normalizeS3Location("file:///projects/2022/data/", "p2");
+        assertFalse(result.isPresent(), "file:// URI must return empty");
+        assertTrue(freshGapReporter.getReport().getEntries().stream()
+                .anyMatch(e -> e.getGapType() == GapType.UNMAPPED_RESOURCE),
+                "file:// URI must record UNMAPPED_RESOURCE gap");
+    }
+
+    @Test
+    void normalizeS3Location_barePathReturnsEmpty() {
+        GapReporter freshGapReporter = new GapReporter();
+        RangerToCedarConverter conv = makeEmrConverter(freshGapReporter);
+
+        Optional<String> result = conv.normalizeS3Location("/projects/2022/data/", "p3");
+        assertFalse(result.isPresent(), "Bare path must return empty");
+        assertTrue(freshGapReporter.getReport().getEntries().stream()
+                .anyMatch(e -> e.getGapType() == GapType.UNMAPPED_RESOURCE),
+                "Bare path must record UNMAPPED_RESOURCE gap");
+    }
+
+    // --- end-to-end: s3a/s3n URL policies produce correct Cedar ---
+
+    @Test
+    void emrSpark_s3aUrl_normalizedAndProducesDataLocationStatement() {
+        RangerPolicy policy = buildEmrSparkUrlPolicy("s3a://my-bucket/data/", "read");
+        CedarPolicySet result = emrSparkConverter.convert(Collections.singletonList(policy));
+
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::DataLocation::"),
+                "s3a URL must produce DataCatalog::DataLocation statement");
+        assertTrue(cedar.contains("arn:aws:s3:::my-bucket/data/"),
+                "s3a URL must be normalized to s3:// before ARN construction");
+        assertFalse(cedar.contains("s3a"), "s3a scheme must not appear in output Cedar");
+    }
+
+    @Test
+    void emrSpark_s3nUrl_normalizedAndProducesDataLocationStatement() {
+        RangerPolicy policy = buildEmrSparkUrlPolicy("s3n://my-bucket/data/", "read");
+        CedarPolicySet result = emrSparkConverter.convert(Collections.singletonList(policy));
+
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("arn:aws:s3:::my-bucket/data/"),
+                "s3n URL must be normalized to s3:// before ARN construction");
+        assertFalse(cedar.contains("s3n"), "s3n scheme must not appear in output Cedar");
+    }
+
+    // --- end-to-end: non-S3 URL policies produce gap and no Cedar ---
+
+    @Test
+    void emrSpark_hdfsUrl_skippedWithUnmappedResourceGap() {
+        GapReporter freshGapReporter = new GapReporter();
+        RangerToCedarConverter conv = makeEmrConverter(freshGapReporter);
+
+        RangerPolicy policy = buildEmrSparkUrlPolicy("hdfs://namenode/data/", "read");
+        CedarPolicySet result = conv.convert(Collections.singletonList(policy));
+
+        assertTrue(result.toCedarString().trim().isEmpty() || !result.toCedarString().contains("DataCatalog::DataLocation"),
+                "HDFS URL must not produce any DataLocation Cedar statement");
+        assertTrue(freshGapReporter.getReport().getEntries().stream()
+                .anyMatch(e -> e.getGapType() == GapType.UNMAPPED_RESOURCE),
+                "HDFS URL must record UNMAPPED_RESOURCE gap");
+    }
+
+    @Test
+    void hive_fileUriDatalocation_skippedWithUnmappedResourceGap() {
+        GapReporter freshGapReporter = new GapReporter();
+        AwsContext hiveCtx = new AwsContext("us-east-1", "123456789012", "123456789012");
+        HiveServiceAdapter hiveAdapter = new HiveServiceAdapter(hiveCtx);
+        Map<String, SourcePolicyAdapter> hiveRegistry = new HashMap<>();
+        hiveRegistry.put("hive", hiveAdapter);
+        RangerToCedarConverter conv = new RangerToCedarConverter(
+                hiveRegistry, new PassthroughPrincipalMapper(),
+                new PassthroughCatalogResolver(), freshGapReporter, new CedarSchemaProvider());
+
+        RangerPolicy policy = buildHiveDatalocationPolicy("file:///projects/2022/data/");
+        CedarPolicySet result = conv.convert(Collections.singletonList(policy));
+
+        assertFalse(result.toCedarString().contains("DataCatalog::DataLocation"),
+                "file:// datalocation must not produce any DataLocation Cedar statement");
+        assertTrue(freshGapReporter.getReport().getEntries().stream()
+                .anyMatch(e -> e.getGapType() == GapType.UNMAPPED_RESOURCE),
+                "file:// datalocation must record UNMAPPED_RESOURCE gap");
+    }
+
+    // --- helpers ---
+
+    private RangerToCedarConverter makeEmrConverter(GapReporter gapReporter) {
+        Map<String, SourcePolicyAdapter> registry = new HashMap<>();
+        registry.put("amazon-emr-spark",
+                new EmrSparkServiceAdapter(new AwsContext("us-east-1", "123456789012", "123456789012")));
+        return new RangerToCedarConverter(registry, new PassthroughPrincipalMapper(),
+                new PassthroughCatalogResolver(), gapReporter, new CedarSchemaProvider());
+    }
+
+    private RangerPolicy buildHiveDatalocationPolicy(String location) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(2001L);
+        policy.setName("test-hive-datalocation");
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource locRes = new RangerPolicyResource();
+        locRes.setValues(List.of(location));
+        resources.put("datalocation", locRes);
+        policy.setResources(resources);
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of("alice"));
+        RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+        access.setType("datalocation");
         access.setIsAllowed(true);
         item.setAccesses(List.of(access));
         policy.setPolicyItems(List.of(item));
