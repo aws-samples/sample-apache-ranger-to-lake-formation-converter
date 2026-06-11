@@ -9,18 +9,21 @@ class PassthroughPrincipalMapperTest {
     private final PassthroughPrincipalMapper mapper = new PassthroughPrincipalMapper();
 
     @Test
-    void resolveUser_returnsRangerUserPrefix() {
-        assertEquals("ranger-user:alice", mapper.resolveUser("alice").orElseThrow());
+    void resolveUser_returnsPlaceholderIamUserArn() {
+        assertEquals("arn:aws:iam::000000000000:user/ranger-user/alice",
+                mapper.resolveUser("alice").orElseThrow());
     }
 
     @Test
-    void resolveGroup_returnsRangerGroupPrefix() {
-        assertEquals("ranger-group:analysts", mapper.resolveGroup("analysts").orElseThrow());
+    void resolveGroup_returnsPlaceholderIamGroupArn() {
+        assertEquals("arn:aws:iam::000000000000:group/ranger-group/analysts",
+                mapper.resolveGroup("analysts").orElseThrow());
     }
 
     @Test
-    void resolveRole_returnsRangerRolePrefix() {
-        assertEquals("ranger-role:admin", mapper.resolveRole("admin").orElseThrow());
+    void resolveRole_returnsPlaceholderIamRoleArn() {
+        assertEquals("arn:aws:iam::000000000000:role/ranger-role/admin",
+                mapper.resolveRole("admin").orElseThrow());
     }
 
     @Test
