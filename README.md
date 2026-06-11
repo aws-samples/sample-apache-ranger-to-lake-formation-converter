@@ -7,10 +7,10 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 
 ## Features
 
-- **Multi-Service Ranger Support**: Simultaneously manage policies from multiple Ranger service types — LakeFormation, Apache Hive, Presto, and Trino — with a unified Cedar policy repository driving Lake Formation permissions.
+- **Multi-Service Ranger Support**: Simultaneously manage policies from multiple Ranger service types — LakeFormation, Apache Hive, EMR Spark, EMRFS, Presto, and Trino — with a unified Cedar policy repository driving Lake Formation permissions.
 - **Bulk Export & Convert**: One-shot extraction of all Ranger policies via REST API, conversion to Lake Formation permissions, and batch application.
 - **Real-Time Sync**: A `RangerBasePlugin` that receives policy updates from Ranger Admin and incrementally applies changes to Lake Formation.
-- **Service Definition Installation**: Custom service types registered in Ranger Admin (lakeformation, hive, presto, trino), enabling policy authoring for Lake Formation resources through the Ranger UI.
+- **Service Definition Installation**: Custom service types registered in Ranger Admin (lakeformation, hive, amazon-emr-spark, amazon-emr-emrfs, presto, trino), enabling policy authoring for Lake Formation resources through the Ranger UI.
 - **Incremental Diff**: Computes deltas between policy snapshots rather than revoking all and re-granting, minimizing Lake Formation API calls.
 - **Wildcard Expansion with Periodic Refresh**: Expands wildcard resource patterns (e.g., `db_*`) against the Glue Data Catalog. A configurable periodic refresh re-evaluates glob patterns to pick up newly created resources without waiting for a Ranger policy push.
 - **Reverse Sync / Drift Detection**: Retrieves actual Lake Formation permissions via `ListPermissions`, computes drift against the Cedar-authoritative state, and applies corrective GRANT/REVOKE operations to reconcile out-of-band changes.
@@ -408,12 +408,14 @@ The plugin supports simultaneous policy sync from multiple Ranger service types.
 
 ### Supported Service Types
 
-| Service Type | Resource Hierarchy | GDC Catalog Filtering |
-|---|---|---|
-| `lakeformation` | database → table → column, data location | No |
-| `hive` | database → table → column | No |
-| `presto` | catalog → schema → table → column | Yes (requires `gdcCatalogName`) |
-| `trino` | catalog → schema → table → column | Yes (requires `gdcCatalogName`) |
+| Service Type | Resource Hierarchy | GDC Catalog Filtering | Output |
+|---|---|---|---|
+| `lakeformation` | database → table → column, data location | No | LF grants |
+| `hive` | database → table → column, datalocation | No | LF grants |
+| `amazon-emr-spark` | database → table → column, url | No | LF grants |
+| `amazon-emr-emrfs` | sthreeresource (S3 paths) | No | S3 Access Grants |
+| `presto` | catalog → schema → table → column | Yes (requires `gdcCatalogName`) | LF grants |
+| `trino` | catalog → schema → table → column | Yes (requires `gdcCatalogName`) | LF grants |
 
 For Presto and Trino, the adapter maps "schema" to "database" in the DataCatalog model and filters policies by the configured `gdcCatalogName`.
 
@@ -482,7 +484,7 @@ Each service adapter translates Ranger access types to Lake Formation permission
 
 ---
 
-#### EMRFS / S3 Access Grants (`amazon-emrfs`)
+#### EMRFS / S3 Access Grants (`amazon-emr-emrfs`)
 
 EMRFS policies do not interact with the Glue Data Catalog. They map S3 object operations directly to **S3 Access Grants** permissions, not Lake Formation permissions.
 
@@ -634,16 +636,6 @@ The gap report is a JSON file listing all unsupported features encountered durin
 
 ## Pre-Migration Assessment Tool
 
-> **Breaking change:** The `assess` CLI now requires a subcommand. Update any scripts using the old syntax:
->
-> ```bash
-> # Before
-> java -jar target/assessment-jar-with-dependencies.jar --ranger-url http://... --console-only
->
-> # After
-> java -jar target/assessment-jar-with-dependencies.jar server --ranger-url http://... --console-only
-> ```
-
 Before setting up the full sync pipeline, run the assessment tool to understand how your existing Ranger policies will migrate. It fetches policies from Ranger Admin, runs the complete conversion pipeline in read-only mode (no AWS Lake Formation calls are made), and produces a console summary plus an optional JSON report.
 
 ### Building
@@ -657,7 +649,7 @@ This produces `target/assessment-jar-with-dependencies.jar` in addition to the m
 ### Usage
 
 ```
-assess server [<config-file>] [options]
+server [<config-file>] [options]
   --ranger-url <url>        Ranger Admin URL (required if no config file)
   --ranger-user <user>      Ranger Admin username
   --ranger-password <pass>  Ranger Admin password
@@ -665,11 +657,13 @@ assess server [<config-file>] [options]
   --output-dir <dir>        Directory for JSON report (default: current dir)
   --aws-region <region>     Enable Glue wildcard expansion with this region
   --console-only            Print report to console only, skip JSON file
+  --skip-validation         Skip Cedar schema validation (required for large policy sets)
 
-assess file <export-file.json> [options]
+file <export-file.json> [options]
   --output-dir <dir>        Directory for JSON report (default: current dir)
   --aws-region <region>     Enable Glue wildcard expansion with this region
   --console-only            Print report to console only, skip JSON file
+  --skip-validation         Skip Cedar schema validation (required for large policy sets)
 ```
 
 ### Obtaining a Ranger Export File
@@ -728,11 +722,24 @@ java -jar target/assessment-jar-with-dependencies.jar \
   --console-only
 ```
 
+**Large policy files (>~10,000 policies):**
+
+For large exports, Cedar schema validation exhausts JVM heap memory. Use `--skip-validation` and increase the heap size:
+
+```bash
+java -Xmx4g -jar target/assessment-jar-with-dependencies.jar \
+  file ./ranger-export.json \
+  --console-only \
+  --skip-validation
+```
+
+When `--skip-validation` is set, Cedar statements are parsed but not validated against the schema. Gap detection and convertibility counts remain accurate; only per-statement schema errors are suppressed.
+
 When `--aws-region` is provided, the tool queries the Glue Data Catalog to expand wildcard resource patterns (e.g., `db_*`) into explicit names before counting projected grants. Without it, wildcards are reported as-is and counted as `WILDCARD_PATTERN` gaps if they cannot be resolved.
 
 #### Principal Mapping in Assessment Mode
 
-When you run `assess file` without a config file, the tool has no information about how
+When you run `file` without a config file, the tool has no information about how
 Ranger usernames map to IAM ARNs. In this case it automatically uses a **passthrough mapper**
 that echoes Ranger names as placeholder identifiers:
 
@@ -752,7 +759,7 @@ requiring IAM configuration upfront. A warning banner is printed at the top of t
 ```
 
 Once you know which policies are convertible, add a `principalMapping` section to your
-config file and re-run with `assess server` to generate accurate LF grant output.
+config file and re-run with `server` to generate accurate LF grant output.
 
 ### Sample Console Output
 
@@ -841,7 +848,7 @@ Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
 | `SECURITY_ZONE` | Policy is scoped to a Ranger Security Zone. LF has no equivalent; the zone attribute is ignored. |
 | `DELEGATED_ADMIN` | Policy item has `delegateAdmin=true`. Partially supported — the flag is recorded but no `WITH GRANT OPTION` is applied to the resulting LF grants. |
 | `WILDCARD_PATTERN` | Resource pattern contains wildcards and could not be expanded (no AWS credentials). **Note:** this gap type is defined but is not currently emitted at runtime — wildcard expansion failures produce a log warning only. |
-| `UNSUPPORTED_SERVICE_TYPE` | No adapter registered for this Ranger service type. In `assess server` mode, the entire policy is skipped. In `assess file` mode, one gap entry is recorded per skipped service (not per policy), and the `details` field includes the count of bypassed policies. |
+| `UNSUPPORTED_SERVICE_TYPE` | No adapter registered for this Ranger service type. In `server` subcommand mode, the entire policy is skipped. In `file` subcommand mode, one gap entry is recorded per skipped service (not per policy), and the `details` field includes the count of bypassed policies. |
 | `UNSUPPORTED_ACTION` | One or more access types have no LF permission mapping. The unsupported action is dropped; other actions in the policy continue. |
 | `UNMAPPED_RESOURCE` | Resource ID cannot be mapped to an LF resource. The resource is skipped. |
 | `SCHEMA_VALIDATION_FAILURE` | A Cedar statement failed schema validation and was excluded. Valid statements in the same policy are retained. |
