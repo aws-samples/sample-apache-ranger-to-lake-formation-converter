@@ -558,7 +558,9 @@ Configure via `wildcardRefreshIntervalSeconds` in the YAML config (set to `0` or
 
 The reverse-sync feature retrieves actual Lake Formation permissions via the `ListPermissions` API, normalizes them into the same `LFPermissionOperation` model, computes a diff against the Cedar-authoritative desired state, and applies corrective operations.
 
-This addresses drift caused by out-of-band changes (console edits, other automation, partial apply failures).
+This addresses two classes of drift:
+- **Out-of-band changes**: console edits, other automation, or partial apply failures that leave LF in a different state than Ranger dictates
+- **Orphaned permissions**: permissions that remain in LF after their Ranger source policy was deleted, including across service restarts
 
 Configure via the `reverseSync` section in the YAML config:
 
@@ -567,11 +569,17 @@ Configure via the `reverseSync` section in the YAML config:
 | `enabled` | Enable the reverse-sync feature | `false` |
 | `reportOnly` | Compute drift report without applying corrections | `false` |
 | `dryRun` | Serialize corrections to JSON instead of applying | `false` |
-| `periodicIntervalMs` | Periodic interval (0 = after each forward-sync only) | `0` |
+| `periodicIntervalMs` | Reserved for future independent scheduling (not currently active — see cadence note below) | `0` |
 | `exclusionFilter.excludedPrincipals` | Principal ARNs to exclude from drift detection | `[]` |
 | `exclusionFilter.excludedResourcePatterns` | Resource patterns to exclude | `[]` |
 
-Corrective operations are ordered REVOKEs-first to avoid transient over-permissioning. Individual failures are logged to the dead-letter log without aborting the remaining batch. An empty Cedar policy set is a safety guard that skips the cycle to prevent mass revocation.
+### Cadence
+
+Reverse sync runs **continuously**, not just at startup. It executes in-band after every forward sync cycle at the same frequency as `policyRefreshIntervalMs` (default 30 seconds). There is currently no mechanism to run reverse sync on a separate cadence; `periodicIntervalMs` is stored and logged but not wired to an independent scheduler. Running it on a different interval (e.g., hourly) is a future enhancement.
+
+### Safety guards
+
+Corrective operations are ordered REVOKEs-first to avoid transient over-permissioning. Individual failures are logged to the dead-letter log without aborting the remaining batch. An empty Cedar policy set skips the entire cycle to prevent mass revocation before the first forward sync cycle completes.
 
 ## Limitations and Unsupported Features
 

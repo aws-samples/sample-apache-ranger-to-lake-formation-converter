@@ -204,4 +204,66 @@ class SyncConfigTest {
         assertEquals(original, deserialized);
         assertEquals(300, deserialized.getWildcardRefreshIntervalSeconds());
     }
+
+    // --- reverseSyncConfig tests ---
+
+    @Test
+    void reverseSyncConfig_defaultsToDisabled() {
+        SyncConfig config = new SyncConfig(null, null, null,
+                null, null, null, null);
+        assertNotNull(config.getReverseSyncConfig());
+        assertFalse(config.getReverseSyncConfig().isEnabled());
+    }
+
+    @Test
+    void reverseSyncConfig_backwardCompatConstructors_allDefaultToDisabled() {
+        SyncConfig a = new SyncConfig(null, null, null, null, null, null, null, null, null);
+        SyncConfig b = new SyncConfig(null, null, null, null, null, null, null, null, null, null);
+        SyncConfig c = new SyncConfig(null, null, null, null, null, null, null, null, null, null, null);
+        SyncConfig d = new SyncConfig(null, null, null, null, null, null, null, null, null, null, null, null);
+        assertFalse(a.getReverseSyncConfig().isEnabled());
+        assertFalse(b.getReverseSyncConfig().isEnabled());
+        assertFalse(c.getReverseSyncConfig().isEnabled());
+        assertFalse(d.getReverseSyncConfig().isEnabled());
+    }
+
+    @Test
+    void reverseSyncConfig_yamlDeserialization() throws Exception {
+        ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n" +
+                "reverseSync:\n" +
+                "  enabled: true\n" +
+                "  reportOnly: false\n";
+
+        SyncConfig config = yamlMapper.readValue(yaml, SyncConfig.class);
+
+        assertNotNull(config.getReverseSyncConfig());
+        assertTrue(config.getReverseSyncConfig().isEnabled());
+        assertFalse(config.getReverseSyncConfig().isReportOnly());
+    }
+
+    @Test
+    void reverseSyncConfig_jsonRoundTrip() throws Exception {
+        ReverseSyncConfig rsc = new ReverseSyncConfig(true, "123456789012", false, false, null, null, 0L);
+        SyncConfig original = new SyncConfig(null, null, null,
+                null, null, null, null, null, null, null, null, null, rsc);
+        String json = mapper.writeValueAsString(original);
+        SyncConfig deserialized = mapper.readValue(json, SyncConfig.class);
+        assertTrue(deserialized.getReverseSyncConfig().isEnabled());
+        assertEquals("123456789012", deserialized.getReverseSyncConfig().getCatalogId());
+    }
+
+    @Test
+    void reverseSyncConfig_includedInEquals() {
+        ReverseSyncConfig rsc = new ReverseSyncConfig(true, null, false, false, null, null, 0L);
+        SyncConfig withRsc = new SyncConfig(null, null, null,
+                null, null, null, null, null, null, null, null, null, rsc);
+        SyncConfig withoutRsc = new SyncConfig(null, null, null,
+                null, null, null, null, null, null, null, null, null, null);
+        assertNotEquals(withRsc, withoutRsc);
+    }
 }

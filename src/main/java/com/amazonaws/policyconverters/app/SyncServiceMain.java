@@ -8,10 +8,16 @@ import com.amazonaws.policyconverters.ranger.CatalogResolver;
 import com.amazonaws.policyconverters.ranger.RangerServiceAdapter;
 import com.amazonaws.policyconverters.ranger.RangerToCedarConverter;
 import com.amazonaws.policyconverters.sync.DeadLetterLogger;
+import com.amazonaws.policyconverters.sync.DriftDetector;
+import com.amazonaws.policyconverters.sync.ReverseSyncService;
 import com.amazonaws.policyconverters.lakeformation.DryRunLakeFormationClient;
 import com.amazonaws.policyconverters.lakeformation.LakeFormationClient;
+import com.amazonaws.policyconverters.lakeformation.LFPermissionFetcher;
+import com.amazonaws.policyconverters.lakeformation.LiveGlueTableLister;
+import com.amazonaws.policyconverters.lakeformation.TableLister;
 import com.amazonaws.policyconverters.config.ConfigLoader;
 import com.amazonaws.policyconverters.config.ConfigValidator;
+import com.amazonaws.policyconverters.config.ReverseSyncConfig;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapper;
 import com.amazonaws.policyconverters.lakeformation.PrincipalMapperFactory;
 import com.amazonaws.policyconverters.config.AwsConfig;
@@ -46,9 +52,14 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Main entry point for the Ranger-LakeFormation sync service.
@@ -198,8 +209,13 @@ public class SyncServiceMain {
             adapterRegistry.put("lakeformation", lfAdapter);
         }
 
+        Set<String> tagServiceNames = new HashSet<>();
+        if (config.getTagSync() != null && config.getTagSync().getTagServiceName() != null) {
+            tagServiceNames.add(config.getTagSync().getTagServiceName());
+        }
+
         RangerToCedarConverter rangerToCedarConverter = new RangerToCedarConverter(
-                adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider);
+                adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider, tagServiceNames);
 
         CedarToLFConverter cedarToLFConverter = new CedarToLFConverter(
                 cedarSchemaProvider, gapReporter, null);
@@ -243,9 +259,43 @@ public class SyncServiceMain {
                 rangerServiceList, rangerToCedarConverter, cedarToLFConverter,
                 lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore, s3AgClient);
 
+        // Wire reverse-sync if enabled in config
+        ReverseSyncConfig reverseSyncConfig = config.getReverseSyncConfig();
+        final ReverseSyncService reverseSyncService;
+        if (reverseSyncConfig.isEnabled()) {
+            LOG.info("Reverse-sync enabled: reportOnly={}, dryRun={}",
+                    reverseSyncConfig.isReportOnly(), reverseSyncConfig.isDryRun());
+            LFPermissionFetcher lfPermissionFetcher = new LFPermissionFetcher(lfSdkClient);
+            DriftDetector driftDetector = new DriftDetector();
+            LakeFormationClient reverseSyncLfClient;
+            if (reverseSyncConfig.isDryRun()) {
+                String outputDir = System.getenv("DRY_RUN_OUTPUT_DIR");
+                if (outputDir == null || outputDir.isBlank()) {
+                    outputDir = "./dry-run-output";
+                }
+                reverseSyncLfClient = new DryRunLakeFormationClient(
+                        Path.of(outputDir), new ObjectMapper());
+            } else {
+                reverseSyncLfClient = lakeFormationClient;
+            }
+            reverseSyncService = new ReverseSyncService(
+                    lfPermissionFetcher, driftDetector, reverseSyncLfClient,
+                    cedarToLFConverter, deadLetterLogger);
+        } else {
+            reverseSyncService = null;
+        }
+
+        // Scheduled executor drives the sync cycle loop
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "sync-cycle");
+            t.setDaemon(true);
+            return t;
+        });
+
         // Register shutdown hook for graceful termination
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.info("Shutdown signal received, stopping Sync Service");
+            scheduler.shutdown();
             syncService.stop();
             try {
                 deadLetterWriter.close();
@@ -269,11 +319,32 @@ public class SyncServiceMain {
             service.init();
         }
 
-        // Start the sync service (begins listening for policy updates)
+        // Start the sync service
         syncService.start(config);
 
-        LOG.info("Ranger-LakeFormation Sync Service is running. "
-                + "First policy refresh will perform bulk sync from empty snapshot.");
+        // Schedule the recurring sync cycle
+        long intervalMs = config.getPolicyRefreshIntervalMs();
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                syncService.executeSyncCycle();
+
+                if (reverseSyncService != null && reverseSyncConfig.isEnabled()) {
+                    try {
+                        com.amazonaws.policyconverters.cedar.CedarPolicySet cedarPolicySet =
+                                syncService.getLastCedarPolicySet();
+                        if (cedarPolicySet != null) {
+                            reverseSyncService.execute(reverseSyncConfig, cedarPolicySet);
+                        }
+                    } catch (Exception e) {
+                        LOG.error("Reverse-sync cycle failed: {}", e.getMessage(), e);
+                    }
+                }
+            } catch (Exception e) {
+                LOG.error("Sync cycle failed: {}", e.getMessage(), e);
+            }
+        }, 0, intervalMs, TimeUnit.MILLISECONDS);
+
+        LOG.info("Ranger-LakeFormation Sync Service is running. Cycle interval={}ms.", intervalMs);
 
         // Block the main thread until shutdown signal is received
         KEEP_ALIVE_LATCH.await();

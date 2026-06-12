@@ -1007,7 +1007,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
                 if (op.type() != com.amazonaws.policyconverters.s3accessgrants.OperationType.GRANT) {
                     op = new S3AccessGrantOperation(
                             com.amazonaws.policyconverters.s3accessgrants.OperationType.GRANT,
-                            op.principalArn(), op.s3Prefix(), op.permission(), op.grantId());
+                            op.principalArn(), op.s3Prefix(), op.permission(), op.grantId(),
+                            op.sourcePolicyId());
                 }
                 newGrants.add(op);
             }
@@ -1019,7 +1020,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
                 S3AccessGrantOperation op = entry.getValue();
                 revocations.add(new S3AccessGrantOperation(
                         com.amazonaws.policyconverters.s3accessgrants.OperationType.REVOKE,
-                        op.principalArn(), op.s3Prefix(), op.permission(), op.grantId()));
+                        op.principalArn(), op.s3Prefix(), op.permission(), op.grantId(),
+                        op.sourcePolicyId()));
             }
         }
 
