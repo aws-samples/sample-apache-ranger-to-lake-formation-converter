@@ -6,7 +6,6 @@ rangerConfig:
 awsConfig:
   region: "us-west-2"
   catalogId: "427250191192"
-  roleArn: "arn:aws:iam::427250191192:role/RangerLFSyncRole"
 
 principalMapping:
   userMappings:

@@ -109,6 +109,7 @@ public class EmrSparkPolicyGenerator implements PolicyGenerator {
 
     /**
      * Generate a table-level policy with a deny item.
+     * amazon-emr-spark requires database+table+column; wildcard column covers all columns.
      */
     public Map<String, Object> generateDenyTablePolicy(String policyId) {
         String db = randomFrom(databases);
@@ -119,6 +120,7 @@ public class EmrSparkPolicyGenerator implements PolicyGenerator {
         Map<String, Object> resources = new LinkedHashMap<>();
         resources.put("database", Map.of("values", List.of(db),    "isExcludes", false));
         resources.put("table",    Map.of("values", List.of(table), "isExcludes", false));
+        resources.put("column",   Map.of("values", List.of("*"),   "isExcludes", false));
 
         return Map.of(
                 "name", "sim-emrspark-" + policyId,
@@ -137,6 +139,7 @@ public class EmrSparkPolicyGenerator implements PolicyGenerator {
         Map<String, Object> resources = new LinkedHashMap<>();
         resources.put("database", Map.of("values", List.of(db),    "isExcludes", false));
         resources.put("table",    Map.of("values", List.of(table), "isExcludes", false));
+        resources.put("column",   Map.of("values", List.of("*"),   "isExcludes", false));
 
         return Map.of(
                 "name", "sim-emrspark-" + policyId,

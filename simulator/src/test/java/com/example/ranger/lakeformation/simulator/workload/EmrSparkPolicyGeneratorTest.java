@@ -22,7 +22,7 @@ class EmrSparkPolicyGeneratorTest {
         return new EmrSparkPolicyGenerator(DB_TABLES, PRINCIPALS, SERVICE_NAME, new Random(seed));
     }
 
-    // 1. Table policy: contains database and table resource keys, no column key
+    // 1. Table policy: contains database, table, and wildcard column (amazon-emr-spark requires all three)
     @Test
     void generateTablePolicy_hasExpectedStructure() {
         Map<String, Object> policy = generator(1).generateTablePolicy("p1");
@@ -33,7 +33,10 @@ class EmrSparkPolicyGeneratorTest {
         Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
         assertTrue(resources.containsKey("database"), "must have 'database' resource key");
         assertTrue(resources.containsKey("table"),    "must have 'table' resource key");
-        assertFalse(resources.containsKey("column"),  "table policy must not have 'column' key");
+        assertTrue(resources.containsKey("column"),   "must have 'column' resource key (wildcard *)");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> colRes = (Map<String, Object>) resources.get("column");
+        assertEquals(List.of("*"), colRes.get("values"), "table policy column must be wildcard *");
     }
 
     // 2. Table policy: access type is from the valid EMR Spark catalog set
