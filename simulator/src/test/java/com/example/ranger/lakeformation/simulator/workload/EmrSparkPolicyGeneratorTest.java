@@ -56,15 +56,21 @@ class EmrSparkPolicyGeneratorTest {
         }
     }
 
-    // 3. Database policy: has only database key, no table or column
+    // 3. Database policy: has database, table=*, column=* (amazon-emr-spark requires all three)
     @Test
-    void generateDatabasePolicy_hasOnlyDatabaseResource() {
+    void generateDatabasePolicy_hasAllThreeResourcesWithWildcards() {
         Map<String, Object> policy = generator(2).generateDatabasePolicy("p2");
         @SuppressWarnings("unchecked")
         Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
         assertTrue(resources.containsKey("database"), "must have 'database' resource key");
-        assertFalse(resources.containsKey("table"),  "database policy must not have 'table' key");
-        assertFalse(resources.containsKey("column"), "database policy must not have 'column' key");
+        assertTrue(resources.containsKey("table"),    "must have 'table' resource key (wildcard)");
+        assertTrue(resources.containsKey("column"),   "must have 'column' resource key (wildcard)");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> tableRes = (Map<String, Object>) resources.get("table");
+        assertEquals(List.of("*"), tableRes.get("values"), "table must be wildcard *");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> colRes = (Map<String, Object>) resources.get("column");
+        assertEquals(List.of("*"), colRes.get("values"), "column must be wildcard *");
     }
 
     // 4. Column policy: has database, table, and column resource keys

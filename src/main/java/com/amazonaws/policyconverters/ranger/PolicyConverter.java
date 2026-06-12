@@ -43,14 +43,22 @@ public class PolicyConverter {
     private static final Logger LOG = LoggerFactory.getLogger(PolicyConverter.class);
 
     private final String catalogId;
+    private final Set<String> tagServiceNames;
 
     /**
      * Create a PolicyConverter with the given AWS Glue catalog ID.
-     *
-     * @param catalogId the AWS Glue Data Catalog ID to use in LFResource objects
      */
     public PolicyConverter(String catalogId) {
+        this(catalogId, Set.of());
+    }
+
+    /**
+     * Create a PolicyConverter with an explicit set of tag service instance names.
+     * Policies whose service name is in this set are recorded as TAG_BASED_POLICY gaps.
+     */
+    public PolicyConverter(String catalogId, Set<String> tagServiceNames) {
         this.catalogId = catalogId;
+        this.tagServiceNames = tagServiceNames != null ? Set.copyOf(tagServiceNames) : Set.of();
     }
 
     /**
@@ -276,10 +284,9 @@ public class PolicyConverter {
     private boolean isTagBasedPolicy(RangerPolicy policy) {
         // policyType: 0=Access, 1=Datamask, 2=RowFilter
         // Tag-based policies are typically identified by the service type containing "tag"
-        if (policy.getService() != null && policy.getService().toLowerCase().contains("tag")) {
-            return true;
-        }
-        return false;
+        String svc = policy.getService();
+        if (svc == null) return false;
+        return tagServiceNames.contains(svc) || svc.toLowerCase().contains("tag");
     }
 
     /**

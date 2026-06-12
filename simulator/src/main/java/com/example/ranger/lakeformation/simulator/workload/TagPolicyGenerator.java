@@ -3,7 +3,7 @@ package com.example.ranger.lakeformation.simulator.workload;
 import java.util.*;
 
 /**
- * Generates tag-based Ranger policy payloads.
+ * Generates tag-based Ranger policy payloads targeting the Atlas tag service.
  * Service name contains "tag" → these produce NO LF grants (gap recording only).
  * Used to verify the simulator correctly sees zero LF permissions for tag policies.
  */
@@ -17,10 +17,6 @@ public class TagPolicyGenerator implements PolicyGenerator {
 
     public TagPolicyGenerator(List<String> tagKeys, List<String> principalNames,
                               String tagServiceName, Random random) {
-        // Enforce that the service name contains "tag" so the gap path fires
-        if (!tagServiceName.toLowerCase(Locale.ROOT).contains("tag")) {
-            throw new IllegalArgumentException("tagServiceName must contain 'tag': " + tagServiceName);
-        }
         this.tagKeys = tagKeys.isEmpty() ? SAMPLE_TAGS : List.copyOf(tagKeys);
         this.principalNames = List.copyOf(principalNames);
         this.tagServiceName = tagServiceName;

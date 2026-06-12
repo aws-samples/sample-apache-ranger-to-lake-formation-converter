@@ -19,7 +19,7 @@ public class SimulatorConfig {
     private static final String DEFAULT_TRINO_SERVICE_NAME     = "trino";
     private static final String DEFAULT_EMRFS_SERVICE_NAME     = "emrfs";
     private static final String DEFAULT_EMR_SPARK_SERVICE_NAME = "amazon-emr-spark";
-    private static final String DEFAULT_TAG_SERVICE_NAME       = "cl_tag";
+    private static final String DEFAULT_TAG_SERVICE_NAME       = "Atlas";
     private static final List<String> DEFAULT_S3_PREFIXES  =
             List.of("s3://my-bucket/data/", "s3://my-bucket/logs/");
 
@@ -48,6 +48,8 @@ public class SimulatorConfig {
     private final List<String> s3Prefixes;
     /** Optional IAM role ARN to assume for all AWS API calls. If null, uses the default credential chain. */
     private final String roleArn;
+    /** Optional AWS credentials profile name. Takes precedence over roleArn when set. */
+    private final String awsProfile;
     /**
      * When true, EMR Spark policies are included in Phase2 validation (requires the sync service
      * to be configured with amazon-emr-spark in its rangerServices list). Default: false.
@@ -76,7 +78,8 @@ public class SimulatorConfig {
             @JsonProperty("tagServiceName")          String  tagServiceName,
             @JsonProperty("s3Prefixes")              List<String> s3Prefixes,
             @JsonProperty("roleArn")                 String  roleArn,
-            @JsonProperty("validateEmrSpark")        Boolean validateEmrSpark) {
+            @JsonProperty("validateEmrSpark")        Boolean validateEmrSpark,
+            @JsonProperty("awsProfile")              String  awsProfile) {
         this.cycleIntervalSeconds = cycleIntervalSeconds != null ? cycleIntervalSeconds : DEFAULT_CYCLE_INTERVAL_SECONDS;
         this.awsRegion = awsRegion != null ? awsRegion : DEFAULT_AWS_REGION;
         this.rangerAdminUrl = rangerAdminUrl;
@@ -100,6 +103,7 @@ public class SimulatorConfig {
                                 : DEFAULT_S3_PREFIXES;
         this.roleArn = (roleArn != null && !roleArn.isBlank()) ? roleArn : null;
         this.validateEmrSpark = Boolean.TRUE.equals(validateEmrSpark);
+        this.awsProfile = (awsProfile != null && !awsProfile.isBlank()) ? awsProfile : null;
     }
 
     public int getCycleIntervalSeconds() { return cycleIntervalSeconds; }
@@ -124,6 +128,8 @@ public class SimulatorConfig {
     public List<String> getS3Prefixes()       { return s3Prefixes; }
     /** Returns the IAM role ARN to assume, or null to use the default credential chain. */
     public String getRoleArn()                { return roleArn; }
+    /** Returns the AWS profile name, or null to use the default credential chain. */
+    public String getAwsProfile()             { return awsProfile; }
     /** Returns true if EMR Spark policies should be included in Phase2 LF validation. */
     public boolean isValidateEmrSpark()       { return validateEmrSpark; }
 

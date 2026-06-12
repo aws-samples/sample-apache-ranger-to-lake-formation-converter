@@ -35,13 +35,11 @@ class TagPolicyGeneratorTest {
                 "service name should contain 'tag', was: " + serviceName);
     }
 
-    // 2. Constructor throws IllegalArgumentException when service name doesn't contain "tag"
+    // 2. Constructor accepts any service name (sync service uses explicit name matching, not heuristics)
     @Test
-    void constructor_throwsWhenServiceNameMissingTag() {
-        assertThrows(IllegalArgumentException.class, () ->
-                new TagPolicyGenerator(TAG_KEYS, PRINCIPALS, "hive", new Random(0)),
-                "Should throw IllegalArgumentException when tagServiceName does not contain 'tag'"
-        );
+    void constructor_acceptsAnyServiceName() {
+        assertDoesNotThrow(() -> new TagPolicyGenerator(TAG_KEYS, PRINCIPALS, "Atlas", new Random(0)));
+        assertDoesNotThrow(() -> new TagPolicyGenerator(TAG_KEYS, PRINCIPALS, "hive", new Random(0)));
     }
 
     // 4. No "id" key in payload — Ranger rejects string 'id' fields

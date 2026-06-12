@@ -79,8 +79,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -274,6 +276,12 @@ public class ConversionServerMain {
         List<RangerServiceConfig> rangerServiceConfigs = syncConfig.getRangerServices();
         boolean multiServiceMode = rangerServiceConfigs != null && !rangerServiceConfigs.isEmpty();
 
+        // Collect tag service names from config so converters can detect them by name, not heuristic
+        Set<String> tagServiceNames = new HashSet<>();
+        if (syncConfig.getTagSync() != null && syncConfig.getTagSync().getTagServiceName() != null) {
+            tagServiceNames.add(syncConfig.getTagSync().getTagServiceName());
+        }
+
         RangerPlugin plugin = null;
         SyncService syncService;
         Map<String, SourcePolicyAdapter> adapterRegistry = new HashMap<>();
@@ -297,7 +305,7 @@ public class ConversionServerMain {
             }
 
             RangerToCedarConverter rangerToCedarConverter = new RangerToCedarConverter(
-                    adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider);
+                    adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider, tagServiceNames);
 
             S3AccessGrantsClient s3AgClient = syncConfig.getS3AccessGrants() != null
                     ? new S3AccessGrantsClient(syncConfig.getS3AccessGrants(), deadLetterLogger)
@@ -326,7 +334,7 @@ public class ConversionServerMain {
             allAdapters.add(lfAdapter);
 
             RangerToCedarConverter rangerToCedarConverter = new RangerToCedarConverter(
-                    adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider);
+                    adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider, tagServiceNames);
 
             plugin = new RangerPlugin();
             syncService = new SyncService(

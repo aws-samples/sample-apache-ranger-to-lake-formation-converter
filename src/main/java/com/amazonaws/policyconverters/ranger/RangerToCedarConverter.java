@@ -48,6 +48,7 @@ public class RangerToCedarConverter {
     private final CatalogResolver catalogResolver;
     private final GapReporter gapReporter;
     private final CedarSchemaProvider schemaProvider;
+    private final Set<String> tagServiceNames;
     private boolean skipCedarValidation = false;
 
     public RangerToCedarConverter(Map<String, SourcePolicyAdapter> adapterRegistry,
@@ -55,11 +56,21 @@ public class RangerToCedarConverter {
                                   CatalogResolver catalogResolver,
                                   GapReporter gapReporter,
                                   CedarSchemaProvider schemaProvider) {
+        this(adapterRegistry, principalMapper, catalogResolver, gapReporter, schemaProvider, Set.of());
+    }
+
+    public RangerToCedarConverter(Map<String, SourcePolicyAdapter> adapterRegistry,
+                                  PrincipalMapper principalMapper,
+                                  CatalogResolver catalogResolver,
+                                  GapReporter gapReporter,
+                                  CedarSchemaProvider schemaProvider,
+                                  Set<String> tagServiceNames) {
         this.adapterRegistry = adapterRegistry;
         this.principalMapper = principalMapper;
         this.catalogResolver = catalogResolver;
         this.gapReporter = gapReporter;
         this.schemaProvider = schemaProvider;
+        this.tagServiceNames = tagServiceNames != null ? Set.copyOf(tagServiceNames) : Set.of();
     }
 
     public void setSkipCedarValidation(boolean skip) {
@@ -131,8 +142,8 @@ public class RangerToCedarConverter {
             return Collections.emptyList();
         }
 
-        // Check for tag-based policy
-        if (serviceType.toLowerCase().contains("tag")) {
+        // Check for tag-based policy — match by explicit name set or "tag" in the name as fallback
+        if (tagServiceNames.contains(serviceType) || serviceType.toLowerCase().contains("tag")) {
             gapReporter.recordGap(new GapEntry(
                     policyId, policyName, GapType.TAG_BASED_POLICY,
                     buildResourcePath(policy),

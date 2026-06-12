@@ -27,16 +27,18 @@ public class WorkloadOrchestrator {
     private static final int WEIGHT_DELETE  = 90;
 
     private final List<String> existingPolicyIds;
+    private final Map<String, GeneratorEntry> policyIdToGenerator;
     private final List<GeneratorEntry> generators;
     private final int totalWeight;
     private final Random random;
 
     public WorkloadOrchestrator(List<String> existingPolicyIds,
                                 List<GeneratorEntry> generators, Random random) {
-        this.existingPolicyIds = new ArrayList<>(existingPolicyIds);
-        this.generators        = List.copyOf(generators);
-        this.totalWeight       = generators.stream().mapToInt(GeneratorEntry::weight).sum();
-        this.random            = random;
+        this.existingPolicyIds   = new ArrayList<>(existingPolicyIds);
+        this.policyIdToGenerator = new HashMap<>();
+        this.generators          = List.copyOf(generators);
+        this.totalWeight         = generators.stream().mapToInt(GeneratorEntry::weight).sum();
+        this.random              = random;
     }
 
     public List<MutationOperation> generateBatch() {
@@ -59,12 +61,13 @@ public class WorkloadOrchestrator {
             String newId = entry.name() + "-sim-" + Long.toUnsignedString(random.nextLong(), 36);
             Map<String, Object> payload = entry.generator().generate(newId);
             existingPolicyIds.add(newId);
+            policyIdToGenerator.put(newId, entry);
             return new MutationOperation.CreatePolicy(Instant.now(), newId, payload);
         }
         if (existingPolicyIds.isEmpty()) return null;
         if (roll < WEIGHT_UPDATE) {
-            GeneratorEntry entry = pickGenerator();
             String id = randomFrom(existingPolicyIds);
+            GeneratorEntry entry = policyIdToGenerator.getOrDefault(id, pickGenerator());
             Map<String, Object> payload = entry.generator().generate(id);
             return new MutationOperation.UpdatePolicy(Instant.now(), id, payload);
         }
@@ -79,6 +82,7 @@ public class WorkloadOrchestrator {
         if (roll < WEIGHT_DELETE) {
             String id = randomFrom(existingPolicyIds);
             existingPolicyIds.remove(id);
+            policyIdToGenerator.remove(id);
             return new MutationOperation.DeletePolicy(Instant.now(), id);
         }
         return null;

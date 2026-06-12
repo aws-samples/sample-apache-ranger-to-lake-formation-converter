@@ -9,3 +9,4 @@ deploy/.env
 deploy/server-config-deploy.yaml
 .worktrees/
 Ranger_Policies_*
+dead-letter.log

@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.glue.GlueClient;
 import software.amazon.awssdk.services.lakeformation.LakeFormationClient;
@@ -186,6 +187,10 @@ public class SimulatorMain {
     }
 
     private static AwsCredentialsProvider buildCredentialsProvider(SimulatorConfig config, Region region) {
+        if (config.getAwsProfile() != null) {
+            LOG.info("Using AWS profile credentials: profile={}", config.getAwsProfile());
+            return ProfileCredentialsProvider.create(config.getAwsProfile());
+        }
         if (config.getRoleArn() != null) {
             LOG.info("Using STS AssumeRole credentials: roleArn={}", config.getRoleArn());
             StsClient stsClient = StsClient.builder()

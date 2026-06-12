@@ -75,19 +75,32 @@ The sync service merges policies from **all configured Ranger services** into a 
 
 ## Generators
 
-The simulator generates policies from nine generators with weighted random selection (weights sum to 100):
+The simulator generates policies from 18 generators with weighted random selection (weights sum to 115). Percentages are approximate.
 
-| Generator | Weight | Config field (default) | Notes |
-|-----------|--------|------------------------|-------|
-| `HivePolicyGenerator` — table | 33% | `rangerServiceName` (`lakeformation`) | Single-user table-level allow policies |
-| `HivePolicyGenerator` — multi-user | 10% | `rangerServiceName` (`lakeformation`) | 2–3 users in one policy item |
-| `TrinoServiceGenerator` | 20% | `trinoServiceName` (`trino`) | Uses `catalog`/`schema`/`table`; ~20% include deny items |
-| `DataLocationPolicyGenerator` | 12% | `rangerServiceName` (`lakeformation`) | S3 prefix `data_location_access` policies |
-| `TagPolicyGenerator` | 8% | `tagServiceName` (`cl_tag`) | Tag-based policies (recorded as coverage gaps, not validated) |
-| `EmrfsPolicyGenerator` | 5% | `emrfsServiceName` (`emrfs`) | S3 Access Grants policies |
-| `HivePolicyGenerator` — database | 5% | `rangerServiceName` (`lakeformation`) | Database-level `CREATE_TABLE`/`DROP` policies |
-| `HivePolicyGenerator` — column | 5% | `rangerServiceName` (`lakeformation`) | Column-scoped `TABLE_WITH_COLUMNS SELECT` policies |
-| `HivePolicyGenerator` — unmapped principal | 2% | `rangerServiceName` (`lakeformation`) | Uses `ghost_user` (absent from `principalMappings`); validates zero-grant safety |
+| Key | Generator | Weight | Config field (default) | Notes |
+|-----|-----------|--------|------------------------|-------|
+| `hive` | `HivePolicyGenerator` — table | 25 (~22%) | `rangerServiceName` (`lakeformation`) | Single-user table-level allow policies |
+| `hive-multi` | `HivePolicyGenerator` — multi-user | 10 (~9%) | `rangerServiceName` (`lakeformation`) | 2–3 users in one policy item |
+| `trino` | `TrinoServiceGenerator` | 16 (~14%) | `trinoServiceName` (`trino`) | Uses `catalog`/`schema`/`table`; ~20% include deny items |
+| `datalocation` | `DataLocationPolicyGenerator` | 12 (~10%) | `rangerServiceName` (`lakeformation`) | S3 prefix `data_location_access` policies |
+| `tag` | `TagPolicyGenerator` | 8 (~7%) | `tagServiceName` (`cl_tag`) | Tag-based policies (recorded as coverage gaps, not validated) |
+| `emrfs` | `EmrfsPolicyGenerator` | 5 (~4%) | `emrfsServiceName` (`emrfs`) | S3 Access Grants policies |
+| `hive-db` | `HivePolicyGenerator` — database | 5 (~4%) | `rangerServiceName` (`lakeformation`) | Database-level `CREATE_TABLE`/`DROP` policies |
+| `hive-col` | `HivePolicyGenerator` — column | 5 (~4%) | `rangerServiceName` (`lakeformation`) | Column-scoped `TABLE_WITH_COLUMNS SELECT` policies |
+| `hive-unmapped` | `HivePolicyGenerator` — unmapped principal | 2 (~2%) | `rangerServiceName` (`lakeformation`) | Uses `ghost_user` (absent from `principalMappings`); validates zero-grant safety |
+| `hive-grantable` | `HivePolicyGenerator` — grantable | 3 (~3%) | `rangerServiceName` (`lakeformation`) | `delegateAdmin=true` table-level policies; validates `WITH GRANT OPTION` |
+| `hive-wildcard` | `HivePolicyGenerator` — wildcard | 3 (~3%) | `rangerServiceName` (`lakeformation`) | `table="*"` wildcard; validated via static table map expansion |
+| `hive-deny` | `HivePolicyGenerator` — deny | 4 (~3%) | `rangerServiceName` (`lakeformation`) | Deny-only policies (`denyPolicyItems`); net LF grants must be zero |
+| `hive-group` | `HivePolicyGenerator` — group | 1 (~1%) | `rangerServiceName` (`lakeformation`) | Group principal (must resolve via `principalMappings`) |
+| `hive-role` | `HivePolicyGenerator` — role | 1 (~1%) | `rangerServiceName` (`lakeformation`) | Role principal (must resolve via `principalMappings`) |
+| `emrspark` | `EmrSparkPolicyGenerator` — table | 8 (~7%) | `emrSparkServiceName` (`amazon-emr-spark`) | EMR Spark table-level policies; validated only when `validateEmrSpark=true` |
+| `emrspark-db` | `EmrSparkPolicyGenerator` — database | 3 (~3%) | `emrSparkServiceName` (`amazon-emr-spark`) | EMR Spark database-level policies |
+| `emrspark-col` | `EmrSparkPolicyGenerator` — column | 2 (~2%) | `emrSparkServiceName` (`amazon-emr-spark`) | EMR Spark column-level (`TABLE_WITH_COLUMNS`) policies |
+| `emrspark-deny` | `EmrSparkPolicyGenerator` — deny | 2 (~2%) | `emrSparkServiceName` (`amazon-emr-spark`) | EMR Spark deny-only policies |
+
+> **Note:** The `hive-all` generator (`generateAllAccessTablePolicy`) exists in `HivePolicyGenerator` but is **not wired** because the `lakeformation` Ranger service definition rejects `"all"` as an access type. It is preserved for future use against a `hive`-type service.
+
+> **EMR Spark validation:** EMR Spark generators always emit policies to Ranger, but `Phase2CorrectnessValidator` only checks LF grants for EMR Spark when `validateEmrSpark: true` in the simulator config. This requires the sync service's `rangerServices` list to include `amazon-emr-spark`. By default (`validateEmrSpark: false`), EMR Spark policies are generated and applied to Ranger but excluded from correctness checks.
 
 ---
 
@@ -328,10 +341,15 @@ tagSync:
   "cycleIntervalSeconds": 30,
   "awsRegion": "us-west-2",
   "awsAccountId": "427250191192",
+  "roleArn": "arn:aws:iam::427250191192:role/RangerLFSyncRole",
   "rangerAdminUrl": "http://localhost:6080",
   "rangerAdminUser": "admin",
   "rangerAdminPassword": "rangerR0cks!",
   "rangerServiceName": "lakeformation",
+  "trinoServiceName": "trino",
+  "emrfsServiceName": "emrfs",
+  "emrSparkServiceName": "amazon-emr-spark",
+  "tagServiceName": "cl_tag",
   "principalPool": ["analyst", "etl_user", "data_admin", "viewer"],
   "principalMappings": {
     "analyst":    "arn:aws:iam::427250191192:role/ranger-sim-analyst",
@@ -342,7 +360,8 @@ tagSync:
   "cycleWaitTimeoutSeconds": 120,
   "statusHost": "localhost",
   "statusPort": 18080,
-  "reproductionBundleDir": "/tmp/ranger-sim/bundles"
+  "reproductionBundleDir": "/tmp/ranger-sim/bundles",
+  "validateEmrSpark": false
 }
 ```
 
@@ -356,7 +375,11 @@ tagSync:
 | `rangerAdminUrl` | Ranger Admin base URL | required |
 | `rangerAdminUser` | Ranger Admin username | required |
 | `rangerAdminPassword` | Ranger Admin password | required |
-| `rangerServiceName` | Ranger service instance name to mutate | `"lakeformation"` |
+| `rangerServiceName` | Ranger service instance name for Hive/LF generators | `"lakeformation"` |
+| `trinoServiceName` | Ranger service instance name for Trino generators | `"trino"` |
+| `emrfsServiceName` | Ranger service instance name for EMRFS generators | `"emrfs"` |
+| `emrSparkServiceName` | Ranger service instance name for EMR Spark generators | `"amazon-emr-spark"` |
+| `tagServiceName` | Ranger service instance name for tag generators | `"cl_tag"` |
 | `principalPool` | Ranger usernames to use in generated policies; if empty, falls back to `principalMappings` keys | `[]` |
 | `principalMappings` | Ranger username → IAM role ARN; used to filter LF actual permissions and as the oracle for expected permissions | `{}` |
 | `cycleWaitTimeoutSeconds` | Max seconds to wait for a sync cycle after mutations | `300` |
@@ -364,6 +387,9 @@ tagSync:
 | `statusPort` | Port of the sync service `GET /status` endpoint | `18080` |
 | `reproductionBundleDir` | Directory for violation bundles and mutation log | `"reproduction-bundles"` |
 | `databases` | Optional map of `db → [table, ...]`. When present, used directly instead of querying the Glue catalog. Useful for offline testing or restricting the simulator to a subset of tables. | `null` (Glue discovery) |
+| `s3Prefixes` | S3 prefix list used by `DataLocationPolicyGenerator` and `EmrfsPolicyGenerator` | `["s3://my-bucket/data/", "s3://my-bucket/logs/"]` |
+| `roleArn` | IAM role ARN to assume for all AWS API calls (LF, Glue, S3 Control). If absent, uses the default credential chain. | `null` |
+| `validateEmrSpark` | When `true`, includes EMR Spark LF grants in Phase2 correctness checks. Requires the sync service to have `amazon-emr-spark` in its `rangerServices` list. | `false` |
 
 ---
 
@@ -398,7 +424,7 @@ curl -s -u admin:rangerR0cks! http://localhost:6080/service/public/v2/api/servic
 
 ### Step 2.5 — Provision simulator Ranger services and Glue tables
 
-The simulator requires `trino` and `emrfs` Ranger service instances in addition to the `lakeformation` and `cl_tag` instances provisioned by the integration-test stack. Run both setup scripts once after the stack is healthy:
+The simulator requires `trino`, `emrfs`, and `amazon-emr-spark` Ranger service instances in addition to the `lakeformation` and `cl_tag` instances provisioned by the integration-test stack. Run both setup scripts once after the stack is healthy:
 
 ```bash
 # Provision the Ranger service instances (requires Ranger Admin access)
@@ -409,13 +435,20 @@ simulator/scripts/setup-ranger-services.sh --ranger-url http://localhost:6080
 simulator/scripts/setup-glue-tables.sh --region $REGION
 ```
 
-Both scripts are idempotent — re-running them on an already-provisioned environment is safe. After `setup-ranger-services.sh` completes, verify all four Ranger services are registered:
+Both scripts are idempotent — re-running them on an already-provisioned environment is safe. After `setup-ranger-services.sh` completes, verify all five Ranger services are registered:
 
 ```bash
 curl -s -u admin:rangerR0cks! http://localhost:6080/service/public/v2/api/service \
   | python3 -c "import sys,json; print([s['name'] for s in json.load(sys.stdin)])"
-# → ['lakeformation', 'cl_tag', 'trino', 'emrfs']
+# → ['lakeformation', 'cl_tag', 'trino', 'emrfs', 'amazon-emr-spark']
 ```
+
+> **Note:** `setup-ranger-services.sh` currently provisions `trino` and `emrfs` only. The `amazon-emr-spark` service instance is provisioned by the integration-test stack's `setup-ranger-services.sh` script. If it is missing, create it manually:
+> ```bash
+> curl -s -u admin:rangerR0cks! -X POST http://localhost:6080/service/public/v2/api/service \
+>   -H "Content-Type: application/json" \
+>   -d '{"name":"amazon-emr-spark","type":"amazon-emr-spark","configs":{}}'
+> ```
 
 Alternatively, use the Maven `run-simulator` profile (Step 4 below) which runs `setup-ranger-services.sh` automatically before launching the simulator jar. You still need to run `setup-glue-tables.sh` manually if the Glue tables have not been created yet.
 
@@ -488,6 +521,54 @@ tail -f /tmp/simulator.log | grep -E \
 tail -f /tmp/sync-service.log &
 tail -f /tmp/simulator.log
 ```
+
+### Clean restart (wiping all state)
+
+To start from a known-clean state — no Ranger policies, no LF permissions, no checkpoint:
+
+```bash
+# 1. Stop running processes
+pkill -f "ranger-lakeformation-simulator"
+pkill -f "ranger-lakeformation-plugin"
+
+# 2. Delete all simulator Ranger policies
+for SVC in lakeformation cl_tag trino emrfs amazon-emr-spark; do
+  curl -s -u admin:rangerR0cks! \
+    "http://localhost:6080/service/public/v2/api/policy?serviceName=${SVC}&pageSize=200" \
+    | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+items = d if isinstance(d, list) else d.get('vXPolicies', [])
+for p in items: print(p['id'])
+" | while read -r ID; do
+    curl -s -o /dev/null -w "DELETE $SVC/$ID → %{http_code}\n" -X DELETE \
+      -u admin:rangerR0cks! \
+      "http://localhost:6080/service/public/v2/api/policy/${ID}"
+  done
+done
+
+# 3. Revoke all LF permissions for ranger-sim-* principals
+aws lakeformation list-permissions --region "$REGION" --output json \
+  | python3 -c "
+import sys, json, subprocess
+data = json.load(sys.stdin)
+perms = [p for p in data.get('PrincipalResourcePermissions', [])
+         if 'ranger-sim' in p.get('Principal',{}).get('DataLakePrincipalIdentifier','')]
+for p in perms:
+    subprocess.run(['aws', 'lakeformation', 'revoke-permissions',
+                    '--region', '$REGION',
+                    '--principal', json.dumps(p['Principal']),
+                    '--resource', json.dumps(p['Resource']),
+                    '--permissions', *p['Permissions']])
+    print('Revoked', p['Principal']['DataLakePrincipalIdentifier'].split('/')[-1])
+"
+
+# 4. Clear local checkpoint and bundles
+rm -f /tmp/ranger-sim/sync-checkpoint.json /tmp/ranger-sim/dead-letter.jsonl
+rm -rf /tmp/ranger-sim/bundles && mkdir -p /tmp/ranger-sim/bundles
+```
+
+Then proceed from Step 3 to restart the sync service and simulator.
 
 ### Step 6 — Stop everything
 
@@ -740,15 +821,19 @@ The following scenarios are not currently exercised by the simulator. Each repre
 | Re-enabled policy restores LF grant | ✅ |
 | Deleted policy revokes LF grant | ✅ |
 | GDC table/database deletion with live Ranger policy | ❌ |
-| Wildcard table policies (`*`, `events_*`) | ✅ (`hive-wildcard`, 3%) |
-| Database-level policies | ✅ |
-| Column-level policies | ✅ |
-| Deny policies (single-service) | ✅ (`hive-deny`, 4%) |
+| Wildcard table policies (`*`) | ✅ (`hive-wildcard`, ~3%) |
+| Database-level policies | ✅ (`hive-db`, ~4%) |
+| Column-level policies | ✅ (`hive-col`, ~4%) |
+| Deny policies (single-service) | ✅ (`hive-deny`, ~3%) |
 | Cross-policy permit + deny suppression | ✅ (emerges from overlapping `hive` + `hive-deny` on small resource pool) |
 | Overlapping policies for the same resource | ✅ (emerges naturally from independent generators on small resource pool) |
-| Grantable permissions (`delegateAdmin=true`) | ✅ (`hive-grantable`, 3%) |
-| Multi-user policies | ✅ |
-| Group and role principals | ✅ (`hive-group` 1%, `hive-role` 1%) |
-| Unmapped principal | ✅ |
+| Grantable permissions (`delegateAdmin=true`) | ✅ (`hive-grantable`, ~3%) |
+| Multi-user policies | ✅ (`hive-multi`, ~9%) |
+| Group and role principals | ✅ (`hive-group` ~1%, `hive-role` ~1%) |
+| Unmapped principal | ✅ (`hive-unmapped`, ~2%) |
+| Data location (`data_location_access`) policies | ✅ (`datalocation`, ~10%) |
+| Trino catalog→schema→table policies with deny | ✅ (`trino`, ~14%) |
+| EMRFS / S3 Access Grants policies | ✅ (`emrfs`, ~4%; S3AG validation requires `S3AG_INSTANCE_ARN` env var) |
+| EMR Spark table/db/column/deny policies | ✅ generated always; validated only when `validateEmrSpark: true` |
 | `all` access type expansion | ❌ (lakeformation Ranger service rejects "all"; generator exists but not wired) |
 | Sync service restart recovery | ❌ |

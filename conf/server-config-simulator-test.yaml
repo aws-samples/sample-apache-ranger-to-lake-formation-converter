@@ -5,25 +5,25 @@ rangerConfig:
 
 awsConfig:
   region: "us-west-2"
-  catalogId: "988640946202"
-  roleArn: "arn:aws:iam::988640946202:role/RangerLFSyncRole"
+  catalogId: "427250191192"
+  roleArn: "arn:aws:iam::427250191192:role/RangerLFSyncRole"
 
 principalMapping:
   userMappings:
-    "analyst": "arn:aws:iam::988640946202:role/ranger-sim-analyst"
-    "etl_user": "arn:aws:iam::988640946202:role/ranger-sim-etl_user"
-    "data_admin": "arn:aws:iam::988640946202:role/ranger-sim-data_admin"
-    "viewer": "arn:aws:iam::988640946202:role/ranger-sim-viewer"
+    "analyst": "arn:aws:iam::427250191192:role/ranger-sim-analyst"
+    "etl_user": "arn:aws:iam::427250191192:role/ranger-sim-etl_user"
+    "data_admin": "arn:aws:iam::427250191192:role/ranger-sim-data_admin"
+    "viewer": "arn:aws:iam::427250191192:role/ranger-sim-viewer"
   groupMappings:
-    "analyst": "arn:aws:iam::988640946202:role/ranger-sim-analyst"
-    "etl_user": "arn:aws:iam::988640946202:role/ranger-sim-etl_user"
-    "data_admin": "arn:aws:iam::988640946202:role/ranger-sim-data_admin"
-    "viewer": "arn:aws:iam::988640946202:role/ranger-sim-viewer"
+    "analyst": "arn:aws:iam::427250191192:role/ranger-sim-analyst"
+    "etl_user": "arn:aws:iam::427250191192:role/ranger-sim-etl_user"
+    "data_admin": "arn:aws:iam::427250191192:role/ranger-sim-data_admin"
+    "viewer": "arn:aws:iam::427250191192:role/ranger-sim-viewer"
   roleMappings:
-    "analyst": "arn:aws:iam::988640946202:role/ranger-sim-analyst"
-    "etl_user": "arn:aws:iam::988640946202:role/ranger-sim-etl_user"
-    "data_admin": "arn:aws:iam::988640946202:role/ranger-sim-data_admin"
-    "viewer": "arn:aws:iam::988640946202:role/ranger-sim-viewer"
+    "analyst": "arn:aws:iam::427250191192:role/ranger-sim-analyst"
+    "etl_user": "arn:aws:iam::427250191192:role/ranger-sim-etl_user"
+    "data_admin": "arn:aws:iam::427250191192:role/ranger-sim-data_admin"
+    "viewer": "arn:aws:iam::427250191192:role/ranger-sim-viewer"
 
 policyRefreshIntervalMs: 15000
 
