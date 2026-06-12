@@ -11,7 +11,10 @@ public class EmrfsPolicyGenerator implements PolicyGenerator {
     private static final List<String> SAMPLE_PREFIXES = List.of(
             "s3://my-bucket/emr-output/", "s3://my-bucket/emr-input/", "s3://my-bucket/emr-scratch/"
     );
-    private static final List<String> EMRFS_ACCESS_TYPES = List.of("read", "write", "read_write");
+    // Access types registered in the amazon-emr-emrfs Ranger service definition.
+    // These must match exactly what EmrfsServiceAdapter.mapAccessTypeToCedarActions() handles.
+    private static final List<String> EMRFS_ACCESS_TYPES =
+            List.of("GetObject", "PutObject", "ListObjects", "DeleteObject");
 
     private final List<String> s3Prefixes;
     private final List<String> principalNames;
@@ -35,7 +38,7 @@ public class EmrfsPolicyGenerator implements PolicyGenerator {
         String accessType = randomFrom(EMRFS_ACCESS_TYPES);
 
         Map<String, Object> resources = new LinkedHashMap<>();
-        resources.put("s3prefix", Map.of("values", List.of(prefix), "isExcludes", false));
+        resources.put("sthreeresource", Map.of("values", List.of(prefix), "isExcludes", false));
 
         Map<String, Object> item = Map.of(
                 "users", List.of(user),

@@ -92,6 +92,8 @@ public class SimulatorMain {
                 List.of(), principals, config.getTagServiceName(), rng);
         EmrfsPolicyGenerator emrfsPolicyGenerator = new EmrfsPolicyGenerator(
                 config.getS3Prefixes(), principals, config.getEmrfsServiceName(), rng);
+        EmrSparkPolicyGenerator emrSparkPolicyGenerator = new EmrSparkPolicyGenerator(
+                databaseTables, principals, config.getEmrSparkServiceName(), rng);
 
         // "hive-all" omitted: lakeformation Ranger service rejects "all" as an access type.
         // generateAllAccessTablePolicy() is kept in HivePolicyGenerator for future use against
@@ -107,10 +109,14 @@ public class SimulatorMain {
             new GeneratorEntry("hive-col",        hivePolicyGenerator::generateColumnPolicy,            5),
             new GeneratorEntry("hive-unmapped",   hivePolicyGenerator::generateUnmappedPrincipalPolicy, 2),
             new GeneratorEntry("hive-grantable",  hivePolicyGenerator::generateGrantableTablePolicy,    3),
-            new GeneratorEntry("hive-wildcard",   hivePolicyGenerator::generateWildcardTablePolicy,     3),
-            new GeneratorEntry("hive-deny",       hivePolicyGenerator::generateDenyTablePolicy,         4),
-            new GeneratorEntry("hive-group",      hivePolicyGenerator::generateGroupTablePolicy,        1),
-            new GeneratorEntry("hive-role",       hivePolicyGenerator::generateRoleTablePolicy,         1)
+            new GeneratorEntry("hive-wildcard",    hivePolicyGenerator::generateWildcardTablePolicy,       3),
+            new GeneratorEntry("hive-deny",        hivePolicyGenerator::generateDenyTablePolicy,           4),
+            new GeneratorEntry("hive-group",       hivePolicyGenerator::generateGroupTablePolicy,          1),
+            new GeneratorEntry("hive-role",        hivePolicyGenerator::generateRoleTablePolicy,           1),
+            new GeneratorEntry("emrspark",         emrSparkPolicyGenerator::generateTablePolicy,           8),
+            new GeneratorEntry("emrspark-db",      emrSparkPolicyGenerator::generateDatabasePolicy,        3),
+            new GeneratorEntry("emrspark-col",     emrSparkPolicyGenerator::generateColumnPolicy,          2),
+            new GeneratorEntry("emrspark-deny",    emrSparkPolicyGenerator::generateDenyTablePolicy,       2)
         );
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
                 new ArrayList<>(), generators, rng);
@@ -135,9 +141,17 @@ public class SimulatorMain {
                 s3AgInstanceArn != null ? s3AgInstanceArn : "");
 
         // Scope the validator to only the services the sync service actually processes.
-        // In single-service mode the sync service only subscribes to rangerServiceName.
-        Set<String> managedServiceNames = Set.of(
-                config.getRangerServiceName().toLowerCase(java.util.Locale.ROOT));
+        // EMR Spark is only included when validateEmrSpark=true in the config (requires the
+        // sync service to have amazon-emr-spark in its rangerServices list).
+        Set<String> managedServiceNames;
+        if (config.isValidateEmrSpark()) {
+            managedServiceNames = Set.of(
+                    config.getRangerServiceName().toLowerCase(java.util.Locale.ROOT),
+                    config.getEmrSparkServiceName().toLowerCase(java.util.Locale.ROOT));
+        } else {
+            managedServiceNames = Set.of(
+                    config.getRangerServiceName().toLowerCase(java.util.Locale.ROOT));
+        }
 
         // Use discovered/configured resource map for wildcard expansion in the independent validator
         ExpectedPermissionsComputer expectedComputer = new ExpectedPermissionsComputer(
@@ -196,6 +210,7 @@ public class SimulatorMain {
         names.add(config.getRangerServiceName());
         names.add(config.getTrinoServiceName());
         names.add(config.getEmrfsServiceName());
+        names.add(config.getEmrSparkServiceName());
         names.add(config.getTagServiceName());
         return names;
     }

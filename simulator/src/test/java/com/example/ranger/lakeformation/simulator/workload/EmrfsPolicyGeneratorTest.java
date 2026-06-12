@@ -21,15 +21,16 @@ class EmrfsPolicyGeneratorTest {
         return new EmrfsPolicyGenerator(S3_PREFIXES, PRINCIPALS, EMRFS_SERVICE, new Random(seed));
     }
 
-    // 1. generate() returns map with "s3prefix" in resources
+    // 1. generate() returns map with "sthreeresource" in resources (matches EmrfsServiceAdapter.RESOURCE_KEY)
     @Test
-    void generateEmrfsPolicy_hasS3PrefixInResources() {
+    void generateEmrfsPolicy_hasSthreeresourceInResources() {
         Map<String, Object> policy = generator(42).generate("p1");
         assertNotNull(policy);
         @SuppressWarnings("unchecked")
         Map<String, Object> resources = (Map<String, Object>) policy.get("resources");
         assertNotNull(resources);
-        assertTrue(resources.containsKey("s3prefix"), "resources should have 's3prefix' key");
+        assertTrue(resources.containsKey("sthreeresource"),
+                "resources should have 'sthreeresource' key (not 's3prefix')");
     }
 
     // 2. Service name is the emrfsServiceName passed to constructor
@@ -48,10 +49,10 @@ class EmrfsPolicyGeneratorTest {
                 "Ranger rejects string 'id' fields — payload must not include 'id'");
     }
 
-    // 3. "policyItems" has one item with a "read", "write", or "read_write" access type
+    // 3. "policyItems" has one item with a valid EMRFS access type (matching EmrfsServiceAdapter)
     @Test
     void generateEmrfsPolicy_accessTypeIsValidEmrfsType() {
-        Set<String> validTypes = Set.of("read", "write", "read_write");
+        Set<String> validTypes = Set.of("GetObject", "PutObject", "ListObjects", "DeleteObject");
         // Run several times with different seeds to exercise all access types
         for (long seed = 0; seed < 20; seed++) {
             Map<String, Object> policy = generator(seed).generate("p3-" + seed);

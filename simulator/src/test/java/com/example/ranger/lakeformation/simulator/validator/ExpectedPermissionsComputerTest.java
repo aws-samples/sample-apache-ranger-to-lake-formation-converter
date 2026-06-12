@@ -634,6 +634,91 @@ class ExpectedPermissionsComputerTest {
     }
 
     // -----------------------------------------------------------------------
+    // EMR Spark service tests
+    // -----------------------------------------------------------------------
+
+    @Test
+    void emrSparkSelect_mapsToSelectPermission() {
+        String json = "{\"service\":\"amazon-emr-spark\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertFalse(result.isEmpty(), "emr-spark select should produce a permission");
+        assertTrue(result.stream().anyMatch(p -> "SELECT".equals(p.permission())),
+                "emr-spark select must map to SELECT");
+        assertEquals("TABLE_WITH_COLUMNS", result.iterator().next().resourceType(),
+                "SELECT on a table must be TABLE_WITH_COLUMNS");
+    }
+
+    @Test
+    void emrSparkUpdate_mapsToInsertPermission() {
+        String json = "{\"service\":\"amazon-emr-spark\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"update\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertTrue(result.stream().anyMatch(p -> "INSERT".equals(p.permission())),
+                "emr-spark 'update' must map to INSERT");
+    }
+
+    @Test
+    void emrSparkRead_mapsToSelectPermission() {
+        String json = "{\"service\":\"amazon-emr-spark\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"read\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertTrue(result.stream().anyMatch(p -> "SELECT".equals(p.permission())),
+                "emr-spark 'read' must map to SELECT");
+    }
+
+    @Test
+    void emrSparkWrite_mapsToInsertPermission() {
+        String json = "{\"service\":\"amazon-emr-spark\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"write\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertTrue(result.stream().anyMatch(p -> "INSERT".equals(p.permission())),
+                "emr-spark 'write' must map to INSERT");
+    }
+
+    @Test
+    void emrSparkDeny_suppressesGrant() {
+        // EMR Spark deny policy must suppress the allow grant from the same service
+        String policyAllow = "{\"service\":\"amazon-emr-spark\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        String policyDeny = "{\"service\":\"amazon-emr-spark\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[],"
+                + "\"denyPolicyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}]}";
+        Set<SimulatorPermission> result = computeFromJsonStrings(policyAllow, policyDeny);
+        assertTrue(result.isEmpty(),
+                "EMR Spark deny must suppress grant for same (principal, resource, permission)");
+    }
+
+    // -----------------------------------------------------------------------
     // Private helpers for the new tests
     // -----------------------------------------------------------------------
 

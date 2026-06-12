@@ -304,10 +304,23 @@ public class ExpectedPermissionsComputer {
         trinoMap.put("use",    Set.of("DESCRIBE"));
         trinoMap.put("show",   Set.of("DESCRIBE"));
 
+        // Matches EmrSparkServiceAdapter.CATALOG_ACTION_MAPPING exactly.
+        // "all" intentionally absent: it maps to LF ALL which ListPermissions returns
+        // as individual permissions — the simulator workload doesn't generate "all".
+        Map<String, Set<String>> emrSparkMap = new HashMap<>();
+        emrSparkMap.put("select", Set.of("SELECT"));
+        emrSparkMap.put("update", Set.of("INSERT"));
+        emrSparkMap.put("alter",  Set.of("ALTER"));
+        emrSparkMap.put("create", Set.of("CREATE_TABLE"));
+        emrSparkMap.put("drop",   Set.of("DROP"));
+        emrSparkMap.put("read",   Set.of("SELECT"));
+        emrSparkMap.put("write",  Set.of("INSERT"));
+
         Map<String, Map<String, Set<String>>> result = new HashMap<>();
-        result.put("lakeformation", Collections.unmodifiableMap(lfMap));
-        result.put("hive",          Collections.unmodifiableMap(hiveMap));
-        result.put("trino",         Collections.unmodifiableMap(trinoMap));
+        result.put("lakeformation",   Collections.unmodifiableMap(lfMap));
+        result.put("hive",            Collections.unmodifiableMap(hiveMap));
+        result.put("trino",           Collections.unmodifiableMap(trinoMap));
+        result.put("amazon-emr-spark", Collections.unmodifiableMap(emrSparkMap));
         return Collections.unmodifiableMap(result);
     }
 }

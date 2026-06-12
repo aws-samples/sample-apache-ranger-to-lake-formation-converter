@@ -16,9 +16,10 @@ public class SimulatorConfig {
     private static final int DEFAULT_CYCLE_WAIT_TIMEOUT_SECONDS = 300;
     private static final int DEFAULT_STATUS_PORT = 18080;
     private static final String DEFAULT_STATUS_HOST = "localhost";
-    private static final String DEFAULT_TRINO_SERVICE_NAME = "trino";
-    private static final String DEFAULT_EMRFS_SERVICE_NAME = "emrfs";
-    private static final String DEFAULT_TAG_SERVICE_NAME   = "cl_tag";
+    private static final String DEFAULT_TRINO_SERVICE_NAME     = "trino";
+    private static final String DEFAULT_EMRFS_SERVICE_NAME     = "emrfs";
+    private static final String DEFAULT_EMR_SPARK_SERVICE_NAME = "amazon-emr-spark";
+    private static final String DEFAULT_TAG_SERVICE_NAME       = "cl_tag";
     private static final List<String> DEFAULT_S3_PREFIXES  =
             List.of("s3://my-bucket/data/", "s3://my-bucket/logs/");
 
@@ -42,10 +43,16 @@ public class SimulatorConfig {
     private final Map<String, List<String>> databases;
     private final String trinoServiceName;
     private final String emrfsServiceName;
+    private final String emrSparkServiceName;
     private final String tagServiceName;
     private final List<String> s3Prefixes;
     /** Optional IAM role ARN to assume for all AWS API calls. If null, uses the default credential chain. */
     private final String roleArn;
+    /**
+     * When true, EMR Spark policies are included in Phase2 validation (requires the sync service
+     * to be configured with amazon-emr-spark in its rangerServices list). Default: false.
+     */
+    private final boolean validateEmrSpark;
 
     @JsonCreator
     public SimulatorConfig(
@@ -65,9 +72,11 @@ public class SimulatorConfig {
             @JsonProperty("databases")               Map<String, List<String>> databases,
             @JsonProperty("trinoServiceName")        String  trinoServiceName,
             @JsonProperty("emrfsServiceName")        String  emrfsServiceName,
+            @JsonProperty("emrSparkServiceName")     String  emrSparkServiceName,
             @JsonProperty("tagServiceName")          String  tagServiceName,
             @JsonProperty("s3Prefixes")              List<String> s3Prefixes,
-            @JsonProperty("roleArn")                 String  roleArn) {
+            @JsonProperty("roleArn")                 String  roleArn,
+            @JsonProperty("validateEmrSpark")        Boolean validateEmrSpark) {
         this.cycleIntervalSeconds = cycleIntervalSeconds != null ? cycleIntervalSeconds : DEFAULT_CYCLE_INTERVAL_SECONDS;
         this.awsRegion = awsRegion != null ? awsRegion : DEFAULT_AWS_REGION;
         this.rangerAdminUrl = rangerAdminUrl;
@@ -82,13 +91,15 @@ public class SimulatorConfig {
         this.statusHost = statusHost != null ? statusHost : DEFAULT_STATUS_HOST;
         this.reproductionBundleDir = reproductionBundleDir != null ? reproductionBundleDir : "reproduction-bundles";
         this.databases = databases;
-        this.trinoServiceName = trinoServiceName != null ? trinoServiceName : DEFAULT_TRINO_SERVICE_NAME;
-        this.emrfsServiceName = emrfsServiceName != null ? emrfsServiceName : DEFAULT_EMRFS_SERVICE_NAME;
-        this.tagServiceName   = tagServiceName   != null ? tagServiceName   : DEFAULT_TAG_SERVICE_NAME;
+        this.trinoServiceName     = trinoServiceName     != null ? trinoServiceName     : DEFAULT_TRINO_SERVICE_NAME;
+        this.emrfsServiceName     = emrfsServiceName     != null ? emrfsServiceName     : DEFAULT_EMRFS_SERVICE_NAME;
+        this.emrSparkServiceName  = emrSparkServiceName  != null ? emrSparkServiceName  : DEFAULT_EMR_SPARK_SERVICE_NAME;
+        this.tagServiceName       = tagServiceName       != null ? tagServiceName       : DEFAULT_TAG_SERVICE_NAME;
         this.s3Prefixes       = s3Prefixes != null && !s3Prefixes.isEmpty()
                                 ? List.copyOf(s3Prefixes)
                                 : DEFAULT_S3_PREFIXES;
         this.roleArn = (roleArn != null && !roleArn.isBlank()) ? roleArn : null;
+        this.validateEmrSpark = Boolean.TRUE.equals(validateEmrSpark);
     }
 
     public int getCycleIntervalSeconds() { return cycleIntervalSeconds; }
@@ -106,12 +117,15 @@ public class SimulatorConfig {
     public String getReproductionBundleDir() { return reproductionBundleDir; }
     /** Returns the configured databases map, or null if Glue discovery should be used. */
     public Map<String, List<String>> getDatabases() { return databases; }
-    public String       getTrinoServiceName() { return trinoServiceName; }
-    public String       getEmrfsServiceName() { return emrfsServiceName; }
-    public String       getTagServiceName()   { return tagServiceName; }
+    public String       getTrinoServiceName()    { return trinoServiceName; }
+    public String       getEmrfsServiceName()    { return emrfsServiceName; }
+    public String       getEmrSparkServiceName() { return emrSparkServiceName; }
+    public String       getTagServiceName()      { return tagServiceName; }
     public List<String> getS3Prefixes()       { return s3Prefixes; }
     /** Returns the IAM role ARN to assume, or null to use the default credential chain. */
     public String getRoleArn()                { return roleArn; }
+    /** Returns true if EMR Spark policies should be included in Phase2 LF validation. */
+    public boolean isValidateEmrSpark()       { return validateEmrSpark; }
 
     @Override
     public String toString() {
