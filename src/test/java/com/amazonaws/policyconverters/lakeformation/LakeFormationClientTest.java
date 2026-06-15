@@ -41,6 +41,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -594,6 +596,53 @@ class LakeFormationClientTest {
         String logContent = sw.toString();
         String[] lines = logContent.trim().split("\n");
         assertEquals(2, lines.length);
+    }
+
+    // --- Bug fix: TABLE/TABLE_WITH_COLUMNS conflict retry must not loop infinitely ---
+
+    @Test
+    void applyBatch_conflictRevoke_succeedsAndGrantRetried() {
+        // First grant attempt: fails with "Permissions modification is invalid"
+        BatchPermissionsFailureEntry conflictFailure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-0").build())
+                .error(ErrorDetail.builder().errorMessage("Permissions modification is invalid.").build())
+                .build();
+        // Retry grant attempt: succeeds
+        doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
+                .doReturn(BatchGrantPermissionsResponse.builder().failures(List.of()).build())
+                .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        doReturn(null).when(awsClient).revokePermissions(any(RevokePermissionsRequest.class));
+
+        LFPermissionOperation op = makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t1");
+        BatchResult result = client.applyBatch(List.of(op), null);
+
+        // Grant must be retried exactly once after the conflict revoke
+        verify(awsClient, times(2)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        verify(awsClient, times(1)).revokePermissions(any(RevokePermissionsRequest.class));
+        assertFalse(result.hasFailures(), "Grant should succeed after conflict-revoke-and-retry");
+    }
+
+    @Test
+    void applyBatch_conflictRevoke_failsThenGrantNotRetried_noInfiniteLoop() {
+        // Both the first and any subsequent grant attempt fail with the same conflict error
+        BatchPermissionsFailureEntry conflictFailure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-0").build())
+                .error(ErrorDetail.builder().errorMessage("Permissions modification is invalid.").build())
+                .build();
+        doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
+                .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        // The conflict revoke itself also fails
+        doThrow(software.amazon.awssdk.services.lakeformation.model.InvalidInputException.builder()
+                        .message("Permissions modification is invalid.").build())
+                .when(awsClient).revokePermissions(any(RevokePermissionsRequest.class));
+
+        LFPermissionOperation op = makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t1");
+        BatchResult result = client.applyBatch(List.of(op), null);
+
+        // Grant must be attempted exactly once — no retry when revoke failed, no infinite loop
+        verify(awsClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        verify(awsClient, times(1)).revokePermissions(any(RevokePermissionsRequest.class));
+        assertTrue(result.hasFailures(), "Grant must be recorded as failed when revoke-and-retry is not possible");
     }
 
 }

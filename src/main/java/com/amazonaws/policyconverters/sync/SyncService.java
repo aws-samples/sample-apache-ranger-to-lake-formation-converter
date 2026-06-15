@@ -367,10 +367,25 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         logGapReportIfPresent();
 
         // Compute diff between previous and current operations
+        LOG.debug("SyncService diff input: previousOperations={}, currentOperations={}",
+                previousOperations.size(), currentOperations.size());
         PolicyDiff diff = computeDiff(previousOperations, currentOperations);
 
         LOG.info("SyncService diff computed: {} new grants, {} revocations, {} unchanged",
                 diff.getNewGrants().size(), diff.getRevocations().size(), diff.getUnchangedCount());
+
+        // Debug: log each new grant so we can trace wildcard-derived operations
+        for (LFPermissionOperation op : diff.getNewGrants()) {
+            LOG.debug("SyncService new grant: policyId={}, principal={}, resource={}, permissions={}",
+                    op.getSourcePolicyId(), op.getPrincipalArn(), op.getResource(), op.getPermissions());
+        }
+        // Debug: log each unchanged operation when we'd expect grants but see none
+        if (diff.getNewGrants().isEmpty() && diff.getUnchangedCount() > 0) {
+            for (LFPermissionOperation op : previousOperations) {
+                LOG.debug("SyncService unchanged: policyId={}, principal={}, resource={}, permissions={}",
+                        op.getSourcePolicyId(), op.getPrincipalArn(), op.getResource(), op.getPermissions());
+            }
+        }
 
         // Build the list of delta operations to apply
         List<LFPermissionOperation> deltaOperations = new ArrayList<>();
@@ -523,10 +538,25 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         logGapReportIfPresent();
 
         // Compute diff between previous and current operations
+        LOG.debug("SyncService diff input: previousOperations={}, currentOperations={}",
+                previousOperations.size(), currentOperations.size());
         PolicyDiff diff = computeDiff(previousOperations, currentOperations);
 
         LOG.info("SyncService diff computed: {} new grants, {} revocations, {} unchanged",
                 diff.getNewGrants().size(), diff.getRevocations().size(), diff.getUnchangedCount());
+
+        // Debug: log each new grant so we can trace wildcard-derived operations
+        for (LFPermissionOperation op : diff.getNewGrants()) {
+            LOG.debug("SyncService new grant: policyId={}, principal={}, resource={}, permissions={}",
+                    op.getSourcePolicyId(), op.getPrincipalArn(), op.getResource(), op.getPermissions());
+        }
+        // Debug: log each unchanged operation when we'd expect grants but see none
+        if (diff.getNewGrants().isEmpty() && diff.getUnchangedCount() > 0) {
+            for (LFPermissionOperation op : previousOperations) {
+                LOG.debug("SyncService unchanged: policyId={}, principal={}, resource={}, permissions={}",
+                        op.getSourcePolicyId(), op.getPrincipalArn(), op.getResource(), op.getPermissions());
+            }
+        }
 
         // Build the list of delta operations to apply
         List<LFPermissionOperation> deltaOperations = new ArrayList<>();

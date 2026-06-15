@@ -413,6 +413,23 @@ public class LakeFormationClient {
      */
     private int[] executeBatchGrant(List<LFPermissionOperation> ops, DeadLetterLogger deadLetterLogger,
                                     List<String> succeededPolicies, List<String> failedPolicies) {
+        return executeBatchGrant(ops, deadLetterLogger, succeededPolicies, failedPolicies, false);
+    }
+
+    /**
+     * Internal implementation with an {@code isRetry} guard to prevent infinite recursion.
+     * When {@code isRetry=true}, conflict-revoke-and-retry is skipped — if the retry
+     * grant still fails the error is recorded normally and we stop.
+     *
+     * <p>On the first attempt, entries that fail with "Permissions modification is invalid"
+     * are handled by revoking the conflicting TABLE_WITH_COLUMNS grant and retrying. Those
+     * entries are <em>excluded</em> from the normal failure accounting pass so they are not
+     * prematurely recorded as failed before the retry outcome is known. Only if the revoke
+     * itself fails are they left in the normal failure list.
+     */
+    private int[] executeBatchGrant(List<LFPermissionOperation> ops, DeadLetterLogger deadLetterLogger,
+                                    List<String> succeededPolicies, List<String> failedPolicies,
+                                    boolean isRetry) {
         List<BatchPermissionsRequestEntry> entries = new ArrayList<>();
         Map<String, LFPermissionOperation> entryIdToOp = new LinkedHashMap<>();
 
@@ -430,67 +447,78 @@ public class LakeFormationClient {
         LOG.info("Sending BatchGrantPermissions with {} entries", entries.size());
         BatchGrantPermissionsResponse response = lfClient.batchGrantPermissions(request);
 
-        // Check for TABLE grants that failed with "Permissions modification is invalid".
-        // This means a conflicting TABLE_WITH_COLUMNS grant from a prior cycle exists for
-        // the same (principal, db, table). Revoke it and retry those grants.
+        // On first attempt: detect TABLE/TABLE_WITH_COLUMNS conflicts, attempt to clear them,
+        // and exclude successfully-queued-for-retry entries from the normal failure pass.
+        // Only entries whose revoke succeeded are queued for retry — the rest stay in the
+        // normal failure list so they are dead-lettered and retried next cycle.
         List<LFPermissionOperation> retryGrants = new ArrayList<>();
-        List<LFPermissionOperation> conflictRevokes = new ArrayList<>();
-        if (response.failures() != null) {
+        Set<String> retryEntryIds = new HashSet<>();
+
+        if (!isRetry && response.failures() != null) {
             for (BatchPermissionsFailureEntry failure : response.failures()) {
                 String errorMsg = failure.error() != null ? failure.error().errorMessage() : "";
                 if (errorMsg.contains("Permissions modification is invalid")) {
-                    LFPermissionOperation op = entryIdToOp.get(failure.requestEntry().id());
+                    String entryId = failure.requestEntry().id();
+                    LFPermissionOperation op = entryIdToOp.get(entryId);
                     if (op != null && op.getResource().getTableName() != null) {
-                        // Two cases both require revoking the conflicting TABLE_WITH_COLUMNS with
-                        // a column wildcard before retrying:
-                        // 1. TABLE grant blocked by existing TABLE_WITH_COLUMNS (cols=None or cols=[...])
-                        // 2. TABLE_WITH_COLUMNS (column-specific) grant blocked by existing
-                        //    TABLE_WITH_COLUMNS (all-columns / different column set)
-                        conflictRevokes.add(op);
-                        retryGrants.add(op);
-                        LOG.info("GRANT blocked by TABLE/TABLE_WITH_COLUMNS conflict — will revoke all-columns and retry: "
+                        LOG.info("GRANT blocked by TABLE/TABLE_WITH_COLUMNS conflict — will revoke all-columns and retry once: "
                                 + "policyId={}, principal={}, db={}, table={}",
                                 op.getSourcePolicyId(), op.getPrincipalArn(),
                                 op.getResource().getDatabaseName(), op.getResource().getTableName());
+                        LFResource r = op.getResource();
+                        Resource twcResource = Resource.builder()
+                                .tableWithColumns(TableWithColumnsResource.builder()
+                                        .catalogId(r.getCatalogId())
+                                        .databaseName(r.getDatabaseName())
+                                        .name(r.getTableName())
+                                        .columnWildcard(ColumnWildcard.builder().build())
+                                        .build())
+                                .build();
+                        DataLakePrincipal principal = DataLakePrincipal.builder()
+                                .dataLakePrincipalIdentifier(op.getPrincipalArn())
+                                .build();
+                        try {
+                            lfClient.revokePermissions(RevokePermissionsRequest.builder()
+                                    .principal(principal)
+                                    .resource(twcResource)
+                                    .permissions(toLfPermissions(op.getPermissions()))
+                                    .build());
+                            LOG.info("Revoked conflicting TABLE_WITH_COLUMNS grant: principal={}, db={}, table={}",
+                                    op.getPrincipalArn(), r.getDatabaseName(), r.getTableName());
+                            retryGrants.add(op);
+                            retryEntryIds.add(entryId); // exclude from normal failure pass
+                        } catch (Exception e) {
+                            // Revoke failed — leave this entry in the normal failure list so it is
+                            // dead-lettered and retried next cycle. Do not recurse.
+                            LOG.warn("Failed to revoke TABLE_WITH_COLUMNS conflict, grant will retry next cycle: "
+                                    + "policyId={}, error={}",
+                                    op.getSourcePolicyId(), e.getMessage());
+                        }
                     }
                 }
             }
         }
 
-        int[] result = processBatchFailures(response.failures(), entryIdToOp,
+        // Build a filtered view that excludes entries being retried from failure accounting.
+        List<BatchPermissionsFailureEntry> accountableFailures = retryEntryIds.isEmpty()
+                ? response.failures()
+                : (response.failures() == null ? null : response.failures().stream()
+                        .filter(f -> !retryEntryIds.contains(f.requestEntry().id()))
+                        .collect(java.util.stream.Collectors.toList()));
+        Map<String, LFPermissionOperation> accountableOps = retryEntryIds.isEmpty()
+                ? entryIdToOp
+                : entryIdToOp.entrySet().stream()
+                        .filter(e -> !retryEntryIds.contains(e.getKey()))
+                        .collect(java.util.stream.Collectors.toMap(
+                                Map.Entry::getKey, Map.Entry::getValue,
+                                (a, b) -> a, LinkedHashMap::new));
+
+        int[] result = processBatchFailures(accountableFailures, accountableOps,
                 "GRANT", deadLetterLogger, succeededPolicies, failedPolicies);
 
-        if (!conflictRevokes.isEmpty()) {
-            // For each conflicting TABLE grant, revoke the existing TABLE_WITH_COLUMNS (all-columns)
-            // using a column wildcard, then retry the TABLE grant.
-            for (LFPermissionOperation conflictOp : conflictRevokes) {
-                LFResource r = conflictOp.getResource();
-                Resource twcResource = Resource.builder()
-                        .tableWithColumns(TableWithColumnsResource.builder()
-                                .catalogId(r.getCatalogId())
-                                .databaseName(r.getDatabaseName())
-                                .name(r.getTableName())
-                                .columnWildcard(ColumnWildcard.builder().build())
-                                .build())
-                        .build();
-                DataLakePrincipal principal = DataLakePrincipal.builder()
-                        .dataLakePrincipalIdentifier(conflictOp.getPrincipalArn())
-                        .build();
-                try {
-                    lfClient.revokePermissions(RevokePermissionsRequest.builder()
-                            .principal(principal)
-                            .resource(twcResource)
-                            .permissions(toLfPermissions(conflictOp.getPermissions()))
-                            .build());
-                    LOG.info("Revoked conflicting TABLE_WITH_COLUMNS grant: principal={}, db={}, table={}",
-                            conflictOp.getPrincipalArn(), r.getDatabaseName(), r.getTableName());
-                } catch (Exception e) {
-                    LOG.warn("Failed to revoke TABLE_WITH_COLUMNS conflict (will retry grant anyway): {}", e.getMessage());
-                }
-            }
-            // Retry the grants that were blocked by the TABLE_WITH_COLUMNS conflict
+        if (!retryGrants.isEmpty()) {
             int[] retryResult = executeBatchGrant(retryGrants, deadLetterLogger,
-                    succeededPolicies, failedPolicies);
+                    succeededPolicies, failedPolicies, true);
             result[0] += retryResult[0];
         }
 

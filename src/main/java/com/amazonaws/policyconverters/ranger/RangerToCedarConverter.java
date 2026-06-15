@@ -461,13 +461,16 @@ public class RangerToCedarConverter {
             if (isAllWildcard(colValues)) {
                 List<String> tableValues = getResourceValues(resources, "table");
                 if (isAllWildcard(tableValues)) {
+                    LOG.debug("promoteResourceLevel: column=* and table=* → promoted to 'database'");
                     return "database";
                 }
+                LOG.debug("promoteResourceLevel: column=* → promoted from 'column' to 'table'");
                 return "table";
             }
         } else if ("table".equals(resourceLevel)) {
             List<String> tableValues = getResourceValues(resources, "table");
             if (isAllWildcard(tableValues)) {
+                LOG.debug("promoteResourceLevel: table=* → promoted from 'table' to 'database'");
                 return "database";
             }
         }
@@ -650,6 +653,8 @@ public class RangerToCedarConverter {
         for (String pattern : patterns) {
             if (isWildcard(pattern)) {
                 List<String> resolved = catalogResolver.expandTables(database, pattern);
+                LOG.debug("expandTablePatterns: db={}, pattern='{}' → {} tables: {}",
+                        database, pattern, resolved.size(), resolved);
                 expanded.addAll(resolved);
                 if (resolved.size() == 1 && resolved.get(0).equals(pattern)) {
                     gapReporter.recordGap(new GapEntry(
