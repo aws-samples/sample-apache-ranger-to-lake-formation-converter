@@ -460,20 +460,18 @@ public class RangerToCedarConverter {
             List<String> colValues = getResourceValues(resources, "column");
             if (isAllWildcard(colValues)) {
                 List<String> tableValues = getResourceValues(resources, "table");
-                if (isAllWildcard(tableValues)) {
-                    LOG.debug("promoteResourceLevel: column=* and table=* → promoted to 'database'");
-                    return "database";
+                if (!isAllWildcard(tableValues)) {
+                    // col=* on a specific table → TABLE_WITH_COLUMNS (ColumnWildcard) at table level
+                    LOG.debug("promoteResourceLevel: column=* → promoted from 'column' to 'table'");
+                    return "table";
                 }
-                LOG.debug("promoteResourceLevel: column=* → promoted from 'column' to 'table'");
-                return "table";
-            }
-        } else if ("table".equals(resourceLevel)) {
-            List<String> tableValues = getResourceValues(resources, "table");
-            if (isAllWildcard(tableValues)) {
-                LOG.debug("promoteResourceLevel: table=* → promoted from 'table' to 'database'");
-                return "database";
+                // col=* on table=* → stay at column level so expandResources expands table=* via
+                // Glue and produces TABLE_WITH_COLUMNS + ColumnWildcard per concrete table
+                LOG.debug("promoteResourceLevel: column=* and table=* → staying at 'column' for per-table expansion");
             }
         }
+        // table=* stays at table level — expandResources expands via Glue to concrete tables.
+        // Promoting to database would produce a DATABASE grant which is a different LF resource.
         return resourceLevel;
     }
 

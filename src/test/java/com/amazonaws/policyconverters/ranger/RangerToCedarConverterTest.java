@@ -345,24 +345,26 @@ class RangerToCedarConverterTest {
     }
 
     @Test
-    void hive_columnAndTableWildcard_promotesToDatabaseLevel() {
-        // ALTER is valid on DataCatalog::Database in the Cedar schema; SELECT is not
+    void hive_columnAndTableWildcard_expandsToTableLevelNotDatabase() {
+        // col=* + table=* must NOT promote to database level. It stays at column level so
+        // expandResources expands table=* via the catalog and produces TABLE_WITH_COLUMNS
+        // per concrete table. PassthroughResolver returns "*" as-is → WILDCARD_PATTERN gap.
         RangerPolicy policy = buildHivePolicyWithAccess("mydb", "*", "*", "alter");
-        CedarPolicySet result = hiveConverter.convert(List.of(policy));
-        String cedar = result.toCedarString();
-        assertTrue(cedar.contains("DataCatalog::Database"), "Expected database-level entity");
-        assertTrue(cedar.contains("arn:aws:glue:"), "Expected Glue ARN (not bare db name)");
-        assertFalse(cedar.contains("DataCatalog::Table"), "Must not produce table-level entity");
-        assertFalse(cedar.contains("DataCatalog::Column"), "Must not produce column-level entity");
+        hiveConverter.convert(List.of(policy));
+        List<GapEntry> gaps = gapReporter.getReport().getEntries();
+        assertTrue(gaps.stream().anyMatch(g -> g.getGapType() == GapType.WILDCARD_PATTERN),
+                "Expected WILDCARD_PATTERN gap when table=* cannot be expanded");
     }
 
     @Test
-    void hive_tableWildcardOnly_promotesToDatabaseLevel() {
+    void hive_tableWildcardOnly_expandsToTableLevelNotDatabase() {
+        // table=* must NOT promote to database level. expandResources stays at table level
+        // and expands via the catalog. PassthroughResolver returns "*" as-is → WILDCARD_PATTERN gap.
         RangerPolicy policy = buildHivePolicyNoColumn("mydb", "*");
-        CedarPolicySet result = hiveConverter.convert(List.of(policy));
-        String cedar = result.toCedarString();
-        assertTrue(cedar.contains("DataCatalog::Database"), "Expected database-level entity");
-        assertTrue(cedar.contains("arn:aws:glue:"), "Expected Glue ARN (not bare db name)");
+        hiveConverter.convert(List.of(policy));
+        List<GapEntry> gaps = gapReporter.getReport().getEntries();
+        assertTrue(gaps.stream().anyMatch(g -> g.getGapType() == GapType.WILDCARD_PATTERN),
+                "Expected WILDCARD_PATTERN gap when table=* cannot be expanded");
     }
 
     @Test
