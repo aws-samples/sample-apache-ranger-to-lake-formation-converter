@@ -505,9 +505,7 @@ public class LakeFormationClient {
                         lfClient.revokePermissions(RevokePermissionsRequest.builder()
                                 .principal(principal)
                                 .resource(conflictingResource)
-                                .permissions(hasColumns
-                                        ? List.of(Permission.ALL)
-                                        : toLfPermissions(op.getPermissions()))
+                                .permissions(List.of(Permission.ALL))
                                 .build());
                         LOG.info("Revoked conflicting {} grant: principal={}, db={}, table={}",
                                 conflictDescription, op.getPrincipalArn(),
