@@ -268,6 +268,14 @@ class LakeFormationClientTest {
                 "arn:aws:iam::123456789012:role/TestRole", resource, perms, false);
     }
 
+    private LFPermissionOperation makeOpWithColumns(String policyId, LFPermissionOperation.OperationType type,
+                                                    String table, Set<String> columns) {
+        LFResource resource = new LFResource("catalog1", "mydb", table, columns, null);
+        Set<LFPermission> perms = EnumSet.of(LFPermission.SELECT);
+        return new LFPermissionOperation(type, policyId,
+                "arn:aws:iam::123456789012:role/TestRole", resource, perms, false);
+    }
+
     @Test
     void applyBatch_allSucceed() {
         when(awsClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class)))
@@ -643,6 +651,48 @@ class LakeFormationClientTest {
         verify(awsClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
         verify(awsClient, times(1)).revokePermissions(any(RevokePermissionsRequest.class));
         assertTrue(result.hasFailures(), "Grant must be recorded as failed when revoke-and-retry is not possible");
+    }
+
+    @Test
+    void applyBatch_twcGrantBlockedByTableGrant_revokesTableAndRetries() {
+        // TABLE_WITH_COLUMNS grant blocked by an existing plain TABLE grant
+        BatchPermissionsFailureEntry conflictFailure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-0").build())
+                .error(ErrorDetail.builder().errorMessage("Permissions modification is invalid.").build())
+                .build();
+        doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
+                .doReturn(BatchGrantPermissionsResponse.builder().failures(List.of()).build())
+                .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        doReturn(null).when(awsClient).revokePermissions(any(RevokePermissionsRequest.class));
+
+        LFPermissionOperation op = makeOpWithColumns("p1", LFPermissionOperation.OperationType.GRANT,
+                "t1", Set.of("col1", "col2"));
+        BatchResult result = client.applyBatch(List.of(op), null);
+
+        verify(awsClient, times(2)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        verify(awsClient, times(1)).revokePermissions(any(RevokePermissionsRequest.class));
+        assertFalse(result.hasFailures(), "TWC grant should succeed after TABLE conflict revoke");
+    }
+
+    @Test
+    void applyBatch_twcGrantBlockedByTableGrant_revokeFails_noRetry() {
+        BatchPermissionsFailureEntry conflictFailure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-0").build())
+                .error(ErrorDetail.builder().errorMessage("Permissions modification is invalid.").build())
+                .build();
+        doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
+                .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        doThrow(software.amazon.awssdk.services.lakeformation.model.InvalidInputException.builder()
+                        .message("No permissions revoked.").build())
+                .when(awsClient).revokePermissions(any(RevokePermissionsRequest.class));
+
+        LFPermissionOperation op = makeOpWithColumns("p1", LFPermissionOperation.OperationType.GRANT,
+                "t1", Set.of("col1"));
+        BatchResult result = client.applyBatch(List.of(op), null);
+
+        verify(awsClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        verify(awsClient, times(1)).revokePermissions(any(RevokePermissionsRequest.class));
+        assertTrue(result.hasFailures(), "Must be recorded as failed when TABLE revoke also fails");
     }
 
 }
