@@ -47,6 +47,54 @@ public class DeadLetterLogger {
     }
 
     /**
+     * Log a permanent gap (e.g. irreconcilable TABLE/TWC conflict) to the dead-letter log.
+     * Unlike logFailedOperation, retryCount is omitted — the entry will never be retried.
+     *
+     * @param op    the losing operation that was suppressed
+     * @param error human-readable reason for the gap
+     */
+    public synchronized void logGapOperation(LFPermissionOperation op, String error) {
+        try {
+            ObjectNode entry = MAPPER.createObjectNode();
+            entry.put("timestamp", Instant.now().toString());
+            entry.put("type", "GAP");
+            entry.put("policyId", op.getSourcePolicyId());
+            entry.put("operation", op.getOperationType().getValue());
+
+            ObjectNode resource = MAPPER.createObjectNode();
+            LFResource res = op.getResource();
+            if (res.getDatabaseName() != null) {
+                resource.put("database", res.getDatabaseName());
+            }
+            if (res.getTableName() != null) {
+                resource.put("table", res.getTableName());
+            }
+            if (res.getColumnNames() != null && !res.getColumnNames().isEmpty()) {
+                ArrayNode cols = MAPPER.createArrayNode();
+                res.getColumnNames().forEach(cols::add);
+                resource.set("columns", cols);
+            }
+            entry.set("resource", resource);
+
+            entry.put("principal", op.getPrincipalArn());
+
+            ArrayNode permsArray = MAPPER.createArrayNode();
+            for (LFPermission perm : op.getPermissions()) {
+                permsArray.add(perm.getValue());
+            }
+            entry.set("permissions", permsArray);
+
+            entry.put("error", error);
+
+            writer.write(MAPPER.writeValueAsString(entry));
+            writer.newLine();
+            writer.flush();
+        } catch (IOException e) {
+            LOG.error("Failed to write gap entry to dead-letter log: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
      * Log a failed operation to the dead-letter log.
      *
      * @param op         the operation that failed

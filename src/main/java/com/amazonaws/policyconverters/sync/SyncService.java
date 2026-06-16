@@ -139,6 +139,12 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     /** Monotonic counter incremented after each fully completed {@link #executeSyncCycle()}. */
     private final AtomicLong lastCompletedCycle = new AtomicLong(0);
 
+    /**
+     * Tracks active TABLE/TWC conflicts by key "(principalArn|catalogId|db|table)".
+     * New conflicts are logged to the dead-letter once; cleared when the conflict resolves.
+     */
+    private final Set<String> activeConflicts = ConcurrentHashMap.newKeySet();
+
     // ---------------------------------------------------------------
     // Single-plugin constructors (backward compatible)
     // ---------------------------------------------------------------
@@ -366,6 +372,9 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         // Log gap report info if unsupported features were encountered (Req 4.8)
         logGapReportIfPresent();
 
+        // Detect TABLE/TWC conflicts and remove losing operations before diffing.
+        currentOperations = detectAndGapTableTwcConflicts(currentOperations);
+
         // Compute diff between previous and current operations
         LOG.debug("SyncService diff input: previousOperations={}, currentOperations={}",
                 previousOperations.size(), currentOperations.size());
@@ -536,6 +545,9 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
 
         // Log gap report info if unsupported features were encountered
         logGapReportIfPresent();
+
+        // Detect TABLE/TWC conflicts and remove losing operations before diffing.
+        currentOperations = detectAndGapTableTwcConflicts(currentOperations);
 
         // Compute diff between previous and current operations
         LOG.debug("SyncService diff input: previousOperations={}, currentOperations={}",
@@ -774,6 +786,9 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             // Add re-expanded glob operations
             mergedOperations.addAll(reExpandedGlobOps);
 
+            // Detect TABLE/TWC conflicts and remove losing operations before diffing.
+            mergedOperations = detectAndGapTableTwcConflicts(mergedOperations);
+
             // Step 5: Compute diff against previousOperations
             PolicyDiff diff = computeDiff(previousOperations, mergedOperations);
 
@@ -900,6 +915,129 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             sb.append("/").append(resource.getColumnNames());
         }
         return sb.toString();
+    }
+
+    /**
+     * Detects TABLE/TWC conflicts in the desired-state operation list and removes the losing
+     * operation, logging a permanent gap to the dead-letter the first time a conflict appears.
+     *
+     * <p>LF rejects a TABLE_WITH_COLUMNS grant when a TABLE grant already exists for the same
+     * (principal, table), and vice versa. When both appear in the desired state simultaneously
+     * the intent is ambiguous — we cannot apply both. The lower numeric policy ID wins (created
+     * first). The losing operation is removed from the returned list so it never reaches the diff
+     * or the apply phase.
+     *
+     * <p>The {@code activeConflicts} set prevents dead-letter flooding: a conflict key is added on
+     * first detection and removed when it no longer appears. Steady-state re-logs are suppressed.
+     *
+     * @param operations the full desired-state list from the Cedar converter
+     * @return a new list with conflicting losers removed
+     */
+    private List<LFPermissionOperation> detectAndGapTableTwcConflicts(
+            List<LFPermissionOperation> operations) {
+
+        // Group GRANT operations by (principalArn, catalogId, databaseName, tableName).
+        // Only table-level grants can conflict; database, data-location, and column-wildcard
+        // resources have no cross-type exclusivity constraint.
+        Map<String, List<LFPermissionOperation>> grouped = new HashMap<>();
+        for (LFPermissionOperation op : operations) {
+            if (op.getOperationType() != OperationType.GRANT) {
+                continue;
+            }
+            LFResource res = op.getResource();
+            if (res.getTableName() == null || res.isAllTables()) {
+                continue;
+            }
+            String key = op.getPrincipalArn() + "|"
+                    + (res.getCatalogId() != null ? res.getCatalogId() : "") + "|"
+                    + (res.getDatabaseName() != null ? res.getDatabaseName() : "") + "|"
+                    + res.getTableName();
+            grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(op);
+        }
+
+        Set<String> losingPolicyIds = new HashSet<>();
+        Set<String> currentConflictKeys = new HashSet<>();
+
+        for (Map.Entry<String, List<LFPermissionOperation>> entry : grouped.entrySet()) {
+            List<LFPermissionOperation> group = entry.getValue();
+            boolean hasTable = group.stream().anyMatch(o -> o.getResource().getColumnNames() == null);
+            boolean hasTwc   = group.stream().anyMatch(o -> o.getResource().getColumnNames() != null
+                    && !o.getResource().getColumnNames().isEmpty());
+            if (!hasTable || !hasTwc) {
+                continue;
+            }
+
+            // Conflict detected. Lower policy ID wins.
+            String conflictKey = entry.getKey();
+            currentConflictKeys.add(conflictKey);
+
+            // Determine winning policy ID (lowest numeric value; non-numeric IDs sort lexically
+            // after numeric ones so they naturally lose to a numeric winner).
+            String winningPolicyId = null;
+            long winningNumeric = Long.MAX_VALUE;
+            for (LFPermissionOperation op : group) {
+                String rawId = op.getSourcePolicyId(); // "serviceType:policyId" or bare id
+                String idPart = rawId != null && rawId.contains(":")
+                        ? rawId.substring(rawId.lastIndexOf(':') + 1) : rawId;
+                long numeric;
+                try {
+                    numeric = Long.parseLong(idPart);
+                } catch (NumberFormatException e) {
+                    numeric = Long.MAX_VALUE;
+                }
+                if (winningPolicyId == null || numeric < winningNumeric
+                        || (numeric == winningNumeric && rawId.compareTo(winningPolicyId) < 0)) {
+                    winningNumeric = numeric;
+                    winningPolicyId = rawId;
+                }
+            }
+
+            for (LFPermissionOperation op : group) {
+                if (!op.getSourcePolicyId().equals(winningPolicyId)) {
+                    losingPolicyIds.add(op.getSourcePolicyId());
+                }
+            }
+
+            boolean isNew = activeConflicts.add(conflictKey);
+            if (isNew) {
+                // Log every losing operation to the dead-letter once.
+                for (LFPermissionOperation op : group) {
+                    if (!op.getSourcePolicyId().equals(winningPolicyId)) {
+                        String msg = "CONFLICTING_LF_RESOURCE_TYPE: TABLE and TABLE_WITH_COLUMNS"
+                                + " grants cannot coexist for the same (principal, table)."
+                                + " Winning policyId=" + winningPolicyId
+                                + ". Resolve by removing one of the conflicting Ranger policies.";
+                        deadLetterLogger.logGapOperation(op, msg);
+                        LOG.warn("TABLE/TWC conflict detected: principal={}, table={}/{}, "
+                                + "losingPolicyId={}, winningPolicyId={}",
+                                op.getPrincipalArn(),
+                                op.getResource().getDatabaseName(),
+                                op.getResource().getTableName(),
+                                op.getSourcePolicyId(), winningPolicyId);
+                    }
+                }
+            }
+        }
+
+        // Remove keys that are no longer conflicting (conflict resolved in Ranger).
+        Set<String> resolved = new HashSet<>(activeConflicts);
+        resolved.removeAll(currentConflictKeys);
+        for (String key : resolved) {
+            activeConflicts.remove(key);
+            LOG.info("TABLE/TWC conflict resolved: {}", key);
+        }
+
+        if (losingPolicyIds.isEmpty()) {
+            return operations;
+        }
+
+        List<LFPermissionOperation> filtered = new ArrayList<>(operations.size());
+        for (LFPermissionOperation op : operations) {
+            if (!losingPolicyIds.contains(op.getSourcePolicyId())) {
+                filtered.add(op);
+            }
+        }
+        return filtered;
     }
 
     /**

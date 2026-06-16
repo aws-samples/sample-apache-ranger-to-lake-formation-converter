@@ -721,6 +721,222 @@ class SyncServiceTest {
     }
 
     // ---------------------------------------------------------------
+    // TABLE / TWC conflict detection tests
+    // ---------------------------------------------------------------
+
+    /**
+     * TABLE op for policy 100 + TWC op for policy 200 on the same (principal, table).
+     * Lower ID (100) wins; policy 200 (TWC) is suppressed and logged as GAP.
+     */
+    @Test
+    void tableTwcConflict_lowerIdWins_loserSuppressedAndGapped() {
+        BaseRangerService mockRangerService = mock(BaseRangerService.class);
+        when(mockRangerService.getServiceType()).thenReturn("lakeformation");
+        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
+        when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
+        ServicePolicies sp = createServicePolicies(1L, 1);
+        when(mockRangerService.getLatestPolicies()).thenReturn(sp);
+
+        SyncService svc = new SyncService(
+                Collections.singletonList(mockRangerService),
+                rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger,
+                null, null);
+        svc.start(syncConfig);
+
+        CedarPolicySet mockPs = mock(CedarPolicySet.class);
+        when(mockPs.getPermitCount()).thenReturn(2);
+        when(mockPs.getForbidCount()).thenReturn(0);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
+
+        // TABLE op — policy 100 (lower → wins)
+        LFResource tableRes = new LFResource("cat", "db", "products", null, null);
+        LFPermissionOperation tableOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:100", "arn:aws:iam::123:role/analyst",
+                tableRes, EnumSet.of(LFPermission.SELECT), false);
+
+        // TWC op — policy 200 (higher → loses)
+        LFResource twcRes = new LFResource("cat", "db", "products",
+                java.util.Set.of("created_at"), null);
+        LFPermissionOperation twcOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:200", "arn:aws:iam::123:role/analyst",
+                twcRes, EnumSet.of(LFPermission.SELECT), false);
+
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(tableOp, twcOp));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Collections.singletonList("lakeformation:100"),
+                        Collections.emptyList(), 1, 1, 0));
+
+        svc.executeSyncCycle();
+
+        // applyBatch must only see the winning (TABLE) op
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor.capture(), eq(deadLetterLogger));
+        List<LFPermissionOperation> applied = captor.getValue();
+        assertEquals(1, applied.size(), "Only the winning op should reach applyBatch");
+        assertEquals("lakeformation:100", applied.get(0).getSourcePolicyId());
+
+        // Dead-letter must have a GAP entry for the losing TWC op
+        ArgumentCaptor<LFPermissionOperation> gapCaptor = ArgumentCaptor.forClass(LFPermissionOperation.class);
+        verify(deadLetterLogger).logGapOperation(gapCaptor.capture(), contains("CONFLICTING_LF_RESOURCE_TYPE"));
+        assertEquals("lakeformation:200", gapCaptor.getValue().getSourcePolicyId());
+    }
+
+    /**
+     * TWC op for policy 50 + TABLE op for policy 300 on the same (principal, table).
+     * TWC has the lower ID (50) → TWC wins, TABLE loses.
+     */
+    @Test
+    void tableTwcConflict_twcWinsWhenItHasLowerId() {
+        BaseRangerService mockRangerService = mock(BaseRangerService.class);
+        when(mockRangerService.getServiceType()).thenReturn("lakeformation");
+        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
+        when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
+        ServicePolicies sp = createServicePolicies(1L, 1);
+        when(mockRangerService.getLatestPolicies()).thenReturn(sp);
+
+        SyncService svc = new SyncService(
+                Collections.singletonList(mockRangerService),
+                rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger,
+                null, null);
+        svc.start(syncConfig);
+
+        CedarPolicySet mockPs = mock(CedarPolicySet.class);
+        when(mockPs.getPermitCount()).thenReturn(2);
+        when(mockPs.getForbidCount()).thenReturn(0);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
+
+        // TWC op — policy 50 (lower → wins)
+        LFResource twcRes = new LFResource("cat", "db", "events",
+                java.util.Set.of("ts"), null);
+        LFPermissionOperation twcOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:50", "arn:aws:iam::123:role/analyst",
+                twcRes, EnumSet.of(LFPermission.SELECT), false);
+
+        // TABLE op — policy 300 (higher → loses)
+        LFResource tableRes = new LFResource("cat", "db", "events", null, null);
+        LFPermissionOperation tableOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:300", "arn:aws:iam::123:role/analyst",
+                tableRes, EnumSet.of(LFPermission.SELECT), false);
+
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(twcOp, tableOp));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Collections.singletonList("lakeformation:50"),
+                        Collections.emptyList(), 1, 1, 0));
+
+        svc.executeSyncCycle();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor.capture(), eq(deadLetterLogger));
+        List<LFPermissionOperation> applied = captor.getValue();
+        assertEquals(1, applied.size());
+        assertEquals("lakeformation:50", applied.get(0).getSourcePolicyId());
+
+        verify(deadLetterLogger).logGapOperation(
+                argThat(op -> "lakeformation:300".equals(op.getSourcePolicyId())),
+                contains("CONFLICTING_LF_RESOURCE_TYPE"));
+    }
+
+    /**
+     * When TABLE and TWC conflict, the dead-letter gap must be logged only once, not on every cycle.
+     */
+    @Test
+    void tableTwcConflict_gapLoggedOnlyOnFirstDetection() {
+        BaseRangerService mockRangerService = mock(BaseRangerService.class);
+        when(mockRangerService.getServiceType()).thenReturn("lakeformation");
+        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
+        when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
+        when(mockRangerService.getLatestPolicies()).thenReturn(createServicePolicies(1L, 1));
+
+        SyncService svc = new SyncService(
+                Collections.singletonList(mockRangerService),
+                rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger,
+                null, null);
+        svc.start(syncConfig);
+
+        CedarPolicySet mockPs = mock(CedarPolicySet.class);
+        when(mockPs.getPermitCount()).thenReturn(2);
+        when(mockPs.getForbidCount()).thenReturn(0);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
+
+        LFResource tableRes = new LFResource("cat", "db", "sales", null, null);
+        LFPermissionOperation tableOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:10", "arn:aws:iam::123:role/analyst",
+                tableRes, EnumSet.of(LFPermission.SELECT), false);
+        LFResource twcRes = new LFResource("cat", "db", "sales",
+                java.util.Set.of("amount"), null);
+        LFPermissionOperation twcOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:20", "arn:aws:iam::123:role/analyst",
+                twcRes, EnumSet.of(LFPermission.SELECT), false);
+
+        // Both cycles return the same conflicting pair
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(tableOp, twcOp));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Collections.singletonList("lakeformation:10"),
+                        Collections.emptyList(), 1, 1, 0));
+
+        svc.executeSyncCycle();
+        svc.executeSyncCycle();
+
+        // logGapOperation should be called exactly once regardless of cycle count
+        verify(deadLetterLogger, times(1)).logGapOperation(any(), anyString());
+    }
+
+    /**
+     * No conflict when two operations touch the same table but for different principals.
+     */
+    @Test
+    void tableTwcConflict_noneWhenDifferentPrincipals() {
+        BaseRangerService mockRangerService = mock(BaseRangerService.class);
+        when(mockRangerService.getServiceType()).thenReturn("lakeformation");
+        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
+        when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
+        when(mockRangerService.getLatestPolicies()).thenReturn(createServicePolicies(1L, 1));
+
+        SyncService svc = new SyncService(
+                Collections.singletonList(mockRangerService),
+                rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger,
+                null, null);
+        svc.start(syncConfig);
+
+        CedarPolicySet mockPs = mock(CedarPolicySet.class);
+        when(mockPs.getPermitCount()).thenReturn(2);
+        when(mockPs.getForbidCount()).thenReturn(0);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
+
+        // TABLE for principal A
+        LFResource tableRes = new LFResource("cat", "db", "logs", null, null);
+        LFPermissionOperation tableOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:1", "arn:aws:iam::123:role/roleA",
+                tableRes, EnumSet.of(LFPermission.SELECT), false);
+        // TWC for principal B (different principal — no conflict)
+        LFResource twcRes = new LFResource("cat", "db", "logs",
+                java.util.Set.of("col"), null);
+        LFPermissionOperation twcOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:2", "arn:aws:iam::123:role/roleB",
+                twcRes, EnumSet.of(LFPermission.SELECT), false);
+
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(tableOp, twcOp));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Arrays.asList("lakeformation:1", "lakeformation:2"),
+                        Collections.emptyList(), 2, 2, 0));
+
+        svc.executeSyncCycle();
+
+        // Both ops must pass through unchanged — no GAP logged
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor.capture(), eq(deadLetterLogger));
+        assertEquals(2, captor.getValue().size());
+        verify(deadLetterLogger, never()).logGapOperation(any(), anyString());
+    }
+
+    // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------
 
