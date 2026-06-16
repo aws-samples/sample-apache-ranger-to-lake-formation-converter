@@ -28,7 +28,9 @@ import software.amazon.awssdk.services.lakeformation.model.Permission;
 import software.amazon.awssdk.services.lakeformation.model.ListPermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.ListPermissionsResponse;
 import software.amazon.awssdk.services.lakeformation.model.PrincipalResourcePermissions;
+import software.amazon.awssdk.services.lakeformation.model.Resource;
 import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.TableWithColumnsResource;
 
 import java.io.BufferedWriter;
 import java.io.StringWriter;
@@ -611,8 +613,20 @@ class LakeFormationClientTest {
 
     // --- Bug fix: TABLE/TABLE_WITH_COLUMNS conflict retry must not loop infinitely ---
 
+    /**
+     * Returns a ListPermissionsResponse whose single entry has SELECT on a TWC resource.
+     * The resource field is set so that fetchActualPermissions' TWC-filter passes.
+     */
     private ListPermissionsResponse listPermissionsWithSelect() {
+        Resource twcResource = Resource.builder()
+                .tableWithColumns(TableWithColumnsResource.builder()
+                        .catalogId("catalog1")
+                        .databaseName("mydb")
+                        .name("t1")
+                        .build())
+                .build();
         PrincipalResourcePermissions entry = PrincipalResourcePermissions.builder()
+                .resource(twcResource)
                 .permissions(List.of(Permission.SELECT))
                 .build();
         return ListPermissionsResponse.builder()
@@ -723,8 +737,14 @@ class LakeFormationClientTest {
         doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
                 .doReturn(BatchGrantPermissionsResponse.builder().failures(List.of()).build())
                 .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
-        // Conflicting TWC has only SELECT — different from the failing op's permissions
+        // Conflicting TWC has only SELECT — different from the failing op's permissions.
+        // The resource field must be a TWC resource so fetchActualPermissions' TWC-filter passes.
+        Resource twcResource = Resource.builder()
+                .tableWithColumns(TableWithColumnsResource.builder()
+                        .catalogId("catalog1").databaseName("mydb").name("t1").build())
+                .build();
         PrincipalResourcePermissions twcEntry = PrincipalResourcePermissions.builder()
+                .resource(twcResource)
                 .permissions(List.of(Permission.SELECT))
                 .build();
         doReturn(ListPermissionsResponse.builder().principalResourcePermissions(List.of(twcEntry)).build())
@@ -746,6 +766,66 @@ class LakeFormationClientTest {
         // Verify the revoke used SELECT (the actual TWC permissions), not INSERT/DELETE
         assertEquals(List.of(Permission.SELECT), revokeCaptor.getValue().permissions(),
                 "Revoke must use the conflicting grant's actual permissions, not the failing op's permissions");
+    }
+
+    /**
+     * TABLE grant blocked by an existing TWC grant: listPermissions must be issued on the plain
+     * TABLE resource (not the TWC resource, which LF rejects with 400), and only TWC entries from
+     * the response should count toward the permissions to revoke.
+     */
+    @Test
+    void applyBatch_tableBLockedByTwc_listPermissionsUsesTableResource() {
+        BatchPermissionsFailureEntry conflictFailure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-0").build())
+                .error(ErrorDetail.builder().errorMessage("Permissions modification is invalid.").build())
+                .build();
+        doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
+                .doReturn(BatchGrantPermissionsResponse.builder().failures(List.of()).build())
+                .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+
+        // listPermissions returns one TABLE entry (should be ignored) and one TWC entry (SELECT)
+        Resource tableResource = Resource.builder()
+                .table(software.amazon.awssdk.services.lakeformation.model.TableResource.builder()
+                        .catalogId("catalog1").databaseName("mydb").name("t1").build())
+                .build();
+        Resource twcResource = Resource.builder()
+                .tableWithColumns(TableWithColumnsResource.builder()
+                        .catalogId("catalog1").databaseName("mydb").name("t1").build())
+                .build();
+        PrincipalResourcePermissions tableEntry = PrincipalResourcePermissions.builder()
+                .resource(tableResource)
+                .permissions(List.of(Permission.ALTER))
+                .build();
+        PrincipalResourcePermissions twcEntry = PrincipalResourcePermissions.builder()
+                .resource(twcResource)
+                .permissions(List.of(Permission.SELECT))
+                .build();
+        ArgumentCaptor<ListPermissionsRequest> listCaptor =
+                ArgumentCaptor.forClass(ListPermissionsRequest.class);
+        doReturn(ListPermissionsResponse.builder()
+                .principalResourcePermissions(List.of(tableEntry, twcEntry)).build())
+                .when(awsClient).listPermissions(listCaptor.capture());
+        ArgumentCaptor<RevokePermissionsRequest> revokeCaptor =
+                ArgumentCaptor.forClass(RevokePermissionsRequest.class);
+        doReturn(null).when(awsClient).revokePermissions(revokeCaptor.capture());
+
+        // Plain TABLE op (no columns) — conflict handler will try to revoke the existing TWC
+        LFResource resource = new LFResource("catalog1", "mydb", "t1", null, null);
+        LFPermissionOperation op = new LFPermissionOperation(
+                LFPermissionOperation.OperationType.GRANT, "p1",
+                "arn:aws:iam::123456789012:role/TestRole", resource,
+                EnumSet.of(LFPermission.ALTER), false);
+        BatchResult result = client.applyBatch(List.of(op), null);
+
+        assertFalse(result.hasFailures(), "Grant should succeed after TWC revoke");
+
+        // listPermissions must have been called on the plain TABLE resource (not TWC)
+        ListPermissionsRequest listReq = listCaptor.getValue();
+        assertNotNull(listReq.resource().table(), "listPermissions must use TABLE resource, not TWC");
+
+        // Revoke must use only SELECT (from the TWC entry), not ALTER (from the TABLE entry)
+        assertEquals(List.of(Permission.SELECT), revokeCaptor.getValue().permissions(),
+                "Revoke must use only the TWC entry's permissions from the list response");
     }
 
 }

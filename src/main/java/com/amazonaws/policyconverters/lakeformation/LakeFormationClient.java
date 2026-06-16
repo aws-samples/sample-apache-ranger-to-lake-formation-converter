@@ -649,15 +649,41 @@ public class LakeFormationClient {
     /**
      * Fetch the actual permissions held by a principal on a resource, for use before revoking
      * a conflicting grant where the held permissions may differ from the failing op's permissions.
+     *
+     * <p>LF rejects {@code listPermissions} on a {@code TableWithColumns} resource (HTTP 400).
+     * When {@code resource} is a TWC resource, we fall back to listing on the parent TABLE resource
+     * and return only the permissions from TWC-type result entries.
      */
     private List<Permission> fetchActualPermissions(DataLakePrincipal principal, Resource resource) {
+        Resource queryResource = resource;
+        boolean isTwcResource = resource.tableWithColumns() != null;
+        if (isTwcResource) {
+            // Build the plain TABLE resource to use as the listPermissions query target
+            software.amazon.awssdk.services.lakeformation.model.TableWithColumnsResource twc =
+                    resource.tableWithColumns();
+            queryResource = Resource.builder()
+                    .table(TableResource.builder()
+                            .catalogId(twc.catalogId())
+                            .databaseName(twc.databaseName())
+                            .name(twc.name())
+                            .build())
+                    .build();
+        }
         try {
+            final Resource finalQueryResource = queryResource;
             ListPermissionsResponse resp = lfClient.listPermissions(
                     ListPermissionsRequest.builder()
                             .principal(principal)
-                            .resource(resource)
+                            .resource(finalQueryResource)
                             .build());
             return resp.principalResourcePermissions().stream()
+                    .filter(p -> {
+                        if (isTwcResource) {
+                            // Keep only the TWC entries (resource has tableWithColumns)
+                            return p.resource() != null && p.resource().tableWithColumns() != null;
+                        }
+                        return true;
+                    })
                     .flatMap(p -> p.permissions().stream())
                     .distinct()
                     .collect(java.util.stream.Collectors.toList());
