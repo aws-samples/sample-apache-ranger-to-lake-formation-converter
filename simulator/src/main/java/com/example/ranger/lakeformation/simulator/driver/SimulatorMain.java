@@ -15,6 +15,8 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.glue.GlueClient;
 import software.amazon.awssdk.services.lakeformation.LakeFormationClient;
 import software.amazon.awssdk.services.s3control.S3ControlClient;
+import software.amazon.awssdk.services.s3control.model.GetAccessGrantsInstanceRequest;
+import software.amazon.awssdk.services.s3control.model.S3ControlException;
 import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider;
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
@@ -133,9 +135,9 @@ public class SimulatorMain {
         // Principal map: Ranger name → IAM ARN (from config)
         Map<String, String> principalMap = new LinkedHashMap<>(config.getPrincipalMappings());
 
-        // S3 Access Grants instance ARN and account ID
-        String s3AgInstanceArn = System.getenv("S3AG_INSTANCE_ARN");
+        // S3 Access Grants instance ARN — priority: config field → env var → auto-detect
         String accountId = config.getAwsAccountId();
+        String s3AgInstanceArn = resolveS3AgInstanceArn(config, s3ControlClient, accountId);
 
         LFPermissionsFetcher lfFetcher = new LFPermissionsFetcher(lfClient, accountId);
         S3AgPermissionsFetcher s3AgFetcher = new S3AgPermissionsFetcher(s3ControlClient, accountId,
@@ -184,6 +186,46 @@ public class SimulatorMain {
                 LOG.info("Simulator interrupted, shutting down");
             }
         }
+    }
+
+    /**
+     * Resolves the S3 Access Grants instance ARN using priority order:
+     * 1. Explicit value in simulator config (s3agInstanceArn field)
+     * 2. S3AG_INSTANCE_ARN environment variable
+     * 3. Auto-detection via GetAccessGrantsInstance API
+     * Returns null if no instance exists or detection fails, which disables S3AG validation.
+     */
+    private static String resolveS3AgInstanceArn(SimulatorConfig config,
+                                                  S3ControlClient s3ControlClient,
+                                                  String accountId) {
+        if (config.getS3agInstanceArn() != null) {
+            LOG.info("S3 Access Grants instance ARN from config: {}", config.getS3agInstanceArn());
+            return config.getS3agInstanceArn();
+        }
+        String fromEnv = System.getenv("S3AG_INSTANCE_ARN");
+        if (fromEnv != null && !fromEnv.isBlank()) {
+            LOG.info("S3 Access Grants instance ARN from env: {}", fromEnv);
+            return fromEnv;
+        }
+        try {
+            String arn = s3ControlClient.getAccessGrantsInstance(
+                    GetAccessGrantsInstanceRequest.builder().accountId(accountId).build()
+            ).accessGrantsInstanceArn();
+            if (arn != null && !arn.isBlank()) {
+                LOG.info("S3 Access Grants instance ARN auto-detected: {}", arn);
+                return arn;
+            }
+        } catch (S3ControlException e) {
+            if (e.statusCode() == 404) {
+                LOG.info("No S3 Access Grants instance found in account {}; S3AG validation disabled", accountId);
+            } else {
+                LOG.warn("Could not auto-detect S3 Access Grants instance ARN (status={}): {}; S3AG validation disabled",
+                        e.statusCode(), e.getMessage());
+            }
+        } catch (Exception e) {
+            LOG.warn("Could not auto-detect S3 Access Grants instance ARN: {}; S3AG validation disabled", e.getMessage());
+        }
+        return null;
     }
 
     private static AwsCredentialsProvider buildCredentialsProvider(SimulatorConfig config, Region region) {

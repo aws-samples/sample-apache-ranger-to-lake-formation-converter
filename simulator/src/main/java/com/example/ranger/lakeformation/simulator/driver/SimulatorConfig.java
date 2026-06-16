@@ -56,6 +56,12 @@ public class SimulatorConfig {
      */
     private final boolean validateEmrSpark;
 
+    /**
+     * Optional explicit S3 Access Grants instance ARN. If null, SimulatorMain will attempt
+     * to auto-detect it via GetAccessGrantsInstance. Set to empty string to disable S3AG validation.
+     */
+    private final String s3agInstanceArn;
+
     @JsonCreator
     public SimulatorConfig(
             @JsonProperty("cycleIntervalSeconds")    Integer cycleIntervalSeconds,
@@ -79,7 +85,8 @@ public class SimulatorConfig {
             @JsonProperty("s3Prefixes")              List<String> s3Prefixes,
             @JsonProperty("roleArn")                 String  roleArn,
             @JsonProperty("validateEmrSpark")        Boolean validateEmrSpark,
-            @JsonProperty("awsProfile")              String  awsProfile) {
+            @JsonProperty("awsProfile")              String  awsProfile,
+            @JsonProperty("s3agInstanceArn")         String  s3agInstanceArn) {
         this.cycleIntervalSeconds = cycleIntervalSeconds != null ? cycleIntervalSeconds : DEFAULT_CYCLE_INTERVAL_SECONDS;
         this.awsRegion = awsRegion != null ? awsRegion : DEFAULT_AWS_REGION;
         this.rangerAdminUrl = rangerAdminUrl;
@@ -104,6 +111,7 @@ public class SimulatorConfig {
         this.roleArn = (roleArn != null && !roleArn.isBlank()) ? roleArn : null;
         this.validateEmrSpark = Boolean.TRUE.equals(validateEmrSpark);
         this.awsProfile = (awsProfile != null && !awsProfile.isBlank()) ? awsProfile : null;
+        this.s3agInstanceArn = (s3agInstanceArn != null && !s3agInstanceArn.isBlank()) ? s3agInstanceArn : null;
     }
 
     public int getCycleIntervalSeconds() { return cycleIntervalSeconds; }
@@ -132,6 +140,11 @@ public class SimulatorConfig {
     public String getAwsProfile()             { return awsProfile; }
     /** Returns true if EMR Spark policies should be included in Phase2 LF validation. */
     public boolean isValidateEmrSpark()       { return validateEmrSpark; }
+    /**
+     * Returns the explicitly configured S3 Access Grants instance ARN, or null if auto-detection
+     * should be attempted. Returns empty string if S3AG validation is explicitly disabled.
+     */
+    public String getS3agInstanceArn()        { return s3agInstanceArn; }
 
     @Override
     public String toString() {
