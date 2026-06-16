@@ -1,0 +1,896 @@
+{
+  "schema": 1,
+  "applicationInfo": {
+    "name": "Threat Model Export",
+    "description": "ApacheRangerToLF is a Java-based security policy synchronization daemon that bridges Apache Ranger access-control policies to AWS Lake Formation permissions. It continuously polls the Ranger Admin REST API, translates Ranger policies into Cedar policy statements (via a Cedar intermediate representation), then applies the resulting permission grants and revocations to AWS Lake Formation and AWS Glue Data Catalog. The tool also optionally syncs S3 data-location access via AWS S3 Access Grants. It runs as a long-lived daemon in AWS-hosted data lake environments (EMR, Glue, Athena, Redshift Spectrum) and is security-critical middleware: it directly controls who can access what data in the lake. A compromise or misconfiguration of this tool can silently under-grant (data access denied for legitimate users) or over-grant (unauthorized principals gain data access), and since the tool holds AWS IAM credentials with lakeformation:GrantPermissions and lakeformation:RevokePermissions, an attacker who compromises the process gains the ability to rewrite all Lake Formation permissions in the AWS account."
+  },
+  "architecture": {
+    "description": ""
+  },
+  "dataflow": {
+    "description": ""
+  },
+  "assumptions": [
+    {
+      "id": "A001",
+      "numericId": 1,
+      "content": "The Ranger Admin server is a trusted, separately hardened system. Its policies are the authoritative source of truth and are not manipulated before reaching this tool.",
+      "displayOrder": 1,
+      "metadata": []
+    },
+    {
+      "id": "A002",
+      "numericId": 2,
+      "content": "The tool runs with a high-privilege IAM role that has lakeformation:GrantPermissions, lakeformation:RevokePermissions, lakeformation:ListPermissions, glue:GetDatabases, glue:GetTables, and identitystore:* rights. This role is not scoped to specific resources.",
+      "displayOrder": 2,
+      "metadata": []
+    },
+    {
+      "id": "A003",
+      "numericId": 3,
+      "content": "The default configuration uses HTTP (not HTTPS) to communicate with Ranger Admin. HTTPS is optional and operator-configured.",
+      "displayOrder": 3,
+      "metadata": []
+    },
+    {
+      "id": "A004",
+      "numericId": 4,
+      "content": "The Ranger Admin password and optionally AWS static credentials are stored in plaintext in the YAML config file on disk.",
+      "displayOrder": 4,
+      "metadata": []
+    },
+    {
+      "id": "A005",
+      "numericId": 5,
+      "content": "The unauthenticated HTTP status endpoint (StatusEndpoint) exposes the tool's operational state to anyone with network access to the listening port.",
+      "displayOrder": 5,
+      "metadata": []
+    },
+    {
+      "id": "A006",
+      "numericId": 6,
+      "content": "Cedar forbid statements (deny policies from Ranger) are not applied as LF revocations. They influence only in-memory Cedar evaluation and are silently dropped in the LF sync path.",
+      "displayOrder": 6,
+      "metadata": []
+    },
+    {
+      "id": "A007",
+      "numericId": 7,
+      "content": "The checkpoint file and dead-letter log are stored on the local filesystem. File system ACLs are the sole protection for the Cedar policy set (containing all principal ARNs and resource permissions) and failed-operation records.",
+      "displayOrder": 7,
+      "metadata": []
+    },
+    {
+      "id": "A008",
+      "numericId": 8,
+      "content": "The principal-mapping file (principal-mapping.json or IdentityCenter) maps Ranger user/group names to IAM Role ARNs. This mapping is static-file or API-driven with no change detection during operation.",
+      "displayOrder": 8,
+      "metadata": []
+    },
+    {
+      "id": "A009",
+      "numericId": 9,
+      "content": "Code analysis confirmed: ConfigValidator accepts both http:// and https:// Ranger Admin URLs. No warning or rejection for plaintext http://. Default config and integration tests use http://.",
+      "displayOrder": 9,
+      "metadata": []
+    },
+    {
+      "id": "A010",
+      "numericId": 10,
+      "content": "Code analysis confirmed: Credentials (Ranger password, AWS secret key) are masked in logs via ConfigLoader.mask() and logConfig(). This is the only credential protection implemented in code.",
+      "displayOrder": 10,
+      "metadata": []
+    },
+    {
+      "id": "A011",
+      "numericId": 11,
+      "content": "Code analysis confirmed: No filesystem ACL enforcement exists. Config YAML, checkpoint JSON, principal-mapping JSON, and dead-letter JSONL are created with OS-default umask permissions.",
+      "displayOrder": 11,
+      "metadata": []
+    },
+    {
+      "id": "A012",
+      "numericId": 12,
+      "content": "Code analysis confirmed: CheckpointStore has no integrity check (no HMAC, hash, or CRC). Checkpoint is loaded and deserialized from JSON directly. An attacker with write access to the checkpoint file can inject arbitrary Cedar policy.",
+      "displayOrder": 12,
+      "metadata": []
+    },
+    {
+      "id": "A013",
+      "numericId": 13,
+      "content": "Code analysis confirmed: StatusEndpoint uses com.sun.net.httpserver.HttpServer (plain HTTP), no authentication, no TLS, no rate limiting, unbounded thread pool. Fully open to any host.",
+      "displayOrder": 13,
+      "metadata": []
+    },
+    {
+      "id": "A014",
+      "numericId": 14,
+      "content": "Code analysis confirmed: ReverseSyncService is disabled by default (ReverseSyncConfig.enabled defaults to false, server-config.yaml sets enabled: false). Drift detection does not run unless explicitly enabled.",
+      "displayOrder": 14,
+      "metadata": []
+    },
+    {
+      "id": "A015",
+      "numericId": 15,
+      "content": "Code analysis confirmed: CatalogResolver expands wildcards against Glue API. On success, wildcard grants are fully expanded. On AWS exception, returns emptyList() with error log — effective silent drop of that grant.",
+      "displayOrder": 15,
+      "metadata": []
+    },
+    {
+      "id": "A016",
+      "numericId": 16,
+      "content": "Code analysis confirmed: No AWS Secrets Manager, HashiCorp Vault, or any external secret store integration exists. All credentials come from YAML config or environment variables only.",
+      "displayOrder": 16,
+      "metadata": []
+    },
+    {
+      "id": "A017",
+      "numericId": 17,
+      "content": "RESIDUAL RISK: The Cedar forbid semantic gap (Ranger deny policies not enforced at LF) is an architectural constraint of LF's grant-only model. This risk is ACCEPTED with mitigation: startup warning logged; operators must understand LF has no deny model.",
+      "displayOrder": 17,
+      "metadata": []
+    },
+    {
+      "id": "A018",
+      "numericId": 18,
+      "content": "RESIDUAL RISK: The TABLE/TWC conflict under-grant bug (Bug #3) is OPEN as of 2026-06-16. The displaced TABLE grant is never re-applied after conflict resolution. Risk is ACCEPTED pending fix.",
+      "displayOrder": 18,
+      "metadata": []
+    },
+    {
+      "id": "A019",
+      "numericId": 19,
+      "content": "RESIDUAL RISK: The unauthenticated status endpoint represents LOW residual risk if network access to the daemon host is restricted. Risk is CONDITIONALLY ACCEPTED if the status port is blocked at the network perimeter.",
+      "displayOrder": 19,
+      "metadata": []
+    },
+    {
+      "id": "A020",
+      "numericId": 20,
+      "content": "RESIDUAL RISK: Plaintext Ranger Admin communication (HTTP default) is the HIGHEST unmitigated risk. Until HTTPS is enforced in ConfigValidator, every deployment that uses the default config is vulnerable to credential theft and policy injection.",
+      "displayOrder": 20,
+      "metadata": []
+    }
+  ],
+  "mitigations": [
+    {
+      "id": "ce46d40a-113c-42ee-9ff0-7c0284abb07e",
+      "numericId": 1,
+      "status": "mitigationIdentified",
+      "content": "Enforce HTTPS with certificate validation for all Ranger Admin communication",
+      "displayOrder": 1,
+      "metadata": []
+    },
+    {
+      "id": "c4a434a7-0a82-4daf-974b-4c747c175bf0",
+      "numericId": 2,
+      "status": "mitigationIdentified",
+      "content": "Restrict filesystem ACLs on config, checkpoint, principal-mapping, and dead-letter files",
+      "displayOrder": 2,
+      "metadata": []
+    },
+    {
+      "id": "9e787b9c-ca18-4582-a36d-8b7f1cf3e2f4",
+      "numericId": 3,
+      "status": "mitigationIdentified",
+      "content": "Integrate AWS Secrets Manager (or HashiCorp Vault) for Ranger Admin password and static AWS credentials",
+      "displayOrder": 3,
+      "metadata": []
+    },
+    {
+      "id": "2936b328-5b1e-4c81-ad84-809578595e9f",
+      "numericId": 4,
+      "status": "mitigationIdentified",
+      "content": "Add authentication and TLS to the status HTTP endpoint",
+      "displayOrder": 4,
+      "metadata": []
+    },
+    {
+      "id": "d26ada70-192d-41c2-8bfd-1f3d5bf7b580",
+      "numericId": 5,
+      "status": "mitigationIdentified",
+      "content": "Apply least-privilege IAM policy scoped to specific LF databases and tables",
+      "displayOrder": 5,
+      "metadata": []
+    },
+    {
+      "id": "95954bc1-1220-4cf5-8d3e-3bf8140c752f",
+      "numericId": 6,
+      "status": "mitigationIdentified",
+      "content": "Fix TABLE/TWC conflict handler to re-apply TABLE grant after conflict resolution",
+      "displayOrder": 6,
+      "metadata": []
+    },
+    {
+      "id": "6e41c220-1e7f-4fab-9c45-f058bd1ae7a8",
+      "numericId": 7,
+      "status": "mitigationIdentified",
+      "content": "Validate Ranger Admin server identity using certificate pinning or strict CA trust",
+      "displayOrder": 7,
+      "metadata": []
+    },
+    {
+      "id": "d66bdb48-53b3-4983-bc93-f7bfa4dff4e7",
+      "numericId": 8,
+      "status": "mitigationIdentified",
+      "content": "Add HMAC integrity check on checkpoint file at write and read",
+      "displayOrder": 8,
+      "metadata": []
+    },
+    {
+      "id": "1df02f24-a1d5-400a-92c6-7637a5468359",
+      "numericId": 9,
+      "status": "mitigationIdentified",
+      "content": "Rotate default TLS keystore and truststore passwords from 'changeit'",
+      "displayOrder": 9,
+      "metadata": []
+    },
+    {
+      "id": "eea482d6-3bcc-4199-b110-5e9c5ce1af7a",
+      "numericId": 10,
+      "status": "mitigationIdentified",
+      "content": "Enable and enforce ReverseSyncService by default to detect and correct LF drift",
+      "displayOrder": 10,
+      "metadata": []
+    },
+    {
+      "id": "6bad08bb-d2c8-4eec-87af-b3526474722a",
+      "numericId": 11,
+      "status": "mitigationInProgress",
+      "content": "Implement structured audit log correlating Ranger policy versions to LF API calls",
+      "displayOrder": 11,
+      "metadata": []
+    },
+    {
+      "id": "c97a2fb7-d0f7-445f-863e-56331783c6aa",
+      "numericId": 12,
+      "status": "mitigationIdentified",
+      "content": "Add dependency scanning (OWASP Dependency-Check or Snyk) and publish SBOM",
+      "displayOrder": 12,
+      "metadata": []
+    },
+    {
+      "id": "0928ccf9-9f67-45d7-8197-e518f48b1d90",
+      "numericId": 13,
+      "status": "mitigationIdentified",
+      "content": "Apply log rotation and ACL to dead-letter log; cap maximum file size",
+      "displayOrder": 13,
+      "metadata": []
+    },
+    {
+      "id": "a7675ff4-28f1-4f83-a021-30cd85e36de9",
+      "numericId": 14,
+      "status": "mitigationIdentified",
+      "content": "Add ConfigValidator rejection of http:// Ranger Admin URLs with an actionable error",
+      "displayOrder": 14,
+      "metadata": []
+    },
+    {
+      "id": "79e141c5-9af5-445e-bf78-2d069d1f7428",
+      "numericId": 15,
+      "status": "mitigationInProgress",
+      "content": "Document Cedar forbid semantic gap prominently; add operator warning at startup",
+      "displayOrder": 15,
+      "metadata": []
+    },
+    {
+      "id": "61df1685-e3ae-4c56-8f1c-c8917249402d",
+      "numericId": 16,
+      "status": "mitigationInProgress",
+      "content": "Fix wildcard policy translation to correctly expand and apply wildcard Ranger grants to LF",
+      "displayOrder": 16,
+      "metadata": []
+    },
+    {
+      "id": "27dfe480-19c5-4639-a32e-3c4088bbe221",
+      "numericId": 17,
+      "status": "mitigationInProgress",
+      "content": "Run sync daemon in a least-privilege container with no network access beyond required endpoints",
+      "displayOrder": 17,
+      "metadata": []
+    },
+    {
+      "id": "763911f3-eb85-45a5-9405-3fd05c2de4fd",
+      "numericId": 18,
+      "status": "mitigationInProgress",
+      "content": "Implement Ranger policy allowlist/schema validation before Cedar conversion",
+      "displayOrder": 18,
+      "metadata": []
+    }
+  ],
+  "assumptionLinks": [],
+  "mitigationLinks": [
+    {
+      "linkedId": "cfd811b5-acd8-4b58-9495-7d3e3385a9e8",
+      "mitigationId": "ce46d40a-113c-42ee-9ff0-7c0284abb07e"
+    },
+    {
+      "linkedId": "418ed985-bc28-44e4-a8d0-c9d959a88ddd",
+      "mitigationId": "ce46d40a-113c-42ee-9ff0-7c0284abb07e"
+    },
+    {
+      "linkedId": "7287cbcc-5281-4bff-8c32-719b01df85e9",
+      "mitigationId": "c4a434a7-0a82-4daf-974b-4c747c175bf0"
+    },
+    {
+      "linkedId": "b27c4910-c9b3-4ee1-a915-defe44f5d3cf",
+      "mitigationId": "c4a434a7-0a82-4daf-974b-4c747c175bf0"
+    },
+    {
+      "linkedId": "9e6bbc70-c68a-4fe2-848f-17a94aa51b5f",
+      "mitigationId": "c4a434a7-0a82-4daf-974b-4c747c175bf0"
+    },
+    {
+      "linkedId": "de64fb8c-5f6c-49b7-97e3-ace5373cab81",
+      "mitigationId": "c4a434a7-0a82-4daf-974b-4c747c175bf0"
+    },
+    {
+      "linkedId": "cda6c1ee-7bef-46d9-ba96-69ea69656a83",
+      "mitigationId": "c4a434a7-0a82-4daf-974b-4c747c175bf0"
+    },
+    {
+      "linkedId": "7287cbcc-5281-4bff-8c32-719b01df85e9",
+      "mitigationId": "9e787b9c-ca18-4582-a36d-8b7f1cf3e2f4"
+    },
+    {
+      "linkedId": "541b2eef-d3bd-403e-b7c0-e43c3b62132e",
+      "mitigationId": "9e787b9c-ca18-4582-a36d-8b7f1cf3e2f4"
+    },
+    {
+      "linkedId": "67c5f77c-a729-4473-9fe5-f870fa5204a9",
+      "mitigationId": "2936b328-5b1e-4c81-ad84-809578595e9f"
+    },
+    {
+      "linkedId": "e731bc28-44ac-4294-a365-55469c35b641",
+      "mitigationId": "2936b328-5b1e-4c81-ad84-809578595e9f"
+    },
+    {
+      "linkedId": "885f2daa-4193-4982-9022-5f6c90804089",
+      "mitigationId": "d26ada70-192d-41c2-8bfd-1f3d5bf7b580"
+    },
+    {
+      "linkedId": "77d41899-f55b-40fd-840c-0d6266c2449b",
+      "mitigationId": "d26ada70-192d-41c2-8bfd-1f3d5bf7b580"
+    },
+    {
+      "linkedId": "329b4319-d5ae-482a-a901-2972a8d8e858",
+      "mitigationId": "95954bc1-1220-4cf5-8d3e-3bf8140c752f"
+    },
+    {
+      "linkedId": "2cfc4e2d-fe41-4a7e-9d87-5dae826eb5a3",
+      "mitigationId": "95954bc1-1220-4cf5-8d3e-3bf8140c752f"
+    },
+    {
+      "linkedId": "418ed985-bc28-44e4-a8d0-c9d959a88ddd",
+      "mitigationId": "6e41c220-1e7f-4fab-9c45-f058bd1ae7a8"
+    },
+    {
+      "linkedId": "abde864e-bcf6-4a5b-a545-a45300723a36",
+      "mitigationId": "6e41c220-1e7f-4fab-9c45-f058bd1ae7a8"
+    },
+    {
+      "linkedId": "9e6bbc70-c68a-4fe2-848f-17a94aa51b5f",
+      "mitigationId": "d66bdb48-53b3-4983-bc93-f7bfa4dff4e7"
+    },
+    {
+      "linkedId": "de64fb8c-5f6c-49b7-97e3-ace5373cab81",
+      "mitigationId": "d66bdb48-53b3-4983-bc93-f7bfa4dff4e7"
+    },
+    {
+      "linkedId": "abde864e-bcf6-4a5b-a545-a45300723a36",
+      "mitigationId": "1df02f24-a1d5-400a-92c6-7637a5468359"
+    },
+    {
+      "linkedId": "e2d36955-7f13-430c-b126-f884058db982",
+      "mitigationId": "eea482d6-3bcc-4199-b110-5e9c5ce1af7a"
+    },
+    {
+      "linkedId": "be119ca8-ad4d-404c-ba9e-4b3b6cc1b5f4",
+      "mitigationId": "eea482d6-3bcc-4199-b110-5e9c5ce1af7a"
+    },
+    {
+      "linkedId": "ad84f3fb-01c2-441e-a903-b011248248c3",
+      "mitigationId": "6bad08bb-d2c8-4eec-87af-b3526474722a"
+    },
+    {
+      "linkedId": "77d41899-f55b-40fd-840c-0d6266c2449b",
+      "mitigationId": "6bad08bb-d2c8-4eec-87af-b3526474722a"
+    },
+    {
+      "linkedId": "8915dc9a-1b40-426c-af75-022977eb063d",
+      "mitigationId": "c97a2fb7-d0f7-445f-863e-56331783c6aa"
+    },
+    {
+      "linkedId": "cda6c1ee-7bef-46d9-ba96-69ea69656a83",
+      "mitigationId": "0928ccf9-9f67-45d7-8197-e518f48b1d90"
+    },
+    {
+      "linkedId": "cfd811b5-acd8-4b58-9495-7d3e3385a9e8",
+      "mitigationId": "a7675ff4-28f1-4f83-a021-30cd85e36de9"
+    },
+    {
+      "linkedId": "418ed985-bc28-44e4-a8d0-c9d959a88ddd",
+      "mitigationId": "a7675ff4-28f1-4f83-a021-30cd85e36de9"
+    },
+    {
+      "linkedId": "e2d36955-7f13-430c-b126-f884058db982",
+      "mitigationId": "79e141c5-9af5-445e-bf78-2d069d1f7428"
+    },
+    {
+      "linkedId": "2cfc4e2d-fe41-4a7e-9d87-5dae826eb5a3",
+      "mitigationId": "61df1685-e3ae-4c56-8f1c-c8917249402d"
+    },
+    {
+      "linkedId": "885f2daa-4193-4982-9022-5f6c90804089",
+      "mitigationId": "27dfe480-19c5-4639-a32e-3c4088bbe221"
+    },
+    {
+      "linkedId": "be119ca8-ad4d-404c-ba9e-4b3b6cc1b5f4",
+      "mitigationId": "27dfe480-19c5-4639-a32e-3c4088bbe221"
+    },
+    {
+      "linkedId": "77d41899-f55b-40fd-840c-0d6266c2449b",
+      "mitigationId": "763911f3-eb85-45a5-9405-3fd05c2de4fd"
+    },
+    {
+      "linkedId": "ad84f3fb-01c2-441e-a903-b011248248c3",
+      "mitigationId": "763911f3-eb85-45a5-9405-3fd05c2de4fd"
+    },
+    {
+      "linkedId": "b563be77-a995-4a93-85ab-6f8739639b2f",
+      "mitigationId": "ce46d40a-113c-42ee-9ff0-7c0284abb07e"
+    },
+    {
+      "linkedId": "b563be77-a995-4a93-85ab-6f8739639b2f",
+      "mitigationId": "9e787b9c-ca18-4582-a36d-8b7f1cf3e2f4"
+    },
+    {
+      "linkedId": "329b4319-d5ae-482a-a901-2972a8d8e858",
+      "mitigationId": "eea482d6-3bcc-4199-b110-5e9c5ce1af7a"
+    }
+  ],
+  "threats": [
+    {
+      "id": "cfd811b5-acd8-4b58-9495-7d3e3385a9e8",
+      "numericId": 1,
+      "threatSource": "Network attacker with access to internal segment",
+      "prerequisites": "Ranger Admin configured with plain HTTP (default)",
+      "threatAction": "Intercept HTTP traffic between sync daemon and Ranger Admin to steal Basic Auth credentials",
+      "threatImpact": "Full Ranger Admin access; attacker can read/modify all Ranger policies",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A008"
+      ],
+      "statement": "A Network attacker with access to internal segment Ranger Admin configured with plain HTTP (default) can Intercept HTTP traffic between sync daemon and Ranger Admin to steal Basic Auth credentials, which leads to Full Ranger Admin access; attacker can read/modify all Ranger policies",
+      "displayOrder": 1,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-S",
+        "Network",
+        "Credentials",
+        "NotMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "418ed985-bc28-44e4-a8d0-c9d959a88ddd",
+      "numericId": 2,
+      "threatSource": "Network attacker with MitM position",
+      "prerequisites": "Plain HTTP to Ranger Admin; no certificate pinning",
+      "threatAction": "Impersonate Ranger Admin server and serve fabricated policies to the sync daemon",
+      "threatImpact": "Sync daemon grants unauthorized principals LF permissions based on injected policies",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A010",
+        "A014"
+      ],
+      "statement": "A Network attacker with MitM position Plain HTTP to Ranger Admin; no certificate pinning can Impersonate Ranger Admin server and serve fabricated policies to the sync daemon, which leads to Sync daemon grants unauthorized principals LF permissions based on injected policies",
+      "displayOrder": 2,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-S",
+        "Network",
+        "PolicyInjection",
+        "NotMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "7287cbcc-5281-4bff-8c32-719b01df85e9",
+      "numericId": 3,
+      "threatSource": "Attacker with filesystem read access to host",
+      "prerequisites": "Config file readable beyond the daemon process user",
+      "threatAction": "Read YAML config to obtain Ranger Admin password and/or AWS static credentials",
+      "threatImpact": "Full Ranger Admin and/or AWS Lake Formation privilege escalation",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A008",
+        "A009"
+      ],
+      "statement": "A Attacker with filesystem read access to host Config file readable beyond the daemon process user can Read YAML config to obtain Ranger Admin password and/or AWS static credentials, which leads to Full Ranger Admin and/or AWS Lake Formation privilege escalation",
+      "displayOrder": 3,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "Filesystem",
+        "Credentials",
+        "NotMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "b27c4910-c9b3-4ee1-a915-defe44f5d3cf",
+      "numericId": 4,
+      "threatSource": "Attacker with filesystem read access to host",
+      "prerequisites": "Checkpoint file readable beyond the daemon process user",
+      "threatAction": "Read checkpoint file to obtain all principal ARNs, resource paths, and permission mappings",
+      "threatImpact": "Complete data-lake access-control topology disclosed; enables targeted privilege escalation",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A011"
+      ],
+      "statement": "A Attacker with filesystem read access to host Checkpoint file readable beyond the daemon process user can Read checkpoint file to obtain all principal ARNs, resource paths, and permission mappings, which leads to Complete data-lake access-control topology disclosed; enables targeted privilege escalation",
+      "displayOrder": 4,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "Filesystem",
+        "PolicyData",
+        "NotMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "9e6bbc70-c68a-4fe2-848f-17a94aa51b5f",
+      "numericId": 5,
+      "threatSource": "Attacker with filesystem write access to host",
+      "prerequisites": "Checkpoint file writable beyond the daemon process user",
+      "threatAction": "Inject crafted Cedar policy statements into checkpoint file before next sync cycle",
+      "threatImpact": "Sync daemon applies attacker-controlled LF grants; unauthorized principals gain data-lake access",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A011",
+        "A014"
+      ],
+      "statement": "A Attacker with filesystem write access to host Checkpoint file writable beyond the daemon process user can Inject crafted Cedar policy statements into checkpoint file before next sync cycle, which leads to Sync daemon applies attacker-controlled LF grants; unauthorized principals gain data-lake access",
+      "displayOrder": 5,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-T",
+        "Filesystem",
+        "PolicyInjection",
+        "NotMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "de64fb8c-5f6c-49b7-97e3-ace5373cab81",
+      "numericId": 6,
+      "threatSource": "Attacker with filesystem write access to host",
+      "prerequisites": "Principal mapping file writable beyond daemon user",
+      "threatAction": "Modify principal-mapping.json to redirect Ranger identities to attacker-controlled IAM role ARNs",
+      "threatImpact": "All Ranger-mapped LF grants land on attacker roles; full unauthorized data-lake access",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A012",
+        "A014"
+      ],
+      "statement": "A Attacker with filesystem write access to host Principal mapping file writable beyond daemon user can Modify principal-mapping.json to redirect Ranger identities to attacker-controlled IAM role ARNs, which leads to All Ranger-mapped LF grants land on attacker roles; full unauthorized data-lake access",
+      "displayOrder": 6,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-T",
+        "Filesystem",
+        "IdentityMapping",
+        "NotMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "77d41899-f55b-40fd-840c-0d6266c2449b",
+      "numericId": 7,
+      "threatSource": "Compromised Ranger Admin server or insider with Ranger Admin access",
+      "prerequisites": "Attacker can create or modify Ranger policies",
+      "threatAction": "Inject malicious Ranger policies granting attacker IAM roles access to sensitive tables",
+      "threatImpact": "Sync daemon faithfully translates injected policies into LF grants; data exfiltration enabled",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A010",
+        "A014"
+      ],
+      "statement": "A Compromised Ranger Admin server or insider with Ranger Admin access Attacker can create or modify Ranger policies can Inject malicious Ranger policies granting attacker IAM roles access to sensitive tables, which leads to Sync daemon faithfully translates injected policies into LF grants; data exfiltration enabled",
+      "displayOrder": 7,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-E",
+        "PolicyInjection",
+        "UpstreamCompromise"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "541b2eef-d3bd-403e-b7c0-e43c3b62132e",
+      "numericId": 8,
+      "threatSource": "Insider or attacker with access to running JVM",
+      "prerequisites": "Ability to attach debugger or heap dump JVM process",
+      "threatAction": "Dump JVM heap to extract in-memory Ranger credentials and AWS temporary credentials",
+      "threatImpact": "Full Ranger Admin and AWS IAM access via extracted credentials",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A008",
+        "A009"
+      ],
+      "statement": "A Insider or attacker with access to running JVM Ability to attach debugger or heap dump JVM process can Dump JVM heap to extract in-memory Ranger credentials and AWS temporary credentials, which leads to Full Ranger Admin and AWS IAM access via extracted credentials",
+      "displayOrder": 8,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "MemoryDump",
+        "Credentials"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "67c5f77c-a729-4473-9fe5-f870fa5204a9",
+      "numericId": 9,
+      "threatSource": "Any host with network access to status endpoint port",
+      "prerequisites": "No authentication or network-level firewall on status endpoint port",
+      "threatAction": "Query unauthenticated HTTP status endpoint to determine sync state and timing",
+      "threatImpact": "Operational intelligence for timing attacks; confirm whether security sync is running",
+      "impactedGoal": [],
+      "impactedAssets": [],
+      "statement": "A Any host with network access to status endpoint port No authentication or network-level firewall on status endpoint port can Query unauthenticated HTTP status endpoint to determine sync state and timing, which leads to Operational intelligence for timing attacks; confirm whether security sync is running",
+      "displayOrder": 9,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "Network",
+        "UnauthEndpoint",
+        "NotMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "e731bc28-44ac-4294-a365-55469c35b641",
+      "numericId": 10,
+      "threatSource": "Attacker with network access to status endpoint",
+      "prerequisites": "No rate limiting or authentication on status endpoint",
+      "threatAction": "Flood status endpoint with HTTP requests to exhaust JVM thread pool",
+      "threatImpact": "Sync daemon becomes unresponsive; sync cycles delayed or stopped; LF permissions stale",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014"
+      ],
+      "statement": "A Attacker with network access to status endpoint No rate limiting or authentication on status endpoint can Flood status endpoint with HTTP requests to exhaust JVM thread pool, which leads to Sync daemon becomes unresponsive; sync cycles delayed or stopped; LF permissions stale",
+      "displayOrder": 10,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-D",
+        "Network",
+        "DoS",
+        "NotMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "329b4319-d5ae-482a-a901-2972a8d8e858",
+      "numericId": 11,
+      "threatSource": "Attacker or misconfigured operator",
+      "prerequisites": "Ability to modify Ranger policies to create conflicting TABLE and TWC grants for same principal",
+      "threatAction": "Trigger TABLE/TWC conflict handler to suppress legitimate TABLE grants",
+      "threatImpact": "Known bug: TABLE grant never re-applied after conflict resolution; persistent LF under-grant",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014"
+      ],
+      "statement": "A Attacker or misconfigured operator Ability to modify Ranger policies to create conflicting TABLE and TWC grants for same principal can Trigger TABLE/TWC conflict handler to suppress legitimate TABLE grants, which leads to Known bug: TABLE grant never re-applied after conflict resolution; persistent LF under-grant",
+      "displayOrder": 11,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-D",
+        "ConflictBug",
+        "UnderGrant",
+        "KnownBug"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "be119ca8-ad4d-404c-ba9e-4b3b6cc1b5f4",
+      "numericId": 12,
+      "threatSource": "Attacker controlling network path to AWS APIs",
+      "prerequisites": "Network path between JVM and AWS APIs is compromised",
+      "threatAction": "Block or delay BatchGrant/BatchRevoke calls to freeze LF permissions in stale state",
+      "threatImpact": "LF permissions drift from intended state; access denied for legitimate users or stale grants persist",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014"
+      ],
+      "statement": "A Attacker controlling network path to AWS APIs Network path between JVM and AWS APIs is compromised can Block or delay BatchGrant/BatchRevoke calls to freeze LF permissions in stale state, which leads to LF permissions drift from intended state; access denied for legitimate users or stale grants persist",
+      "displayOrder": 12,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-D",
+        "Network",
+        "APIBlocking"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "885f2daa-4193-4982-9022-5f6c90804089",
+      "numericId": 13,
+      "threatSource": "Attacker who compromises the sync daemon process",
+      "prerequisites": "Code execution in JVM; high-privilege IAM role available",
+      "threatAction": "Use daemon IAM credentials to call LF BatchGrantPermissions for arbitrary principals on any resource",
+      "threatImpact": "Attacker grants any IAM principal full access to any table in the data lake",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A009",
+        "A014"
+      ],
+      "statement": "A Attacker who compromises the sync daemon process Code execution in JVM; high-privilege IAM role available can Use daemon IAM credentials to call LF BatchGrantPermissions for arbitrary principals on any resource, which leads to Attacker grants any IAM principal full access to any table in the data lake",
+      "displayOrder": 13,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-E",
+        "CredentialAbuse",
+        "PrivilegeEscalation"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "e2d36955-7f13-430c-b126-f884058db982",
+      "numericId": 14,
+      "threatSource": "Sync daemon",
+      "prerequisites": "Cedar forbid statements generated from Ranger deny policies",
+      "threatAction": "Apply Ranger deny policies as Cedar forbid—forbid statements dropped silently in LF sync path",
+      "threatImpact": "Ranger deny policies not enforced at LF layer; principals retain access that should be denied",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014"
+      ],
+      "statement": "A Sync daemon Cedar forbid statements generated from Ranger deny policies can Apply Ranger deny policies as Cedar forbid—forbid statements dropped silently in LF sync path, which leads to Ranger deny policies not enforced at LF layer; principals retain access that should be denied",
+      "displayOrder": 14,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-E",
+        "SemanticGap",
+        "DenyNotEnforced",
+        "PartiallyMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "abde864e-bcf6-4a5b-a545-a45300723a36",
+      "numericId": 15,
+      "threatSource": "Operator or attacker with config file access",
+      "prerequisites": "Default TLS keystore/truststore password 'changeit' not rotated",
+      "threatAction": "Use default keystore password to extract private key for mTLS client cert",
+      "threatImpact": "Attacker can impersonate the sync daemon to Ranger Admin or bypass server cert validation",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A015"
+      ],
+      "statement": "A Operator or attacker with config file access Default TLS keystore/truststore password 'changeit' not rotated can Use default keystore password to extract private key for mTLS client cert, which leads to Attacker can impersonate the sync daemon to Ranger Admin or bypass server cert validation",
+      "displayOrder": 15,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-S",
+        "DefaultCredentials",
+        "TLS",
+        "NotMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "cda6c1ee-7bef-46d9-ba96-69ea69656a83",
+      "numericId": 16,
+      "threatSource": "Sync daemon or operator",
+      "prerequisites": "Dead-letter log accessible to broader set of users than the daemon process",
+      "threatAction": "Read dead-letter JSONL to enumerate all LF resource identifiers and principal ARNs from failed ops",
+      "threatImpact": "Full inventory of data-lake resources and identity mappings disclosed from error logs",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A013"
+      ],
+      "statement": "A Sync daemon or operator Dead-letter log accessible to broader set of users than the daemon process can Read dead-letter JSONL to enumerate all LF resource identifiers and principal ARNs from failed ops, which leads to Full inventory of data-lake resources and identity mappings disclosed from error logs",
+      "displayOrder": 16,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "Filesystem",
+        "LogLeakage"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "b563be77-a995-4a93-85ab-6f8739639b2f",
+      "numericId": 17,
+      "threatSource": "Attacker with write access to YAML config",
+      "prerequisites": "Config file writable; attacker can restart daemon",
+      "threatAction": "Modify YAML config to point to attacker-controlled Ranger Admin URL",
+      "threatImpact": "Daemon fetches attacker-crafted policies; arbitrary LF grants applied in target AWS account",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A010",
+        "A014"
+      ],
+      "statement": "A Attacker with write access to YAML config Config file writable; attacker can restart daemon can Modify YAML config to point to attacker-controlled Ranger Admin URL, which leads to Daemon fetches attacker-crafted policies; arbitrary LF grants applied in target AWS account",
+      "displayOrder": 17,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-T",
+        "ConfigTampering",
+        "PolicyInjection"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "2cfc4e2d-fe41-4a7e-9d87-5dae826eb5a3",
+      "numericId": 18,
+      "threatSource": "Sync daemon (accidental)",
+      "prerequisites": "Wildcard * policies present in Ranger; reverse sync disabled (default)",
+      "threatAction": "Wildcard policies not translated to LF grants due to known bug; no error raised",
+      "threatImpact": "Legitimate users denied access silently; no alerting mechanism surfaces the gap",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014"
+      ],
+      "statement": "A Sync daemon (accidental) Wildcard * policies present in Ranger; reverse sync disabled (default) can Wildcard policies not translated to LF grants due to known bug; no error raised, which leads to Legitimate users denied access silently; no alerting mechanism surfaces the gap",
+      "displayOrder": 18,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-D",
+        "WildcardBug",
+        "UnderGrant",
+        "PartiallyMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "ad84f3fb-01c2-441e-a903-b011248248c3",
+      "numericId": 19,
+      "threatSource": "Attacker with Ranger Admin access or network MitM",
+      "prerequisites": "No audit trail correlating Ranger policy changes to LF permission changes",
+      "threatAction": "Inject or modify Ranger policy then remove evidence in Ranger audit log",
+      "threatImpact": "Unauthorized LF grant exists with no traceable origin; repudiation of policy injection",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A010",
+        "A014"
+      ],
+      "statement": "A Attacker with Ranger Admin access or network MitM No audit trail correlating Ranger policy changes to LF permission changes can Inject or modify Ranger policy then remove evidence in Ranger audit log, which leads to Unauthorized LF grant exists with no traceable origin; repudiation of policy injection",
+      "displayOrder": 19,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-R",
+        "AuditGap",
+        "PolicyInjection",
+        "PartiallyMitigated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "8915dc9a-1b40-426c-af75-022977eb063d",
+      "numericId": 20,
+      "threatSource": "Third-party vendor or compromised dependency",
+      "prerequisites": "Malicious code in Java dependency (supply chain attack)",
+      "threatAction": "Backdoored library exfiltrates in-memory credentials or injects policy modifications",
+      "threatImpact": "Silent credential theft or policy manipulation with no observable anomaly",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A008",
+        "A009",
+        "A010"
+      ],
+      "statement": "A Third-party vendor or compromised dependency Malicious code in Java dependency (supply chain attack) can Backdoored library exfiltrates in-memory credentials or injects policy modifications, which leads to Silent credential theft or policy manipulation with no observable anomaly",
+      "displayOrder": 20,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "SupplyChain",
+        "Credentials"
+      ],
+      "metadata": []
+    }
+  ]
+}

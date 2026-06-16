@@ -211,13 +211,15 @@ class ConfigValidatorTest {
     }
 
     @Test
-    void httpUrl_isValid() {
+    void httpUrl_isValidButEmitsNoError() {
         SyncConfig config = buildConfig(
                 "http://ranger:6080", "admin", "pass", null, null,
                 "us-east-1", "123", "AK", "SK", null);
 
         List<String> errors = validator.validate(config);
 
+        // http:// is accepted (operator may be on a trusted private network);
+        // a WARN log is emitted but no validation error is added.
         assertTrue(errors.isEmpty());
     }
 

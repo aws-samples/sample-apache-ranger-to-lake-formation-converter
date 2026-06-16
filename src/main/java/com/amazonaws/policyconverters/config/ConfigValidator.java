@@ -120,6 +120,11 @@ public class ConfigValidator {
         } else if (!rangerConfig.getRangerAdminUrl().startsWith("http://")
                 && !rangerConfig.getRangerAdminUrl().startsWith("https://")) {
             errors.add("Invalid parameter: rangerConfig.rangerAdminUrl must start with http:// or https://");
+        } else if (rangerConfig.getRangerAdminUrl().startsWith("http://")) {
+            logger.warn("Ranger Admin URL uses plain HTTP ({}). Credentials and policy data will "
+                    + "transit the network unencrypted. Configure HTTPS if the network path "
+                    + "between this service and Ranger Admin is untrusted.",
+                    rangerConfig.getRangerAdminUrl());
         }
 
         boolean hasBasicAuth = !isBlank(rangerConfig.getUsername()) && !isBlank(rangerConfig.getPassword());

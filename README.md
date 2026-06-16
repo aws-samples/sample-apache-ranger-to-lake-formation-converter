@@ -1,9 +1,9 @@
 
-> This is a work in progress and has a lot of work left. Please contact hocanint@amazon.com if you wish to contribute.
+> This tool is work in progress although has enough implemented to provide benefits for customers. Please contact hocanint@amazon.com if you wish to contribute. 
 
 # Ranger Lake Formation Sync Plugin
 
-A Java utility that bridges Apache Ranger access control policies to AWS Lake Formation permissions. It converts Ranger's policy model (allow/deny rules on users, groups, roles) into Lake Formation's grant/revoke permission model via an intermediate Cedar policy representation, enabling organizations to manage Lake Formation permissions through Ranger Admin.
+A Java utility that bridges Apache Ranger access control policies to AWS Lake Formation permissions. It converts Ranger's policy model (allow/deny rules on users, groups, roles) into Lake Formation's grant/revoke permission model via an intermediate Cedar policy representation, enabling organizations to manage Lake Formation permissions through Ranger Admin until customers can completely migrate to Lake Formation.
 
 ## Features
 
@@ -25,20 +25,72 @@ A Java utility that bridges Apache Ranger access control policies to AWS Lake Fo
 - **CloudWatch Metrics**: Publishes operational metrics (sync cycle success/failure, duration, grants/revocations applied, error counts) to a configurable CloudWatch namespace.
 - **Dry-Run Mode**: Serializes LF operations to JSON files instead of calling AWS APIs, for testing and human review.
 
-## Cross-Service Deny Semantics
+> For limitations, see [Limitations](#considerations-and-limitations).
 
-All configured Ranger services are merged into a single Cedar evaluation namespace. A `forbid` for principal P from any service suppresses a `permit` for the same principal P from any other service for the same action and resource. This means a Trino deny policy will suppress a Hive grant for the same resource. Scope deny policies carefully when using multiple Ranger services.
+# Recommended Usage of this tool
+
+Migration from Apache Ranger to Lake Formation can be a daunting task, which is why this tool was created. We attempt to make it easier and simplier to transition to Lake Formation. Below are a recommended set of steps to run during a migration.
+
+1. **Use Pre-migration Assessment Tool** We have created a [Pre-Migration Assessment Tool](#pre-migration-assessment-tool) so that you can validate your existing Ranger policies and to detect if there are any policies that cannot be migrated. It is **highly** recommended that you run this tool to get an understanding of how this tool works, which policies it will be able to support, and any gaps that may exist. 
+
+2. **Obtain a testing AWS account** that will be used as the target of this tool. This account will be used to validate LF policies, make it run for some time to validate that everything is working properly, and address any issues before going to production. 
+
+3. **Optional: Configure Lake Formation** You may want to configure the account to only use Lake Formation or not. Either way works. If you do not want to enable Lake Formation enforcement, and just see the policies within Lake Formation, you can do that and once there is high confidence in the usage of the tool, you can slowly enable databases/tables and users to use Lake Formation enforcement.
+
+4. **Configure the migration tool** - See [Configuration](#configuration) section 
+
+4. **User Identities** - It will need to be decided how to map Ranger Identities to AWS Identities. Ranger typically will use directory identities via LDAP. However, AWS does not natively support LDAP to query these identities directly. There are two approaches that can be taken:
+
+    a) Map directory identities to IAM roles. 
+
+    b) or configure AWS Identity Center to sync with a directory to pull in the identities into AWS. You will also need to enable Trusted Identity Propogation feature for all AWS analytic services that will be used for Lake Formation to performance authorization on identities. 
+See section [Principal Mapping](#principal-mapping) on how to configure either approach. 
+
+5. **Run the Sync tool for the first time** using the [Reverse Sync](#reverse-sync--drift-detection) enabled and allow it to run for atleast one week. The tool will report to CloudWatch metrics the number of policies it has converted, partially convert, or is unable to convert. It will also report errors, and other useful metrics. 
+
+6. **Re-run the sync tool right prior to using in production** Once there is confidence, right before running on a live production environment, remove all Lake Formation permissions in the test account, and re-run the sync job to ensure that nothing has changed. Once that runs successfully, run it in production.
+
+7. **Manage Permissions in Apache Ranger** Continue to manage Lake Formation entirely from Apache Ranger. Lake Formation should not be used to modify permissions until Ranger is completely shut down.
+
+# Considerations and Limitations
+
+The following Ranger features have no direct equivalent in Lake Formation. When encountered, the plugin converts the supported portions of the policy and records the unsupported portions in the gap report.
+
+| Ranger Feature | Status | Details |
+|---------------|--------|---------|
+| Data masking policies | Not supported | LF does not support native data masking. Consider column-level permissions or external masking solutions. |
+| Tag-based policies | Detected, not converted | Detected via service name heuristic (`name.contains("tag")`). The entire policy is skipped; a `TAG_BASED_POLICY` gap entry is recorded. Converting to LF-Tag permissions is planned but not yet implemented. |
+| Deny policies | Not supported | LF uses a grant-only model. Deny rules cannot be represented. |
+| Deny exceptions | Not supported | LF uses a grant-only model. |
+| Validity schedules (time-bound policies) | Not supported | LF does not support temporal policy constraints. |
+| Custom conditions (IP-based, geo-based) | Not supported | LF does not support conditional policies. |
+| Security zones | Not supported | LF has no equivalent concept. |
+| Delegated admin | Partial | Recorded in gap report. LF uses a different admin delegation model (`WITH GRANT OPTION`). |
+| Policy deltas from Ranger Admin | Not yet handled | The plugin currently processes only full policy snapshots. Delta updates from Ranger Admin (Ranger 2.0+) are not yet supported and may cause incorrect behavior. This is a known issue planned for a future release. |
+| LF tag-policy resources in reverse sync | Silently skipped | `LFPermissionFetcher` drops `CatalogResource` and `LFTagPolicyResource` entries returned by `ListPermissions` with only a log warning — no gap entry is recorded. Out-of-band LF-Tag grants will not be detected or corrected by reverse sync. |
+| `WILDCARD_PATTERN` gap not emitted at runtime | Known gap | The `WILDCARD_PATTERN` gap type is defined and documented but is never triggered at runtime. Wildcard expansion failures (when no AWS credentials are available) produce only a log warning; no gap entry is recorded. |
+| IDC mapper does not support roles | Limitation | When using the Identity Center principal mapper, Ranger role principals always produce an empty mapping and are silently skipped with an `UnmappedPrincipal` metric. Use the static mapper if you need role-to-IAM-ARN mappings. |
 
 ## Features not yet implemented
 
 - **Tag-Based Policy Conversion**: Ranger tag-based policies (services whose name contains `"tag"`) are currently **detected and skipped** — the gap is recorded in the gap report as `TAG_BASED_POLICY` — but no conversion to Lake Formation LF-Tag permissions is performed. Converting Ranger tag policies to LF-Tag-based access control is planned but not yet implemented. Note that LF-Tags and Ranger tags are structurally different, and a full implementation typically requires integration with a tagging service such as Apache Atlas.
+- **Row Filters**: We will implement this in the future if there is demand for this.
 
 ## Features not planned to be implemented
 
 - **Data Masking**: Data masking is not yet supported within Lake Formation. Although this can be implemented using Glue Views, it will add very significant complexity.
-- **Row Filters**: We will wait for LF's RLS feature to be available before tackling this feature to be able to leverage it.
 - **ABAC and Conditions**: There is no way to perform this at the moment.
 - **Expire_on**: We do not support this today and we would need to implement this capability manually.
+
+## Cross-Service Deny Semantics
+
+All configured Ranger services are merged into a single Cedar evaluation namespace. A `forbid` for principal P from any service suppresses a `permit` for the same principal P from any other service for the same action and resource. This means a Trino deny policy will suppress a Hive grant for the same resource. Scope deny policies carefully when using multiple Ranger services.
+
+# Design
+
+See [DESIGN.MD](./DESIGN.md) for a deep dive on the design of this tool.
+
+# Usage Instructions
 
 ## Requirements
 
@@ -319,6 +371,30 @@ reverseSync:
   exclusionFilter:
     excludedPrincipals: []
     excludedResourcePatterns: []
+
+rangerServices:
+  - serviceType: lakeformation
+    serviceInstanceName: lf_prod
+
+  - serviceType: hive
+    serviceInstanceName: hive_prod
+
+  - serviceType: presto
+    serviceInstanceName: presto_prod
+    gdcCatalogName: awsdatacatalog  # required for presto/trino
+
+  - serviceType: trino
+    serviceInstanceName: trino_prod
+    gdcCatalogName: glue_catalog    # required for presto/trino
+
+  - serviceType: amazon-emr-emrfs
+    serviceInstanceName: emrfs
+    gdcCatalogName: glue_catalog
+
+  - serviceType: amazon-emr-spark
+    serviceInstanceName: spark
+    gdcCatalogName: glue_catalog
+
 ```
 
 The Ranger connection supports both username/password and Kerberos authentication. At least one must be configured.
@@ -343,6 +419,18 @@ rangerServices:
   - serviceType: trino
     serviceInstanceName: trino_prod
     gdcCatalogName: glue_catalog    # required for presto/trino
+
+  - serviceType: amazon-emr-emrfs
+    serviceInstanceName: emrfs
+    gdcCatalogName: glue_catalog
+
+  - serviceType: amazon-emr-spark
+    serviceInstanceName: spark
+    gdcCatalogName: glue_catalog
+
+  - serviceType: amazon-emr-trino
+    serviceInstanceName: trino
+    gdcCatalogName: glue_catalog
 ```
 
 When `rangerServices` is omitted or empty, the server defaults to a single LakeFormation service for backward compatibility.
@@ -401,6 +489,33 @@ principalMapping:
 ```
 
 Roles are not represented in Identity Center; role principals always produce an empty mapping. Principals with no configured or discoverable mapping are skipped with a warning log and an `UnmappedPrincipal` CloudWatch metric.
+
+**Composite mapper** — chains multiple delegates in order; the first delegate that resolves a principal wins. Use this when you need both IAM role mappings (for service accounts and Ranger roles) and Identity Center resolution (for human users and groups) simultaneously:
+
+```yaml
+principalMapping:
+  type: COMPOSITE
+  delegates:
+    - type: STATIC
+      userMappings:
+        svc_etl: "arn:aws:iam::123456789012:role/ETLServiceRole"
+      groupMappings:
+        admins: "arn:aws:iam::123456789012:role/AdminRole"
+      roleMappings:
+        admin_role: "arn:aws:iam::123456789012:role/AdminRole"
+    - type: IDENTITY_CENTER
+      idcConfig:
+        identityStoreId: "d-1234567890"
+        region: "us-east-1"
+        accountId: "123456789012"
+        cacheTtlMinutes: 60
+```
+
+Delegates are evaluated in list order. A principal resolved by an earlier delegate is not passed to subsequent delegates. Constraints:
+
+- At most one `IDENTITY_CENTER` delegate is allowed.
+- `COMPOSITE` delegates cannot be nested (a delegate cannot itself be `COMPOSITE`).
+- Role principals are only resolved by `STATIC` delegates — Identity Center has no role concept.
 
 ## Multi-Service Ranger Support
 
@@ -580,25 +695,6 @@ Reverse sync runs **continuously**, not just at startup. It executes in-band aft
 ### Safety guards
 
 Corrective operations are ordered REVOKEs-first to avoid transient over-permissioning. Individual failures are logged to the dead-letter log without aborting the remaining batch. An empty Cedar policy set skips the entire cycle to prevent mass revocation before the first forward sync cycle completes.
-
-## Limitations and Unsupported Features
-
-The following Ranger features have no direct equivalent in Lake Formation. When encountered, the plugin converts the supported portions of the policy and records the unsupported portions in the gap report.
-
-| Ranger Feature | Status | Details |
-|---------------|--------|---------|
-| Data masking policies | Not supported | LF does not support native data masking. Consider column-level permissions or external masking solutions. |
-| Tag-based policies | Detected, not converted | Detected via service name heuristic (`name.contains("tag")`). The entire policy is skipped; a `TAG_BASED_POLICY` gap entry is recorded. Converting to LF-Tag permissions is planned but not yet implemented. |
-| Deny policies | Not supported | LF uses a grant-only model. Deny rules cannot be represented. |
-| Deny exceptions | Not supported | LF uses a grant-only model. |
-| Validity schedules (time-bound policies) | Not supported | LF does not support temporal policy constraints. |
-| Custom conditions (IP-based, geo-based) | Not supported | LF does not support conditional policies. |
-| Security zones | Not supported | LF has no equivalent concept. |
-| Delegated admin | Partial | Recorded in gap report. LF uses a different admin delegation model (`WITH GRANT OPTION`). |
-| Policy deltas from Ranger Admin | Not yet handled | The plugin currently processes only full policy snapshots. Delta updates from Ranger Admin (Ranger 2.0+) are not yet supported and may cause incorrect behavior. This is a known issue planned for a future release. |
-| LF tag-policy resources in reverse sync | Silently skipped | `LFPermissionFetcher` drops `CatalogResource` and `LFTagPolicyResource` entries returned by `ListPermissions` with only a log warning — no gap entry is recorded. Out-of-band LF-Tag grants will not be detected or corrected by reverse sync. |
-| `WILDCARD_PATTERN` gap not emitted at runtime | Known gap | The `WILDCARD_PATTERN` gap type is defined and documented but is never triggered at runtime. Wildcard expansion failures (when no AWS credentials are available) produce only a log warning; no gap entry is recorded. |
-| IDC mapper does not support roles | Limitation | When using the Identity Center principal mapper, Ranger role principals always produce an empty mapping and are silently skipped with an `UnmappedPrincipal` metric. Use the static mapper if you need role-to-IAM-ARN mappings. |
 
 ## Future Enhancements
 

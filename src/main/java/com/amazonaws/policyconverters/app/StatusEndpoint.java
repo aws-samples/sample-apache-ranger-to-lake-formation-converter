@@ -26,7 +26,7 @@ public class StatusEndpoint {
     }
 
     public void start() throws IOException {
-        server = HttpServer.create(new InetSocketAddress(port), 0);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         server.createContext("/status", exchange -> {
             String body = String.format(
                     "{\"lastCompletedCycle\":%d,\"lastCompletedWildcardRefreshCycle\":%d,\"state\":\"running\"}",

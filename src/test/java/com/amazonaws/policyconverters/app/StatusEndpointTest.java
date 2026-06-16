@@ -5,7 +5,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.net.ConnectException;
+import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -35,6 +38,18 @@ class StatusEndpointTest {
     @AfterEach
     void tearDown() {
         endpoint.stop();
+    }
+
+    @Test
+    void statusEndpointRefusesExternalConnections() throws Exception {
+        // The server binds to 127.0.0.1 only; connecting via any non-loopback
+        // address (including the machine's LAN IP) must be refused.
+        InetAddress localIp = InetAddress.getLocalHost();
+        if (!localIp.isLoopbackAddress()) {
+            assertThrows(ConnectException.class,
+                    () -> new Socket(localIp, port).close(),
+                    "Expected connection via non-loopback address to be refused");
+        }
     }
 
     @Test
