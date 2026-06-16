@@ -25,6 +25,9 @@ import software.amazon.awssdk.services.lakeformation.model.ErrorDetail;
 import software.amazon.awssdk.services.lakeformation.model.GrantPermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.LakeFormationException;
 import software.amazon.awssdk.services.lakeformation.model.Permission;
+import software.amazon.awssdk.services.lakeformation.model.ListPermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.ListPermissionsResponse;
+import software.amazon.awssdk.services.lakeformation.model.PrincipalResourcePermissions;
 import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
 
 import java.io.BufferedWriter;
@@ -608,6 +611,15 @@ class LakeFormationClientTest {
 
     // --- Bug fix: TABLE/TABLE_WITH_COLUMNS conflict retry must not loop infinitely ---
 
+    private ListPermissionsResponse listPermissionsWithSelect() {
+        PrincipalResourcePermissions entry = PrincipalResourcePermissions.builder()
+                .permissions(List.of(Permission.SELECT))
+                .build();
+        return ListPermissionsResponse.builder()
+                .principalResourcePermissions(List.of(entry))
+                .build();
+    }
+
     @Test
     void applyBatch_conflictRevoke_succeedsAndGrantRetried() {
         // First grant attempt: fails with "Permissions modification is invalid"
@@ -619,6 +631,7 @@ class LakeFormationClientTest {
         doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
                 .doReturn(BatchGrantPermissionsResponse.builder().failures(List.of()).build())
                 .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        doReturn(listPermissionsWithSelect()).when(awsClient).listPermissions(any(ListPermissionsRequest.class));
         doReturn(null).when(awsClient).revokePermissions(any(RevokePermissionsRequest.class));
 
         LFPermissionOperation op = makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t1");
@@ -639,6 +652,7 @@ class LakeFormationClientTest {
                 .build();
         doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
                 .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        doReturn(listPermissionsWithSelect()).when(awsClient).listPermissions(any(ListPermissionsRequest.class));
         // The conflict revoke itself also fails
         doThrow(software.amazon.awssdk.services.lakeformation.model.InvalidInputException.builder()
                         .message("Permissions modification is invalid.").build())
@@ -663,6 +677,7 @@ class LakeFormationClientTest {
         doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
                 .doReturn(BatchGrantPermissionsResponse.builder().failures(List.of()).build())
                 .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        doReturn(listPermissionsWithSelect()).when(awsClient).listPermissions(any(ListPermissionsRequest.class));
         doReturn(null).when(awsClient).revokePermissions(any(RevokePermissionsRequest.class));
 
         LFPermissionOperation op = makeOpWithColumns("p1", LFPermissionOperation.OperationType.GRANT,
@@ -682,6 +697,7 @@ class LakeFormationClientTest {
                 .build();
         doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
                 .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        doReturn(listPermissionsWithSelect()).when(awsClient).listPermissions(any(ListPermissionsRequest.class));
         doThrow(software.amazon.awssdk.services.lakeformation.model.InvalidInputException.builder()
                         .message("No permissions revoked.").build())
                 .when(awsClient).revokePermissions(any(RevokePermissionsRequest.class));
@@ -693,6 +709,43 @@ class LakeFormationClientTest {
         verify(awsClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
         verify(awsClient, times(1)).revokePermissions(any(RevokePermissionsRequest.class));
         assertTrue(result.hasFailures(), "Must be recorded as failed when TABLE revoke also fails");
+    }
+
+    @Test
+    void applyBatch_conflictRevoke_usesActualPermissionsNotOpPermissions() {
+        // The failing TABLE op has INSERT/DELETE permissions.
+        // The conflicting TWC grant has only SELECT — revoking with INSERT/DELETE or ALL would fail.
+        // The code must fetch the actual permissions via listPermissions and revoke SELECT.
+        BatchPermissionsFailureEntry conflictFailure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-0").build())
+                .error(ErrorDetail.builder().errorMessage("Permissions modification is invalid.").build())
+                .build();
+        doReturn(BatchGrantPermissionsResponse.builder().failures(List.of(conflictFailure)).build())
+                .doReturn(BatchGrantPermissionsResponse.builder().failures(List.of()).build())
+                .when(awsClient).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
+        // Conflicting TWC has only SELECT — different from the failing op's permissions
+        PrincipalResourcePermissions twcEntry = PrincipalResourcePermissions.builder()
+                .permissions(List.of(Permission.SELECT))
+                .build();
+        doReturn(ListPermissionsResponse.builder().principalResourcePermissions(List.of(twcEntry)).build())
+                .when(awsClient).listPermissions(any(ListPermissionsRequest.class));
+        ArgumentCaptor<RevokePermissionsRequest> revokeCaptor =
+                ArgumentCaptor.forClass(RevokePermissionsRequest.class);
+        doReturn(null).when(awsClient).revokePermissions(revokeCaptor.capture());
+
+        // Op has INSERT/DELETE — if we used op perms or ALL this would fail against a SELECT-only grant
+        LFResource resource = new LFResource("catalog1", "mydb", "t1",
+                null, null);
+        LFPermissionOperation op = new LFPermissionOperation(
+                LFPermissionOperation.OperationType.GRANT, "p1",
+                "arn:aws:iam::123456789012:role/TestRole", resource,
+                EnumSet.of(LFPermission.INSERT, LFPermission.DELETE), false);
+        BatchResult result = client.applyBatch(List.of(op), null);
+
+        assertFalse(result.hasFailures(), "Grant should succeed after revoke with actual permissions");
+        // Verify the revoke used SELECT (the actual TWC permissions), not INSERT/DELETE
+        assertEquals(List.of(Permission.SELECT), revokeCaptor.getValue().permissions(),
+                "Revoke must use the conflicting grant's actual permissions, not the failing op's permissions");
     }
 
 }

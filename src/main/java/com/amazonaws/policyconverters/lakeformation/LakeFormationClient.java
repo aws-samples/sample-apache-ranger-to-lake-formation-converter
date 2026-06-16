@@ -28,6 +28,8 @@ import software.amazon.awssdk.services.lakeformation.model.InvalidInputException
 import software.amazon.awssdk.services.lakeformation.model.LFTagPair;
 import software.amazon.awssdk.services.lakeformation.model.ListLfTagsRequest;
 import software.amazon.awssdk.services.lakeformation.model.ListLfTagsResponse;
+import software.amazon.awssdk.services.lakeformation.model.ListPermissionsRequest;
+import software.amazon.awssdk.services.lakeformation.model.ListPermissionsResponse;
 import software.amazon.awssdk.services.lakeformation.model.Permission;
 import software.amazon.awssdk.services.lakeformation.model.Resource;
 import software.amazon.awssdk.services.lakeformation.model.RevokePermissionsRequest;
@@ -502,16 +504,23 @@ public class LakeFormationClient {
                             op.getSourcePolicyId(), op.getPrincipalArn(),
                             r.getDatabaseName(), r.getTableName());
                     try {
-                        lfClient.revokePermissions(RevokePermissionsRequest.builder()
-                                .principal(principal)
-                                .resource(conflictingResource)
-                                .permissions(List.of(Permission.ALL))
-                                .build());
-                        LOG.info("Revoked conflicting {} grant: principal={}, db={}, table={}",
-                                conflictDescription, op.getPrincipalArn(),
-                                r.getDatabaseName(), r.getTableName());
-                        retryGrants.add(op);
-                        retryEntryIds.add(entryId);
+                        List<Permission> conflictingPerms = fetchActualPermissions(principal, conflictingResource);
+                        if (conflictingPerms.isEmpty()) {
+                            LOG.warn("Conflicting {} grant not found during lookup — skipping revoke, "
+                                    + "grant will retry next cycle: policyId={}",
+                                    conflictDescription, op.getSourcePolicyId());
+                        } else {
+                            lfClient.revokePermissions(RevokePermissionsRequest.builder()
+                                    .principal(principal)
+                                    .resource(conflictingResource)
+                                    .permissions(conflictingPerms)
+                                    .build());
+                            LOG.info("Revoked conflicting {} grant (perms={}): principal={}, db={}, table={}",
+                                    conflictDescription, conflictingPerms,
+                                    op.getPrincipalArn(), r.getDatabaseName(), r.getTableName());
+                            retryGrants.add(op);
+                            retryEntryIds.add(entryId);
+                        }
                     } catch (Exception e) {
                         LOG.warn("Failed to revoke {} conflict, grant will retry next cycle: "
                                 + "policyId={}, error={}",
@@ -635,6 +644,27 @@ public class LakeFormationClient {
         }
 
         return new int[]{appliedCount, failedCount};
+    }
+
+    /**
+     * Fetch the actual permissions held by a principal on a resource, for use before revoking
+     * a conflicting grant where the held permissions may differ from the failing op's permissions.
+     */
+    private List<Permission> fetchActualPermissions(DataLakePrincipal principal, Resource resource) {
+        try {
+            ListPermissionsResponse resp = lfClient.listPermissions(
+                    ListPermissionsRequest.builder()
+                            .principal(principal)
+                            .resource(resource)
+                            .build());
+            return resp.principalResourcePermissions().stream()
+                    .flatMap(p -> p.permissions().stream())
+                    .distinct()
+                    .collect(java.util.stream.Collectors.toList());
+        } catch (Exception e) {
+            LOG.warn("Could not fetch permissions for conflict resolution: {}", e.getMessage());
+            return java.util.Collections.emptyList();
+        }
     }
 
     /**
