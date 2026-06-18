@@ -231,6 +231,19 @@ class RangerToCedarConverterTest {
         assertEquals(0, result.getForbidCount(), "Empty policy list should produce zero forbids");
     }
 
+    @Test
+    void disabledPolicyProducesNoCedarStatements() {
+        RangerPolicy policy = buildTablePolicy("lakeformation", 0);
+        policy.setIsEnabled(false);
+        RangerPolicyItem item = buildItem("analyst", "select");
+        policy.setPolicyItems(Collections.singletonList(item));
+
+        CedarPolicySet result = converter.convert(Collections.singletonList(policy));
+
+        assertEquals(0, result.getPermitCount(), "Disabled policy must produce no permits");
+        assertEquals(0, result.getForbidCount(), "Disabled policy must produce no forbids");
+    }
+
     // --- Helpers ---
 
     private static RangerPolicy buildBasePolicy(String serviceType, int policyType) {

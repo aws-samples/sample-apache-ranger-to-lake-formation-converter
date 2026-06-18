@@ -104,6 +104,10 @@ public class RangerToCedarConverter {
     }
 
     private List<String> convertSinglePolicy(RangerPolicy policy) {
+        if (Boolean.FALSE.equals(policy.getIsEnabled())) {
+            return Collections.emptyList();
+        }
+
         String policyId = policy.getId() != null ? String.valueOf(policy.getId()) : "unknown";
         String policyName = policy.getName() != null ? policy.getName() : "unknown";
 
