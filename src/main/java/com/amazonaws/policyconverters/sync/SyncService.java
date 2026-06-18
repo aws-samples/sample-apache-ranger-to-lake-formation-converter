@@ -10,7 +10,6 @@ import com.amazonaws.policyconverters.lakeformation.LakeFormationClient;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapReport;
 import com.amazonaws.policyconverters.model.TagSyncResult;
-import com.amazonaws.policyconverters.lakeformation.LFPermission;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation.OperationType;
 import com.amazonaws.policyconverters.lakeformation.LFResource;
@@ -960,18 +959,10 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
 
         for (Map.Entry<String, List<LFPermissionOperation>> entry : grouped.entrySet()) {
             List<LFPermissionOperation> group = entry.getValue();
-            // Only flag a conflict when the TABLE op carries SELECT or ALL — those permissions
-            // imply unrestricted column access, which is mutually exclusive with a TWC grant
-            // that restricts access to specific columns. A TABLE grant with only ALTER/INSERT/DROP
-            // has no column-access semantics and can coexist with a TWC SELECT grant.
-            boolean hasTableWithSelect = group.stream().anyMatch(o ->
-                    o.getResource().getColumnNames() == null
-                    && (o.getPermissions().contains(LFPermission.SELECT)
-                            || o.getPermissions().contains(LFPermission.ALL)));
-            boolean hasTwc = group.stream().anyMatch(o ->
-                    o.getResource().getColumnNames() != null
+            boolean hasTable = group.stream().anyMatch(o -> o.getResource().getColumnNames() == null);
+            boolean hasTwc   = group.stream().anyMatch(o -> o.getResource().getColumnNames() != null
                     && !o.getResource().getColumnNames().isEmpty());
-            if (!hasTableWithSelect || !hasTwc) {
+            if (!hasTable || !hasTwc) {
                 continue;
             }
 

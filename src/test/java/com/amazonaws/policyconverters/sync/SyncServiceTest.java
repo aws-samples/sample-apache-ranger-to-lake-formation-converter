@@ -936,54 +936,6 @@ class SyncServiceTest {
         verify(deadLetterLogger, never()).logGapOperation(any(), anyString());
     }
 
-    @Test
-    void tableTwcConflict_noneWhenTableGrantHasOnlyNonSelectPermissions() {
-        BaseRangerService mockRangerService = mock(BaseRangerService.class);
-        when(mockRangerService.getServiceType()).thenReturn("lakeformation");
-        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
-        when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
-        when(mockRangerService.getLatestPolicies()).thenReturn(createServicePolicies(1L, 1));
-
-        SyncService svc = new SyncService(
-                Collections.singletonList(mockRangerService),
-                rangerToCedarConverter, cedarToLFConverter,
-                lakeFormationClient, gapReporter, deadLetterLogger,
-                null, null);
-        svc.start(syncConfig);
-
-        CedarPolicySet mockPs = mock(CedarPolicySet.class);
-        when(mockPs.getPermitCount()).thenReturn(2);
-        when(mockPs.getForbidCount()).thenReturn(0);
-        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
-
-        // TABLE for same principal — but only ALTER/INSERT/DROP, no SELECT.
-        // This can coexist with a TWC SELECT grant in LF.
-        LFResource tableRes = new LFResource("cat", "db", "orders", null, null);
-        LFPermissionOperation tableOp = new LFPermissionOperation(
-                OperationType.GRANT, "lakeformation:1540", "arn:aws:iam::123:role/analyst",
-                tableRes, EnumSet.of(LFPermission.ALTER, LFPermission.INSERT, LFPermission.DROP),
-                false);
-        LFResource twcRes = new LFResource("cat", "db", "orders",
-                java.util.Set.of("region", "amount"), null);
-        LFPermissionOperation twcOp = new LFPermissionOperation(
-                OperationType.GRANT, "lakeformation:1553", "arn:aws:iam::123:role/analyst",
-                twcRes, EnumSet.of(LFPermission.SELECT), false);
-
-        when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(tableOp, twcOp));
-        when(lakeFormationClient.applyBatch(anyList(), any()))
-                .thenReturn(new BatchResult(Arrays.asList("lakeformation:1540", "lakeformation:1553"),
-                        Collections.emptyList(), 2, 2, 0));
-
-        svc.executeSyncCycle();
-
-        // Both ops must pass through — non-select TABLE doesn't conflict with TWC SELECT
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
-        verify(lakeFormationClient).applyBatch(captor.capture(), eq(deadLetterLogger));
-        assertEquals(2, captor.getValue().size());
-        verify(deadLetterLogger, never()).logGapOperation(any(), anyString());
-    }
-
     // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------
