@@ -60,8 +60,8 @@ The following Ranger features have no direct equivalent in Lake Formation. When 
 |---------------|--------|---------|
 | Data masking policies | Not supported | LF does not support native data masking. Consider column-level permissions or external masking solutions. |
 | Tag-based policies | Detected, not converted | Detected via service name heuristic (`name.contains("tag")`). The entire policy is skipped; a `TAG_BASED_POLICY` gap entry is recorded. Converting to LF-Tag permissions is planned but not yet implemented. |
-| Deny policies | Not supported | LF uses a grant-only model. Deny rules cannot be represented. |
-| Deny exceptions | Not supported | LF uses a grant-only model. |
+| Deny policies | Partial — see [Deny Policy Behaviour](#deny-policy-behaviour) | LF has no deny model. Deny rules are converted to Cedar `forbid` statements and suppress the corresponding grants before they reach LF. This preserves the user's intent but the restriction is not enforced natively in LF. A `DENY_POLICY` gap entry is recorded. |
+| Deny exceptions | Partial | Deny exceptions are converted to Cedar `permit @denyException` statements that restore permissions suppressed by a deny. Not natively representable in LF — the net effect (grant restored or not) is reflected in LF permissions but the exception itself is invisible to LF. |
 | Validity schedules (time-bound policies) | Not supported | LF does not support temporal policy constraints. |
 | Custom conditions (IP-based, geo-based) | Not supported | LF does not support conditional policies. |
 | Security zones | Not supported | LF has no equivalent concept. |
@@ -82,9 +82,37 @@ The following Ranger features have no direct equivalent in Lake Formation. When 
 - **ABAC and Conditions**: There is no way to perform this at the moment.
 - **Expire_on**: We do not support this today and we would need to implement this capability manually.
 
-## Cross-Service Deny Semantics
+## Deny Policy Behaviour
 
-All configured Ranger services are merged into a single Cedar evaluation namespace. A `forbid` for principal P from any service suppresses a `permit` for the same principal P from any other service for the same action and resource. This means a Trino deny policy will suppress a Hive grant for the same resource. Scope deny policies carefully when using multiple Ranger services.
+Lake Formation uses a grant-only model — it has no native deny mechanism. Ranger deny policies cannot be expressed directly in LF. However, the sync service uses Cedar as an intermediate representation and Cedar does support `forbid` statements, so deny policies are honoured indirectly:
+
+1. **Conversion**: A Ranger deny policy item is converted to a Cedar `forbid` statement.
+2. **Suppression**: During Cedar-to-LF conversion, any `permit` statement that is covered by a `forbid` is removed from the set of LF grants. The corresponding grant is never issued to LF.
+3. **Gap recorded**: A `DENY_POLICY` gap entry is written to the gap report for every policy with deny items, because the restriction is not enforced natively inside LF.
+
+**What this means in practice**: if a principal has a Ranger allow policy granting SELECT on a table AND a Ranger deny policy for the same principal/table, the net result in LF will be **no SELECT grant** — matching the user's intent even though LF itself has no deny concept.
+
+### Resource hierarchy in deny suppression
+
+Cedar's entity hierarchy (`Column in [Table]`, `Table in [Database]`, `Database in [Catalog]`) is applied when matching forbids against permits:
+
+| Deny scope | Suppresses grants on |
+|---|---|
+| Specific table (e.g. `db.orders`) | That table and all its columns |
+| Database (e.g. `mydb`) | All tables and columns in that database |
+| Catalog | All databases, tables, and columns |
+
+**Example**: a Ranger deny policy scoped to `database=mydb` will suppress SELECT grants on `mydb.orders`, `mydb.products`, and any column-level grants within those tables — even though those grants come from separate allow policies.
+
+### Important limitations
+
+- **Not enforced in LF**: The deny is implemented by omitting grants, not by adding an LF deny. Any permission granted out-of-band (e.g. directly in the LF console, or by another tool) will not be blocked.
+- **Reverse sync does not enforce denies**: The reverse sync / drift detection reconciliation only compares against the Cedar-derived desired state. An out-of-band grant that contradicts a Ranger deny will be revoked during the next reconciliation cycle, but only because the desired state contains no grant — the deny itself is not a first-class constraint in LF.
+- **Gap report**: Every policy with deny items appears in the gap report as `DENY_POLICY`. Review these entries to understand which restrictions are being enforced via grant-omission rather than native LF denies.
+
+### Cross-service deny semantics
+
+All configured Ranger services (Hive, Trino, EMR Spark, etc.) are merged into a single Cedar evaluation namespace. A `forbid` from any service suppresses a `permit` for the same principal from any other service for the same action and resource. This means a Trino deny policy will suppress a Hive grant for the same resource and vice versa. Scope deny policies carefully when using multiple Ranger services.
 
 ## TABLE and TABLE\_WITH\_COLUMNS Conflict Resolution
 
