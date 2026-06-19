@@ -47,7 +47,7 @@ public class LiveGlueTableLister implements TableLister {
                 result.put(dbName, tables);
             }
             nextToken = resp.nextToken();
-        } while (nextToken != null);
+        } while (nextToken != null); // nosemgrep: eqeq
 
         LOG.info("LiveGlueTableLister: discovered {} databases", result.size());
         return result;
@@ -67,7 +67,7 @@ public class LiveGlueTableLister implements TableLister {
                     tables.add(t.name());
                 }
                 nextToken = resp.nextToken();
-            } while (nextToken != null);
+            } while (nextToken != null); // nosemgrep: eqeq
         } catch (EntityNotFoundException e) {
             LOG.warn("LiveGlueTableLister: database '{}' not found while listing tables, skipping", dbName);
         }

@@ -116,7 +116,7 @@ public class S3AccessGrantsClient {
                 }
             }
             nextToken = response.nextToken();
-        } while (nextToken != null);
+        } while (nextToken != null); // nosemgrep: eqeq
 
         LOG.debug("Loaded {} registered S3 Access Grants locations", locations.size());
         cachedLocations = locations;
@@ -205,7 +205,7 @@ public class S3AccessGrantsClient {
                 }
             }
             nextToken = response.nextToken();
-        } while (nextToken != null);
+        } while (nextToken != null); // nosemgrep: eqeq
 
         LOG.debug("Listed {} existing S3 Access Grants", result.size());
         return result;

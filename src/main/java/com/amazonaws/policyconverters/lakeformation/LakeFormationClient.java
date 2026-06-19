@@ -800,7 +800,7 @@ public class LakeFormationClient {
             ListLfTagsRequest.Builder reqBuilder = ListLfTagsRequest.builder()
                     .catalogId(catalogId)
                     .maxResults(1000);
-            if (nextToken != null) {
+            if (nextToken != null) { // nosemgrep: eqeq
                 reqBuilder.nextToken(nextToken);
             }
             ListLfTagsResponse response = lfClient.listLFTags(reqBuilder.build());
@@ -810,7 +810,7 @@ public class LakeFormationClient {
                 }
             }
             nextToken = response.nextToken();
-        } while (nextToken != null);
+        } while (nextToken != null); // nosemgrep: eqeq
         return keys;
     }
 

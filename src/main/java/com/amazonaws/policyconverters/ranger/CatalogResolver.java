@@ -67,7 +67,7 @@ public class CatalogResolver {
 
             do {
                 GetDatabasesRequest.Builder requestBuilder = GetDatabasesRequest.builder();
-                if (nextToken != null) {
+                if (nextToken != null) { // nosemgrep: eqeq
                     requestBuilder.nextToken(nextToken);
                 }
 
@@ -78,7 +78,7 @@ public class CatalogResolver {
                 }
 
                 nextToken = response.nextToken();
-            } while (nextToken != null);
+            } while (nextToken != null); // nosemgrep: eqeq
 
             return allDatabases.stream()
                     .filter(name -> regex.matcher(name).matches())
@@ -114,7 +114,7 @@ public class CatalogResolver {
             do {
                 GetTablesRequest.Builder requestBuilder = GetTablesRequest.builder()
                         .databaseName(database);
-                if (nextToken != null) {
+                if (nextToken != null) { // nosemgrep: eqeq
                     requestBuilder.nextToken(nextToken);
                 }
 
@@ -125,7 +125,7 @@ public class CatalogResolver {
                 }
 
                 nextToken = response.nextToken();
-            } while (nextToken != null);
+            } while (nextToken != null); // nosemgrep: eqeq
 
             return allTables.stream()
                     .filter(name -> regex.matcher(name).matches())

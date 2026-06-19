@@ -1,0 +1,68 @@
+# All findings below are the well-known AWS documentation example credentials
+# (AKIAIOSFODNN7EXAMPLE / wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY) used in
+# test fixtures, config examples, and deployment docs. They are not real secrets.
+# Generated against Amazon-style aws-access-token rules (git history mode).
+
+# --- False positives: variable names flagged by entropy (no AKIA pattern) ---
+docs/superpowers/specs/2026-05-21-emrfs-s3-access-grants-design.md:generic-api-key:230
+docs/superpowers/specs/2026-05-21-emrfs-s3-access-grants-design.md:generic-api-key:258
+src/main/java/com/amazonaws/policyconverters/sync/SyncCheckpoint.java:generic-api-key:34
+src/main/java/com/amazonaws/policyconverters/sync/SyncService.java:generic-api-key:95
+a155f00ba382ae2c4cb7add450f211ecce011728:src/main/java/com/amazonaws/policyconverters/sync/SyncService.java:generic-api-key:94
+
+# --- False positives: sample Ranger policy table names containing "key" ---
+Ranger_Policies_sample.json:generic-api-key:1
+
+# --- conf/server-config.yaml example credentials (commented-out) ---
+1bbb5afecf8b63ea9c779c13dfcd28d2a1493ba5:conf/server-config.yaml:aws-access-token:48
+1bbb5afecf8b63ea9c779c13dfcd28d2a1493ba5:conf/server-config.yaml:aws-secret-access-key:49
+
+# --- src test files (ConversionServerMainTest, InvalidConfigPropertyTest) ---
+1bbb5afecf8b63ea9c779c13dfcd28d2a1493ba5:src/test/java/com/amazonaws/policyconverters/server/ConversionServerMainTest.java:aws-access-token:80
+1bbb5afecf8b63ea9c779c13dfcd28d2a1493ba5:src/test/java/com/amazonaws/policyconverters/server/ConversionServerMainTest.java:aws-access-token:154
+1bbb5afecf8b63ea9c779c13dfcd28d2a1493ba5:src/test/java/com/amazonaws/policyconverters/server/ConversionServerMainTest.java:aws-secret-access-key:81
+1bbb5afecf8b63ea9c779c13dfcd28d2a1493ba5:src/test/java/com/amazonaws/policyconverters/server/InvalidConfigPropertyTest.java:aws-access-token:79
+
+# --- ranger-lakeformation-plugin test files ---
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/config/ConfigLoaderTest.java:aws-access-token:47
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/config/ConfigLoaderTest.java:aws-access-token:71
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/config/ConfigLoaderTest.java:aws-access-token:108
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/config/ConfigLoaderTest.java:aws-access-token:243
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/config/ConfigLoaderTest.java:aws-secret-access-key:48
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/config/ConfigLoaderTest.java:aws-secret-access-key:72
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/config/ConfigLoaderTest.java:aws-secret-access-key:109
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/config/ConfigLoaderTest.java:aws-secret-access-key:244
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/config/ConfigPropertyTest.java:aws-access-token:186
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/model/AwsConfigTest.java:aws-access-token:16
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/model/AwsConfigTest.java:aws-access-token:20
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/model/AwsConfigTest.java:aws-secret-access-key:16
+82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/model/AwsConfigTest.java:aws-secret-access-key:21
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/SyncServiceMainTest.java:aws-access-token:63
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/SyncServiceMainTest.java:aws-access-token:85
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/SyncServiceMainTest.java:aws-access-token:136
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/SyncServiceMainTest.java:aws-access-token:155
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/SyncServiceMainTest.java:aws-secret-access-key:63
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/SyncServiceMainTest.java:aws-secret-access-key:85
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/SyncServiceMainTest.java:aws-secret-access-key:137
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/SyncServiceMainTest.java:aws-secret-access-key:156
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupPropertyTest.java:aws-access-token:202
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupPropertyTest.java:aws-secret-access-key:203
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupServiceTest.java:aws-access-token:74
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupServiceTest.java:aws-access-token:305
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupServiceTest.java:aws-access-token:338
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupServiceTest.java:aws-access-token:353
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupServiceTest.java:aws-secret-access-key:75
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupServiceTest.java:aws-secret-access-key:306
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupServiceTest.java:aws-secret-access-key:339
+8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/src/test/java/org/apache/ranger/lakeformation/service/LakeFormationResourceLookupServiceTest.java:aws-secret-access-key:354
+
+# --- README.md and deploy/README.md example credentials ---
+8f66ea1cdd67a53ecfb1190f51dc9df6afcff652:README.md:aws-access-token:152
+8f66ea1cdd67a53ecfb1190f51dc9df6afcff652:README.md:aws-secret-access-key:153
+8f66ea1cdd67a53ecfb1190f51dc9df6afcff652:deploy/README.md:aws-access-token:48
+8f66ea1cdd67a53ecfb1190f51dc9df6afcff652:deploy/README.md:aws-access-token:86
+8f66ea1cdd67a53ecfb1190f51dc9df6afcff652:deploy/README.md:aws-access-token:104
+8f66ea1cdd67a53ecfb1190f51dc9df6afcff652:deploy/README.md:aws-secret-access-key:49
+8f66ea1cdd67a53ecfb1190f51dc9df6afcff652:deploy/README.md:aws-secret-access-key:87
+930d19f83abdf7a7de680a5c2086a9d5aafe222b:README.md:aws-access-token:238
+930d19f83abdf7a7de680a5c2086a9d5aafe222b:README.md:aws-secret-access-key:239

@@ -58,7 +58,7 @@ public class LFPermissionFetcher {
         do {
             ListPermissionsRequest.Builder requestBuilder = ListPermissionsRequest.builder()
                     .catalogId(catalogId);
-            if (nextToken != null) {
+            if (nextToken != null) { // nosemgrep: eqeq
                 requestBuilder.nextToken(nextToken);
             }
 
@@ -74,7 +74,7 @@ public class LFPermissionFetcher {
             }
 
             nextToken = response.nextToken();
-        } while (nextToken != null);
+        } while (nextToken != null); // nosemgrep: eqeq
 
         LOG.info("Fetched {} permissions for catalogId={}", results.size(), catalogId);
         return results;
