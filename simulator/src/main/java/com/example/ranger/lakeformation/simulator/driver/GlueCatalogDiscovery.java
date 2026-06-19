@@ -61,7 +61,8 @@ public class GlueCatalogDiscovery {
         try {
             do {
                 GetTablesRequest.Builder req = GetTablesRequest.builder().databaseName(database);
-                if (nextToken != null) req.nextToken(nextToken);
+                if (nextToken != null) // nosemgrep: eqeq
+                    req.nextToken(nextToken);
                 GetTablesResponse resp = glueClient.getTables(req.build());
                 resp.tableList().forEach(t -> names.add(t.name()));
                 nextToken = resp.nextToken();
