@@ -191,7 +191,7 @@ public class S3AccessGrantsClient {
             String token = nextToken;
             ListAccessGrantsResponse response = s3control.listAccessGrants(r -> {
                 r.accountId(accountId);
-                if (token != null) {
+                if (token != null) {  // nosemgrep: eqeq
                     r.nextToken(token);
                 }
             });

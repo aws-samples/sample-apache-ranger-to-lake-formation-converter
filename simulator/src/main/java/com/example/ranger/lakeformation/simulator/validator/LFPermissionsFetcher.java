@@ -44,7 +44,7 @@ public class LFPermissionsFetcher {
             ListPermissionsRequest.Builder builder = ListPermissionsRequest.builder()
                     .catalogId(catalogId)
                     .maxResults(100);
-            if (nextToken != null) {
+            if (nextToken != null) { // nosemgrep: eqeq
                 builder.nextToken(nextToken);
             }
             ListPermissionsResponse response = lfClient.listPermissions(builder.build());

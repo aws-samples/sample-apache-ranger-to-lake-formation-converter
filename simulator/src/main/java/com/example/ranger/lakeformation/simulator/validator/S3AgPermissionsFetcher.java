@@ -47,7 +47,7 @@ public class S3AgPermissionsFetcher {
             ListAccessGrantsRequest.Builder builder = ListAccessGrantsRequest.builder()
                     .accountId(accountId)
                     .maxResults(100);
-            if (continuationToken != null) {
+            if (continuationToken != null) {  // nosemgrep: eqeq
                 builder.nextToken(continuationToken);
             }
             ListAccessGrantsResponse response;
