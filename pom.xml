@@ -18,7 +18,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- Dependency versions -->
-        <ranger.version>2.6.0</ranger.version>
+        <ranger.version>2.8.0</ranger.version>
         <aws.sdk.version>2.20.162</aws.sdk.version>
         <jackson.version>2.22.0</jackson.version>
         <slf4j.version>1.7.36</slf4j.version>
@@ -53,11 +53,33 @@
             <groupId>org.apache.ranger</groupId>
             <artifactId>ranger-plugins-common</artifactId>
             <version>${ranger.version}</version>
+            <exclusions>
+                <!-- Ranger 2.8+ pulls in slf4j-reload4j via hadoop-auth which
+                     displaces logback-classic as the SLF4J binding -->
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-reload4j</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ch.qos.reload4j</groupId>
+                    <artifactId>reload4j</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.apache.ranger</groupId>
-            <artifactId>ranger-plugins-audit</artifactId>
+            <artifactId>ranger-audit-core</artifactId>
             <version>${ranger.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-reload4j</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ch.qos.reload4j</groupId>
+                    <artifactId>reload4j</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- AWS SDK v2 -->
@@ -90,6 +112,14 @@
             <artifactId>s3control</artifactId>
             <!-- Access Grants API requires s3control >= 2.21; override BOM version -->
             <version>2.29.52</version>
+        </dependency>
+
+        <!-- Guava: explicitly compile-scoped so Cedar SDK's ImmutableList is resolvable.
+             Ranger 2.8+ pulls it in as runtime-only via hadoop-auth. -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>33.3.1-jre</version>
         </dependency>
 
         <!-- Jackson for JSON/YAML (versions managed by jackson-bom) -->
@@ -455,7 +485,7 @@
                 <ranger.admin.url>http://ranger-admin:6080</ranger.admin.url>
                 <ranger.admin.password>rangerR0cks!</ranger.admin.password>
                 <aws.region>us-east-1</aws.region>
-                <ranger.version>2.6.0</ranger.version>
+                <ranger.version>2.8.0</ranger.version>
                 <sync.interval.ms>30000</sync.interval.ms>
                 <lf.max.retries>5</lf.max.retries>
                 <lf.retry.backoff.ms>2000</lf.retry.backoff.ms>
@@ -616,7 +646,7 @@ project.properties['principal.role.mappings.yaml'] =
             <id>deploy-ranger-admin</id>
             <properties>
                 <ranger.admin.password>rangerR0cks!</ranger.admin.password>
-                <ranger.version>2.6.0</ranger.version>
+                <ranger.version>2.8.0</ranger.version>
             </properties>
             <build>
                 <plugins>
