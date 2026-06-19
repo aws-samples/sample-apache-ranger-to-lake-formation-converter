@@ -7,7 +7,7 @@ COPY conf ./conf
 RUN mvn clean package -DskipTests
 
 # Stage 2: Runtime
-FROM eclipse-temurin:17-jre
+FROM amazoncorretto:21
 WORKDIR /app
 COPY --from=build /app/target/ranger-lakeformation-plugin-*-jar-with-dependencies.jar app.jar
 COPY conf/server-config.yaml /app/config.yaml
