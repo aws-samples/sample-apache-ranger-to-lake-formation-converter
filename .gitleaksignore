@@ -67,11 +67,14 @@ Ranger_Policies_sample.json:generic-api-key:1
 930d19f83abdf7a7de680a5c2086a9d5aafe222b:README.md:aws-access-token:238
 930d19f83abdf7a7de680a5c2086a9d5aafe222b:README.md:aws-secret-access-key:239
 
-# --- hashicorp-tf-password: placeholder "admin_password"/"admin123" in historical commits ---
-# These were placeholder strings, not real credentials. Source files now use "CHANGE_ME".
+# --- hashicorp-tf-password: password: field in historical commits ---
+# Source files now use commented-out password fields (no live password: line).
 8fa1193af688597e155bc84944026cc359680d38:ranger-lakeformation-plugin/README.md:hashicorp-tf-password:115
 f562eb7759b8f7a2a2881471bc5b632afa93020c:.gitleaksignore:aws-access-token:2
 1bbb5afecf8b63ea9c779c13dfcd28d2a1493ba5:.kiro/specs/conversion-server/design.md:hashicorp-tf-password:161
 1bbb5afecf8b63ea9c779c13dfcd28d2a1493ba5:src/test/java/com/amazonaws/policyconverters/server/ConversionServerMainTest.java:hashicorp-tf-password:76
 1bbb5afecf8b63ea9c779c13dfcd28d2a1493ba5:conf/server-config.yaml:hashicorp-tf-password:23
 82346ec4dc1d9a84499c3c845871f8465f991683:ranger-lakeformation-plugin/src/main/java/org/apache/ranger/lakeformation/config/ConfigLoader.java:hashicorp-tf-password:35
+49e4656ff8a43da0ea286f3597996921d8f02af6:.kiro/specs/conversion-server/design.md:hashicorp-tf-password:161
+49e4656ff8a43da0ea286f3597996921d8f02af6:conf/server-config.yaml:hashicorp-tf-password:23
+49e4656ff8a43da0ea286f3597996921d8f02af6:src/test/java/com/amazonaws/policyconverters/app/ConversionServerMainTest.java:hashicorp-tf-password:79

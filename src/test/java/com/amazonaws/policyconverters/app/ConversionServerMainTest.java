@@ -76,7 +76,6 @@ class ConversionServerMainTest {
                 rangerConfig:
                   rangerAdminUrl: "http://ranger:6080"
                   username: "admin"
-                  password: "CHANGE_ME"
                 awsConfig:
                   region: "us-east-1"
                   catalogId: "123456789012"

@@ -20,7 +20,7 @@ rangerConfig:
 
   # Basic auth credentials for Ranger Admin
   username: "admin"
-  password: "CHANGE_ME"
+  # password: "CHANGE_ME"
 
   # Kerberos authentication (optional, alternative to username/password)
   # kerberosKeytab: "/etc/security/keytabs/ranger.keytab"
