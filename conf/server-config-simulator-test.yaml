@@ -6,6 +6,7 @@ rangerConfig:
 awsConfig:
   region: "us-west-2"
   catalogId: "427250191192"
+  # Note: run with AWS_PROFILE=hocanint+ranger-test1 so the sync service can call Glue/LF in account 427250191192
 
 principalMapping:
   userMappings:

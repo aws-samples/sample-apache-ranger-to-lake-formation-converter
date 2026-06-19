@@ -937,6 +937,176 @@ class SyncServiceTest {
     }
 
     // ---------------------------------------------------------------
+    // Pattern A: TABLE (non-select) wins, previously-gapped TWC reinstated
+    // ---------------------------------------------------------------
+
+    /**
+     * Pattern A setup: TABLE DESCRIBE/DROP (id=100, wins) vs TWC SELECT on cols (id=200, loses).
+     * When the winning TABLE policy is then removed, the formerly-gapped TWC SELECT must be
+     * granted to LF in the same cycle that revokes the TABLE permissions.
+     */
+    @Test
+    void tableTwcConflict_patternA_winnerRemoved_loserReinstated() {
+        BaseRangerService mockRangerService = mock(BaseRangerService.class);
+        when(mockRangerService.getServiceType()).thenReturn("lakeformation");
+        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
+        when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
+        when(mockRangerService.getLatestPolicies()).thenReturn(createServicePolicies(1L, 1));
+
+        SyncService svc = new SyncService(
+                Collections.singletonList(mockRangerService),
+                rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger,
+                null, null);
+        svc.start(syncConfig);
+
+        CedarPolicySet mockPs = mock(CedarPolicySet.class);
+        when(mockPs.getPermitCount()).thenReturn(2);
+        when(mockPs.getForbidCount()).thenReturn(0);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
+
+        // Cycle 1: TABLE DESCRIBE+DROP (id=100, wins) + TWC SELECT on [region,amount] (id=200, loses).
+        // Pattern A: non-select TABLE perms coexist with column-restricted SELECT — LF forbids it.
+        LFResource tableRes = new LFResource("cat", "db", "events", null, null);
+        LFPermissionOperation tableOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:100", "arn:aws:iam::123:role/data_admin",
+                tableRes, EnumSet.of(LFPermission.DESCRIBE, LFPermission.DROP), false);
+        LFResource twcRes = new LFResource("cat", "db", "events",
+                java.util.Set.of("region", "amount"), null);
+        LFPermissionOperation twcOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:200", "arn:aws:iam::123:role/data_admin",
+                twcRes, EnumSet.of(LFPermission.SELECT), false);
+
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(tableOp, twcOp));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Collections.singletonList("lakeformation:100"),
+                        Collections.emptyList(), 1, 1, 0));
+
+        svc.executeSyncCycle();
+
+        // Verify TABLE wins, TWC is gapped
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor1 = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor1.capture(), eq(deadLetterLogger));
+        List<LFPermissionOperation> cycle1Ops = captor1.getValue();
+        assertEquals(1, cycle1Ops.size());
+        assertEquals("lakeformation:100", cycle1Ops.get(0).getSourcePolicyId());
+        verify(deadLetterLogger).logGapOperation(
+                argThat(op -> "lakeformation:200".equals(op.getSourcePolicyId())),
+                contains("CONFLICTING_LF_RESOURCE_TYPE"));
+
+        // Cycle 2: TABLE policy (id=100) is removed — only TWC SELECT remains in desired state.
+        // The conflict resolves; TWC SELECT must now be granted.
+        reset(lakeFormationClient);
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Collections.singletonList(twcOp));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Collections.singletonList("lakeformation:200"),
+                        Collections.emptyList(), 1, 1, 0));
+
+        svc.executeSyncCycle();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor2 = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor2.capture(), eq(deadLetterLogger));
+        List<LFPermissionOperation> cycle2Ops = captor2.getValue();
+        // The formerly-gapped TWC SELECT must appear as a new GRANT
+        assertTrue(cycle2Ops.stream().anyMatch(op ->
+                "lakeformation:200".equals(op.getSourcePolicyId())
+                && op.getOperationType() == OperationType.GRANT),
+                "Formerly-gapped TWC SELECT must be re-instated once the winning TABLE policy is removed");
+        // The TABLE permissions must be revoked
+        assertTrue(cycle2Ops.stream().anyMatch(op ->
+                "lakeformation:100".equals(op.getSourcePolicyId())
+                && op.getOperationType() == OperationType.REVOKE),
+                "TABLE permissions from the removed winning policy must be revoked");
+    }
+
+    // ---------------------------------------------------------------
+    // Pattern B: TWC SELECT wins, previously-gapped TABLE reinstated
+    // ---------------------------------------------------------------
+
+    /**
+     * Pattern B setup: TWC SELECT on cols (id=100, wins) vs TABLE INSERT (id=200, loses).
+     * When the winning TWC policy is removed, the formerly-gapped TABLE INSERT must be
+     * granted to LF in the same cycle that revokes the TWC permissions.
+     */
+    @Test
+    void tableTwcConflict_patternB_winnerRemoved_loserReinstated() {
+        BaseRangerService mockRangerService = mock(BaseRangerService.class);
+        when(mockRangerService.getServiceType()).thenReturn("lakeformation");
+        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
+        when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
+        when(mockRangerService.getLatestPolicies()).thenReturn(createServicePolicies(1L, 1));
+
+        SyncService svc = new SyncService(
+                Collections.singletonList(mockRangerService),
+                rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger,
+                null, null);
+        svc.start(syncConfig);
+
+        CedarPolicySet mockPs = mock(CedarPolicySet.class);
+        when(mockPs.getPermitCount()).thenReturn(2);
+        when(mockPs.getForbidCount()).thenReturn(0);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
+
+        // Cycle 1: TWC SELECT on [created_at] (id=100, wins) + TABLE INSERT (id=200, loses).
+        // Pattern B: column-restricted SELECT coexists with write permission — LF forbids it.
+        LFResource twcRes = new LFResource("cat", "db", "products",
+                java.util.Set.of("created_at"), null);
+        LFPermissionOperation twcOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:100", "arn:aws:iam::123:role/data_admin",
+                twcRes, EnumSet.of(LFPermission.SELECT), false);
+        LFResource tableRes = new LFResource("cat", "db", "products", null, null);
+        LFPermissionOperation tableOp = new LFPermissionOperation(
+                OperationType.GRANT, "lakeformation:200", "arn:aws:iam::123:role/data_admin",
+                tableRes, EnumSet.of(LFPermission.INSERT), false);
+
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(twcOp, tableOp));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Collections.singletonList("lakeformation:100"),
+                        Collections.emptyList(), 1, 1, 0));
+
+        svc.executeSyncCycle();
+
+        // Verify TWC wins, TABLE INSERT is gapped
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor1 = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor1.capture(), eq(deadLetterLogger));
+        List<LFPermissionOperation> cycle1Ops = captor1.getValue();
+        assertEquals(1, cycle1Ops.size());
+        assertEquals("lakeformation:100", cycle1Ops.get(0).getSourcePolicyId());
+        verify(deadLetterLogger).logGapOperation(
+                argThat(op -> "lakeformation:200".equals(op.getSourcePolicyId())),
+                contains("CONFLICTING_LF_RESOURCE_TYPE"));
+
+        // Cycle 2: TWC policy (id=100) is removed — only TABLE INSERT remains in desired state.
+        // The conflict resolves; TABLE INSERT must now be granted.
+        reset(lakeFormationClient);
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Collections.singletonList(tableOp));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Collections.singletonList("lakeformation:200"),
+                        Collections.emptyList(), 1, 1, 0));
+
+        svc.executeSyncCycle();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor2 = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor2.capture(), eq(deadLetterLogger));
+        List<LFPermissionOperation> cycle2Ops = captor2.getValue();
+        // The formerly-gapped TABLE INSERT must appear as a new GRANT
+        assertTrue(cycle2Ops.stream().anyMatch(op ->
+                "lakeformation:200".equals(op.getSourcePolicyId())
+                && op.getOperationType() == OperationType.GRANT),
+                "Formerly-gapped TABLE INSERT must be re-instated once the winning TWC policy is removed");
+        // The TWC permissions must be revoked
+        assertTrue(cycle2Ops.stream().anyMatch(op ->
+                "lakeformation:100".equals(op.getSourcePolicyId())
+                && op.getOperationType() == OperationType.REVOKE),
+                "TWC permissions from the removed winning policy must be revoked");
+    }
+
+    // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------
 

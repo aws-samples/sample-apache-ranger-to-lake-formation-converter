@@ -34,8 +34,17 @@ public class ExpectedPermissionsComputer {
 
     /**
      * Compute expected permissions from a list of raw Ranger policies.
-     * Two-pass: first collect all deny triples globally, then collect permits
-     * and subtract those matching any deny.
+     *
+     * <p>Three-pass algorithm:
+     * <ol>
+     *   <li>Collect all deny keys globally.</li>
+     *   <li>Collect all permit entries.</li>
+     *   <li>Apply TABLE/TWC conflict resolution: for each (principal, db.table) that has both
+     *       a TABLE grant and a TWC grant, the policy with the lower numeric ID wins and the
+     *       loser's permissions are excluded — mirroring {@code SyncService.detectAndGapTableTwcConflicts}.
+     *       LF rejects any TABLE and TABLE_WITH_COLUMNS grant coexistence for the same principal
+     *       and table, regardless of which permissions are involved.</li>
+     * </ol>
      *
      * @param policies array of Ranger policy JSON nodes (from Ranger REST API)
      * @return flat set of expected SimulatorPermissions
@@ -48,16 +57,70 @@ public class ExpectedPermissionsComputer {
             collectDenies(policy, globalDenySet);
         }
 
-        // Pass 2: collect all permit entries
+        // Pass 2: collect all permit entries, tagging each with its source policy id
         Set<SimulatorPermission> permits = new HashSet<>();
+        Map<SimulatorPermission, Long> permToMinPolicyId = new HashMap<>();
         for (JsonNode policy : policies) {
             if (!shouldProcess(policy)) continue;
-            processPermitsInto(policy, permits);
+            long policyId = policy.path("id").asLong(Long.MAX_VALUE);
+            Set<SimulatorPermission> policyPerms = new HashSet<>();
+            processPermitsInto(policy, policyPerms);
+            for (SimulatorPermission p : policyPerms) {
+                permits.add(p);
+                permToMinPolicyId.merge(p, policyId, Math::min);
+            }
         }
 
         // Subtract any permit that is matched by a deny
         permits.removeIf(p ->
             globalDenySet.contains(new DenyKey(p.principalArn(), p.resourceId(), p.permission())));
+
+        // Pass 3: TABLE/TWC conflict resolution (mirrors SyncService.detectAndGapTableTwcConflicts).
+        // For each (principalArn, resourceId) that has both TABLE and TABLE_WITH_COLUMNS entries,
+        // the type whose minimum policy ID is lower wins; all permissions from the losing type
+        // are removed from the expected set.
+        Map<String, Long> tableMinId = new HashMap<>();   // key → min policyId for TABLE perms
+        Map<String, Long> twcMinId   = new HashMap<>();   // key → min policyId for TWC perms
+
+        for (SimulatorPermission p : permits) {
+            String key = p.principalArn() + "|" + p.resourceId();
+            long id = permToMinPolicyId.getOrDefault(p, Long.MAX_VALUE);
+            if ("TABLE_WITH_COLUMNS".equals(p.resourceType()) && "SELECT".equals(p.permission())
+                    && !p.resourceId().endsWith(".*")) {
+                // TWC permission (column-restricted SELECT — not a bare table SELECT)
+                twcMinId.merge(key, id, Math::min);
+            } else if ("TABLE".equals(p.resourceType())) {
+                tableMinId.merge(key, id, Math::min);
+            }
+        }
+
+        // Find keys that have both TABLE and TWC entries — conflict exists
+        Set<String> conflictKeys = new HashSet<>(tableMinId.keySet());
+        conflictKeys.retainAll(twcMinId.keySet());
+
+        if (!conflictKeys.isEmpty()) {
+            permits.removeIf(p -> {
+                String key = p.principalArn() + "|" + p.resourceId();
+                if (!conflictKeys.contains(key)) return false;
+                long tId = tableMinId.get(key);
+                long wId = twcMinId.get(key);
+                long permId = permToMinPolicyId.getOrDefault(p, Long.MAX_VALUE);
+                boolean isTablePerm = "TABLE".equals(p.resourceType());
+                boolean isTwcPerm   = "TABLE_WITH_COLUMNS".equals(p.resourceType())
+                        && "SELECT".equals(p.permission()) && !p.resourceId().endsWith(".*");
+                if (!isTablePerm && !isTwcPerm) return false;
+                // Same minimum ID: one policy expands to both types — not an inter-policy conflict.
+                if (tId == wId) return false;
+                // The side with the higher minimum policy ID loses
+                if (tId < wId) {
+                    // TABLE wins — remove TWC permissions for this key
+                    return isTwcPerm && permId >= wId;
+                } else {
+                    // TWC wins — remove TABLE permissions for this key
+                    return isTablePerm && permId >= tId;
+                }
+            });
+        }
 
         return permits;
     }

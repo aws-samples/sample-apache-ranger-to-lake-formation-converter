@@ -10,3 +10,6 @@ deploy/server-config-deploy.yaml
 .worktrees/
 Ranger_Policies_*
 dead-letter.log
+checkpoint/
+.kiro/
+.claude/

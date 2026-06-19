@@ -86,6 +86,80 @@ The following Ranger features have no direct equivalent in Lake Formation. When 
 
 All configured Ranger services are merged into a single Cedar evaluation namespace. A `forbid` for principal P from any service suppresses a `permit` for the same principal P from any other service for the same action and resource. This means a Trino deny policy will suppress a Hive grant for the same resource. Scope deny policies carefully when using multiple Ranger services.
 
+## TABLE and TABLE\_WITH\_COLUMNS Conflict Resolution
+
+Lake Formation enforces a hard constraint: **a principal cannot hold both a `TABLE` grant and a `TABLE_WITH_COLUMNS` grant for the same table at the same time**, regardless of which permissions each grant carries. Attempting to apply the second grant while the first exists results in an API error.
+
+This creates an irreconcilable conflict when two Ranger policies produce grants of different LF resource types for the same `(principal, table)` combination. The sync service detects and resolves this automatically.
+
+### Conflict patterns
+
+**Pattern A — complementary intent, irreconcilable in LF**
+
+A principal needs both column-restricted SELECT and non-SELECT table operations:
+
+```
+Policy 100 (id=100):  TABLE   DESCRIBE, DROP     ← TABLE grant (no SELECT)
+Policy 200 (id=200):  TWC     SELECT on [col_a, col_b]  ← TABLE_WITH_COLUMNS grant
+```
+
+These policies are complementary in intent, but LF cannot hold both simultaneously. The sync service must pick one.
+
+**Pattern B — write perms lost when TWC wins**
+
+```
+Policy 100 (id=100):  TWC     SELECT on [created_at]   ← TABLE_WITH_COLUMNS grant (wins)
+Policy 200 (id=200):  TABLE   INSERT, DELETE           ← TABLE grant (loses — permanently)
+```
+
+INSERT/DELETE cannot be placed on a `TABLE_WITH_COLUMNS` resource, so the losing permissions are structurally unrepresentable in LF.
+
+### Tiebreaker rule
+
+When a conflict is detected, the policy with the **lower numeric Ranger policy ID** wins. Its LF grant is applied; the competing policy's grant is permanently suppressed.
+
+If two conflicting policies share the same ID (not possible in practice, but guarded against), lexicographic comparison of the full policy ID string is used as a fallback.
+
+### Behavior in the sync service
+
+- **Detection**: `SyncService.detectAndGapTableTwcConflicts` inspects all pending GRANT operations for each `(principal, table)` key. Any group containing both a `TABLE` grant and a `TABLE_WITH_COLUMNS` grant is a conflict.
+- **Suppression**: The losing policy's operations are removed from the batch before any LF calls are made. LF never sees both resource types simultaneously.
+- **Dead-letter logging**: The first time a conflict is detected for a given `(principal, table)`, all losing operations are written to the dead-letter log (`dead-letter.log`) with `type=GAP` and reason `CONFLICTING_LF_RESOURCE_TYPE`. Subsequent sync cycles do not re-log the same conflict.
+- **No automatic merging**: The sync service does not attempt to merge permissions from both policies onto the winning resource type. Write permissions (INSERT, DELETE) cannot be expressed on a `TABLE_WITH_COLUMNS` resource.
+
+### Re-instatement when the winning policy is removed
+
+If the **winning** policy is disabled or deleted in Ranger, the formerly-suppressed policy is automatically reinstated on the next sync cycle:
+
+1. The winning policy no longer contributes a GRANT operation.
+2. No conflict is detected — only one resource type remains.
+3. The formerly-losing policy's grant is applied to LF.
+4. The sync service issues the winning policy's REVOKE *before* the new GRANT in the same batch, so LF never sees both types simultaneously.
+
+This means conflicts are self-healing: removing the winning policy is sufficient to restore the other policy's permissions without any manual intervention.
+
+### Gap report entries
+
+Suppressed operations appear in the dead-letter log as:
+
+```json
+{
+  "type": "GAP",
+  "reason": "CONFLICTING_LF_RESOURCE_TYPE: TABLE and TABLE_WITH_COLUMNS grants cannot coexist ...",
+  "resource": { "databaseName": "mydb", "tableName": "orders", "columns": ["col_a"] },
+  "principal": "arn:aws:iam::123456789012:role/analyst",
+  "permission": "SELECT"
+}
+```
+
+The presence of a `columns` field identifies a Pattern A loss (TWC suppressed). Absence of `columns` identifies a Pattern B loss (TABLE suppressed).
+
+### Recommendations
+
+- **Avoid authoring conflicting policies.** If a principal needs both column-restricted SELECT and write permissions on the same table, consider: (a) granting full TABLE SELECT instead of column-restricted access, (b) splitting the principal into two roles, or (c) accepting that write permissions will be lost.
+- **Review the dead-letter log** after initial sync to identify any conflicts in your Ranger policy set. Address them by consolidating or restructuring the affected policies.
+- **Lower policy IDs win.** If you must have conflicting policies and need a specific one to take effect, ensure it has a lower numeric ID in Ranger Admin.
+
 # Design
 
 See [DESIGN.MD](./DESIGN.md) for a deep dive on the design of this tool.
