@@ -103,7 +103,7 @@ public class S3AccessGrantsClient {
             ListAccessGrantsLocationsResponse response = s3control.listAccessGrantsLocations(
                     r -> {
                         r.accountId(accountId);
-                        if (token != null) {
+                        if (token != null) { // nosemgrep: eqeq
                             r.nextToken(token);
                         }
                     });
