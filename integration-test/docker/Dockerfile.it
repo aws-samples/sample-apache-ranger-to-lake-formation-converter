@@ -8,4 +8,7 @@ COPY integration-test/docker/ranger-lakeformation-security-it.xml ranger-securit
 RUN groupadd --system appgroup && useradd --system --gid appgroup appuser
 USER appuser
 
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD pgrep -f "java.*app.jar" || exit 1
+
 ENTRYPOINT ["java", "-jar", "app.jar", "/app/config-it.yaml"]
