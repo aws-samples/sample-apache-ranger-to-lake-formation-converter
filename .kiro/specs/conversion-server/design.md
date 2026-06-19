@@ -158,7 +158,7 @@ The top-level config file becomes:
 rangerConfig:
   rangerAdminUrl: "http://ranger-admin:6080"
   username: "admin"
-  password: "admin_password"
+  password: "CHANGE_ME"
   # ... existing fields ...
 
 awsConfig:

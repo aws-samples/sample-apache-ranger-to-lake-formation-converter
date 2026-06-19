@@ -71,9 +71,24 @@ public class ExpectedPermissionsComputer {
             }
         }
 
-        // Subtract any permit that is matched by a deny
-        permits.removeIf(p ->
-            globalDenySet.contains(new DenyKey(p.principalArn(), p.resourceId(), p.permission())));
+        // Subtract any permit that is matched by a deny (exact match or ancestor resource).
+        // Cedar hierarchy: a database-level deny suppresses table/column permits in that database;
+        // a table-level deny suppresses column permits for that table.
+        // In the simulator's resource model: database="db", table/column="db.table".
+        // Ancestor check: deny resourceId "db" covers permit resourceId "db.anything".
+        permits.removeIf(p -> {
+            String principal = p.principalArn();
+            String perm = p.permission();
+            String rid = p.resourceId();
+            for (DenyKey dk : globalDenySet) {
+                if (!dk.principalArn().equals(principal)) continue;
+                if (!dk.permission().equals(perm)) continue;
+                if (dk.resourceId().equals(rid)) return true;
+                // Ancestor: deny on "db" covers permits on "db.table"
+                if (rid.startsWith(dk.resourceId() + ".")) return true;
+            }
+            return false;
+        });
 
         // Pass 3: TABLE/TWC conflict resolution (mirrors SyncService.detectAndGapTableTwcConflicts).
         // For each (principalArn, resourceId) that has both TABLE and TABLE_WITH_COLUMNS entries,

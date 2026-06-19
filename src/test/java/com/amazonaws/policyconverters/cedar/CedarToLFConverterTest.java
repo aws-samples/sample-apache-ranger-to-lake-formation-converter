@@ -347,4 +347,205 @@ class CedarToLFConverterTest {
         assertFalse(ops.get(0).isGrantable(),
                 "Absence of @grantable annotation must produce isGrantable=false");
     }
+
+    // -----------------------------------------------------------------------
+    // Ancestor-hierarchy forbid suppression (Cedar: Column in [Table],
+    // Table in [Database], Database in [Catalog])
+    // -----------------------------------------------------------------------
+
+    @Test
+    void tableForbidSuppressesColumnPermit() throws Exception {
+        // A forbid on the TABLE resource must suppress a permit on a COLUMN of that table.
+        // Mirrors the violation seen in simulation: deny policy on table/default_sim/products
+        // must block the column-level SELECT grant from policy 1834.
+        String cedarText = """
+                @source("deny-100")
+                forbid(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123:table/mydb/products"
+                );
+                @source("allow-200")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123:column/mydb/products/price"
+                );
+                """;
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(0, ops.size(),
+                "Table-level forbid must suppress column-level SELECT permit (Cedar hierarchy: Column in [Table])");
+    }
+
+    @Test
+    void tableForbidDoesNotSuppressColumnOfDifferentTable() throws Exception {
+        String cedarText = """
+                @source("deny-100")
+                forbid(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123:table/mydb/products"
+                );
+                @source("allow-200")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123:column/mydb/orders/amount"
+                );
+                """;
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size(),
+                "Table-level forbid on 'products' must NOT suppress a column permit on 'orders'");
+    }
+
+    @Test
+    void databaseForbidSuppressesTableAndColumnPermits() throws Exception {
+        String cedarText = """
+                @source("deny-db")
+                forbid(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Database::"arn:aws:glue:us-east-1:123:database/mydb"
+                );
+                @source("allow-tbl")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123:table/mydb/orders"
+                );
+                @source("allow-col")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123:column/mydb/orders/id"
+                );
+                """;
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(0, ops.size(),
+                "Database-level forbid must suppress both table and column permits in that database");
+    }
+
+    @Test
+    void databaseForbidDoesNotSuppressTableInDifferentDatabase() throws Exception {
+        String cedarText = """
+                @source("deny-db")
+                forbid(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Database::"arn:aws:glue:us-east-1:123:database/mydb"
+                );
+                @source("allow-other")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123:table/otherdb/orders"
+                );
+                """;
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size(),
+                "Database-level forbid on 'mydb' must NOT suppress a table permit in 'otherdb'");
+    }
+
+    @Test
+    void tableForbidOnOneActionDoesNotSuppressColumnPermitOnDifferentAction() throws Exception {
+        // Forbid SELECT on table, but permit INSERT on column — different action, no suppression.
+        // (INSERT doesn't apply to Column in the schema, but the forbid logic should be
+        //  action-scoped regardless.)
+        String cedarText = """
+                @source("deny-select")
+                forbid(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123:table/mydb/products"
+                );
+                @source("allow-col-select")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123:role/Analyst",
+                    action == DataCatalog::Action::"DESCRIBE",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123:column/mydb/products/price"
+                );
+                """;
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size(),
+                "Forbid on SELECT must not suppress a permit on a different action (DESCRIBE)");
+    }
+
+    // -----------------------------------------------------------------------
+    // isAncestorResource unit tests (package-private static method)
+    // -----------------------------------------------------------------------
+
+    @Test
+    void isAncestorResource_tableForbidCoversColumn() {
+        String table = "arn:aws:glue:us-east-1:123:table/mydb/orders";
+        String column = "arn:aws:glue:us-east-1:123:column/mydb/orders/id";
+        assertTrue(CedarToLFConverter.isAncestorResource(table, column));
+    }
+
+    @Test
+    void isAncestorResource_tableForbidDoesNotCoverColumnOfOtherTable() {
+        String table  = "arn:aws:glue:us-east-1:123:table/mydb/orders";
+        String column = "arn:aws:glue:us-east-1:123:column/mydb/products/id";
+        assertFalse(CedarToLFConverter.isAncestorResource(table, column));
+    }
+
+    @Test
+    void isAncestorResource_databaseForbidCoversTable() {
+        String db    = "arn:aws:glue:us-east-1:123:database/mydb";
+        String table = "arn:aws:glue:us-east-1:123:table/mydb/orders";
+        assertTrue(CedarToLFConverter.isAncestorResource(db, table));
+    }
+
+    @Test
+    void isAncestorResource_databaseForbidCoversColumn() {
+        String db     = "arn:aws:glue:us-east-1:123:database/mydb";
+        String column = "arn:aws:glue:us-east-1:123:column/mydb/orders/id";
+        assertTrue(CedarToLFConverter.isAncestorResource(db, column));
+    }
+
+    @Test
+    void isAncestorResource_databaseForbidDoesNotCoverOtherDatabase() {
+        String db1    = "arn:aws:glue:us-east-1:123:database/mydb";
+        String table2 = "arn:aws:glue:us-east-1:123:table/otherdb/orders";
+        assertFalse(CedarToLFConverter.isAncestorResource(db1, table2));
+    }
+
+    @Test
+    void isAncestorResource_catalogForbidCoversDatabase() {
+        String catalog = "arn:aws:glue:us-east-1:123:catalog";
+        String db      = "arn:aws:glue:us-east-1:123:database/mydb";
+        assertTrue(CedarToLFConverter.isAncestorResource(catalog, db));
+    }
+
+    @Test
+    void isAncestorResource_exactMatchReturnsFalse() {
+        String arn = "arn:aws:glue:us-east-1:123:table/mydb/orders";
+        assertFalse(CedarToLFConverter.isAncestorResource(arn, arn),
+                "An ARN is not its own ancestor");
+    }
+
+    @Test
+    void isAncestorResource_differentAccountReturnsFalse() {
+        String table  = "arn:aws:glue:us-east-1:111:table/mydb/orders";
+        String column = "arn:aws:glue:us-east-1:222:column/mydb/orders/id";
+        assertFalse(CedarToLFConverter.isAncestorResource(table, column),
+                "Different account — not an ancestor");
+    }
+
+    @Test
+    void isAncestorResource_dbNamePrefixNotAncestorOfSimilarDbName() {
+        // "mydb" table must not be treated as ancestor of "mydb2" column
+        String table  = "arn:aws:glue:us-east-1:123:table/mydb/orders";
+        String column = "arn:aws:glue:us-east-1:123:column/mydb2/orders/id";
+        assertFalse(CedarToLFConverter.isAncestorResource(table, column));
+    }
 }

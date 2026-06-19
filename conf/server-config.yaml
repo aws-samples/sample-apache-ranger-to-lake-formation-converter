@@ -20,7 +20,7 @@ rangerConfig:
 
   # Basic auth credentials for Ranger Admin
   username: "admin"
-  password: "admin_password"
+  password: "CHANGE_ME"
 
   # Kerberos authentication (optional, alternative to username/password)
   # kerberosKeytab: "/etc/security/keytabs/ranger.keytab"
@@ -45,8 +45,8 @@ awsConfig:
 
   # Static credentials (optional, not recommended for production)
   # Prefer IAM role assumption via roleArn or instance/pod credentials.
-  # accessKey: "AKIAIOSFODNN7EXAMPLE"
-  # secretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+  # accessKey: "EXAMPLE_ACCESS_KEY_ID"
+  # secretKey: "EXAMPLE_SECRET_ACCESS_KEY"
 
 # -----------------------------------------------------------------------------
 # Principal Mapping

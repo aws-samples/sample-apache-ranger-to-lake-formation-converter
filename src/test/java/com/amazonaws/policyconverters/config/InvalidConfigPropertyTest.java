@@ -76,8 +76,8 @@ class InvalidConfigPropertyTest {
         ).as((hasRegion, hasCatalogId, hasStaticCreds, hasRoleArn) -> new AwsConfig(
                 hasRegion ? "us-east-1" : null,
                 hasCatalogId ? "123456789012" : null,
-                hasStaticCreds ? "AKIAIOSFODNN7EXAMPLE" : null,
-                hasStaticCreds ? "wJalrXUtnFEMI/K7MDENG" : null,
+                hasStaticCreds ? "EXAMPLE_ACCESS_KEY_ID" : null,
+                hasStaticCreds ? "EXAMPLE_SECRET_ACCESS_KEY" : null,
                 hasRoleArn ? "arn:aws:iam::123456789012:role/test" : null
         ));
 

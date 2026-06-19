@@ -200,8 +200,8 @@ class ResourceLookupPropertyTest {
         ResourceLookupService service = new ResourceLookupService(factory);
         Map<String, String> configs = new HashMap<>();
         configs.put("aws.region", "us-east-1");
-        configs.put("aws.access.key", "AKIAIOSFODNN7EXAMPLE");
-        configs.put("aws.secret.key", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+        configs.put("aws.access.key", "EXAMPLE_ACCESS_KEY_ID");
+        configs.put("aws.secret.key", "EXAMPLE_SECRET_ACCESS_KEY");
         service.setConfigs(configs);
         return service;
     }

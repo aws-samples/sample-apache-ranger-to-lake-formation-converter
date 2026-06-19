@@ -61,7 +61,7 @@ class SyncServiceMainTest {
     @Test
     void buildCredentialsProvider_staticCredentials_returnsStaticProvider() {
         AwsConfig awsConfig = new AwsConfig("us-east-1", "123456789012",
-                "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", null);
+                "EXAMPLE_ACCESS_KEY_ID", "EXAMPLE_SECRET_ACCESS_KEY", null);
 
         AwsCredentialsProvider provider = SyncServiceMain.buildCredentialsProvider(awsConfig);
 
@@ -83,7 +83,7 @@ class SyncServiceMainTest {
     @Test
     void buildCredentialsProvider_staticCredsAndRoleArn_returnsStsProvider() {
         AwsConfig awsConfig = new AwsConfig("us-east-1", "123456789012",
-                "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "EXAMPLE_ACCESS_KEY_ID", "EXAMPLE_SECRET_ACCESS_KEY",
                 "arn:aws:iam::123456789012:role/TestRole");
 
         AwsCredentialsProvider provider = SyncServiceMain.buildCredentialsProvider(awsConfig);
@@ -134,8 +134,8 @@ class SyncServiceMainTest {
             writer.write("awsConfig:\n");
             writer.write("  region: \"us-east-1\"\n");
             writer.write("  catalogId: \"123456789012\"\n");
-            writer.write("  accessKey: \"AKIAIOSFODNN7EXAMPLE\"\n");
-            writer.write("  secretKey: \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n");
+            writer.write("  accessKey: \"EXAMPLE_ACCESS_KEY_ID\"\n");
+            writer.write("  secretKey: \"EXAMPLE_SECRET_ACCESS_KEY\"\n");
             writer.write("principalMapping:\n");
             writer.write("  userMappings:\n");
             writer.write("    alice: \"arn:aws:iam::123456789012:user/alice\"\n");
@@ -158,8 +158,8 @@ class SyncServiceMainTest {
             writer.write("rangerConfig.password=admin123\n");
             writer.write("awsConfig.region=us-west-2\n");
             writer.write("awsConfig.catalogId=987654321098\n");
-            writer.write("awsConfig.accessKey=AKIAIOSFODNN7EXAMPLE\n");
-            writer.write("awsConfig.secretKey=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n");
+            writer.write("awsConfig.accessKey=EXAMPLE_ACCESS_KEY_ID\n");
+            writer.write("awsConfig.secretKey=EXAMPLE_SECRET_ACCESS_KEY\n");
         }
         return configFile;
     }

@@ -367,8 +367,8 @@ mvn generate-resources exec:exec@ensure-network exec:exec@docker-compose-up \
   -Pdeploy-server \
   -Daws.account.id=123456789012 \
   -Daws.role.arn=arn:aws:iam::123456789012:role/LakeFormationRole \
-  -Daws.access.key.id=AKIAIOSFODNN7EXAMPLE \
-  -Daws.secret.access.key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+  -Daws.access.key.id=EXAMPLE_ACCESS_KEY_ID \
+  -Daws.secret.access.key=EXAMPLE_SECRET_ACCESS_KEY
 
 # Stop
 mvn exec:exec@docker-compose-down -Pdeploy-server
@@ -412,8 +412,8 @@ awsConfig:
   catalogId: "123456789012"
   roleArn: "arn:aws:iam::123456789012:role/RangerLFSyncRole"
   # Static credentials (optional, not recommended for production)
-  # accessKey: "AKIAIOSFODNN7EXAMPLE"
-  # secretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+  # accessKey: "EXAMPLE_ACCESS_KEY_ID"
+  # secretKey: "EXAMPLE_SECRET_ACCESS_KEY"
 
 principalMapping:
   userMappings:

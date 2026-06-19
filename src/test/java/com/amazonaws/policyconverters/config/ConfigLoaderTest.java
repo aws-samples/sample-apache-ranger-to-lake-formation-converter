@@ -44,8 +44,8 @@ class ConfigLoaderTest {
                 "awsConfig:\n" +
                 "  region: us-east-1\n" +
                 "  catalogId: \"123456789012\"\n" +
-                "  accessKey: AKIAIOSFODNN7EXAMPLE\n" +
-                "  secretKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n" +
+                "  accessKey: EXAMPLE_ACCESS_KEY_ID\n" +
+                "  secretKey: EXAMPLE_SECRET_ACCESS_KEY\n" +
                 "  roleArn: arn:aws:iam::123456789012:role/LFRole\n" +
                 "policyRefreshIntervalMs: 60000\n" +
                 "maxLfRetries: 10\n" +
@@ -68,8 +68,8 @@ class ConfigLoaderTest {
         assertNotNull(config.getAwsConfig());
         assertEquals("us-east-1", config.getAwsConfig().getRegion());
         assertEquals("123456789012", config.getAwsConfig().getCatalogId());
-        assertEquals("AKIAIOSFODNN7EXAMPLE", config.getAwsConfig().getAccessKey());
-        assertEquals("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", config.getAwsConfig().getSecretKey());
+        assertEquals("EXAMPLE_ACCESS_KEY_ID", config.getAwsConfig().getAccessKey());
+        assertEquals("EXAMPLE_SECRET_ACCESS_KEY", config.getAwsConfig().getSecretKey());
         assertEquals("arn:aws:iam::123456789012:role/LFRole", config.getAwsConfig().getRoleArn());
 
         assertEquals(60000L, config.getPolicyRefreshIntervalMs());
@@ -105,8 +105,8 @@ class ConfigLoaderTest {
                 "rangerConfig.retryBackoffMs=2000\n" +
                 "awsConfig.region=us-east-1\n" +
                 "awsConfig.catalogId=123456789012\n" +
-                "awsConfig.accessKey=AKIAIOSFODNN7EXAMPLE\n" +
-                "awsConfig.secretKey=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n" +
+                "awsConfig.accessKey=EXAMPLE_ACCESS_KEY_ID\n" +
+                "awsConfig.secretKey=EXAMPLE_SECRET_ACCESS_KEY\n" +
                 "awsConfig.roleArn=arn:aws:iam::123456789012:role/LFRole\n" +
                 "policyRefreshIntervalMs=60000\n" +
                 "maxLfRetries=10\n" +
@@ -240,8 +240,8 @@ class ConfigLoaderTest {
                 "  password: superSecret\n" +
                 "awsConfig:\n" +
                 "  region: us-east-1\n" +
-                "  accessKey: AKIAIOSFODNN7EXAMPLE\n" +
-                "  secretKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+                "  accessKey: EXAMPLE_ACCESS_KEY_ID\n" +
+                "  secretKey: EXAMPLE_SECRET_ACCESS_KEY\n";
 
         File yamlFile = tempDir.resolve("config.yaml").toFile();
         writeFile(yamlFile, yaml);

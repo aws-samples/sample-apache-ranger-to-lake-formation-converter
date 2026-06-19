@@ -72,8 +72,8 @@ class ResourceLookupServiceTest {
     void validateConfig_validRegion_glueSucceeds_returnsTrue() throws Exception {
         Map<String, String> configs = new HashMap<>();
         configs.put("aws.region", "us-east-1");
-        configs.put("aws.access.key", "AKIAIOSFODNN7EXAMPLE");
-        configs.put("aws.secret.key", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+        configs.put("aws.access.key", "EXAMPLE_ACCESS_KEY_ID");
+        configs.put("aws.secret.key", "EXAMPLE_SECRET_ACCESS_KEY");
         service.setConfigs(configs);
 
         when(mockGlueClient.getDatabases(any(GetDatabasesRequest.class)))
@@ -303,8 +303,8 @@ class ResourceLookupServiceTest {
     void buildCredentialsProvider_staticCredentials() {
         Map<String, String> configs = new HashMap<>();
         configs.put("aws.region", "us-east-1");
-        configs.put("aws.access.key", "AKIAIOSFODNN7EXAMPLE");
-        configs.put("aws.secret.key", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+        configs.put("aws.access.key", "EXAMPLE_ACCESS_KEY_ID");
+        configs.put("aws.secret.key", "EXAMPLE_SECRET_ACCESS_KEY");
 
         AwsCredentialsProvider provider = service.buildCredentialsProvider(configs);
 
@@ -336,8 +336,8 @@ class ResourceLookupServiceTest {
     void buildCredentialsProvider_roleArnWithStaticCreds_usesStsAssumeRole() {
         Map<String, String> configs = new HashMap<>();
         configs.put("aws.region", "us-east-1");
-        configs.put("aws.access.key", "AKIAIOSFODNN7EXAMPLE");
-        configs.put("aws.secret.key", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+        configs.put("aws.access.key", "EXAMPLE_ACCESS_KEY_ID");
+        configs.put("aws.secret.key", "EXAMPLE_SECRET_ACCESS_KEY");
         configs.put("aws.role.arn", "arn:aws:iam::123456789012:role/TestRole");
 
         AwsCredentialsProvider provider = service.buildCredentialsProvider(configs);
@@ -351,8 +351,8 @@ class ResourceLookupServiceTest {
     private Map<String, String> configWithRegion() {
         Map<String, String> configs = new HashMap<>();
         configs.put("aws.region", "us-east-1");
-        configs.put("aws.access.key", "AKIAIOSFODNN7EXAMPLE");
-        configs.put("aws.secret.key", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+        configs.put("aws.access.key", "EXAMPLE_ACCESS_KEY_ID");
+        configs.put("aws.secret.key", "EXAMPLE_SECRET_ACCESS_KEY");
         return configs;
     }
 }

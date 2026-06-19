@@ -45,8 +45,8 @@ mvn generate-resources exec:exec@ensure-network exec:exec@docker-compose-up \
   -Pdeploy-server \
   -Daws.account.id=123456789012 \
   -Daws.role.arn=arn:aws:iam::123456789012:role/LakeFormationRole \
-  -Daws.access.key.id=AKIAIOSFODNN7EXAMPLE \
-  -Daws.secret.access.key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+  -Daws.access.key.id=EXAMPLE_ACCESS_KEY_ID \
+  -Daws.secret.access.key=EXAMPLE_SECRET_ACCESS_KEY
 ```
 
 **Stop the server:**
@@ -83,8 +83,8 @@ mvn generate-resources exec:exec@ensure-network exec:exec@docker-compose-up \
   -Pdeploy-server \
   -Daws.account.id=123456789012 \
   -Daws.role.arn=arn:aws:iam::123456789012:role/LakeFormationRole \
-  -Daws.access.key.id=AKIAIOSFODNN7EXAMPLE \
-  -Daws.secret.access.key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+  -Daws.access.key.id=EXAMPLE_ACCESS_KEY_ID \
+  -Daws.secret.access.key=EXAMPLE_SECRET_ACCESS_KEY
 
 # 4. Stop both stacks when done
 mvn exec:exec@docker-compose-down -Pdeploy-server
@@ -101,8 +101,8 @@ The default `ranger.admin.url` is `http://ranger-admin:6080`, which resolves via
 |----------|-------------|---------|
 | `aws.account.id` | 12-digit AWS account ID. Maps to `awsConfig.catalogId` in config YAML. | `123456789012` |
 | `aws.role.arn` | IAM role ARN for Lake Formation. Maps to `awsConfig.roleArn`. | `arn:aws:iam::123456789012:role/LFRole` |
-| `aws.access.key.id` | AWS access key ID. Written to `.env` as `AWS_ACCESS_KEY_ID`. | `AKIAIOSFODNN7EXAMPLE` |
-| `aws.secret.access.key` | AWS secret access key. Written to `.env` as `AWS_SECRET_ACCESS_KEY`. | `wJalrXUtnFEMI/...` |
+| `aws.access.key.id` | AWS access key ID. Written to `.env` as `AWS_ACCESS_KEY_ID`. | `EXAMPLE_ACCESS_KEY_ID` |
+| `aws.secret.access.key` | AWS secret access key. Written to `.env` as `AWS_SECRET_ACCESS_KEY`. | `EXAMPLE_SECRET_ACCESS_KEY/...` |
 
 If any required property is missing, the build fails immediately with a descriptive error (enforced by `maven-enforcer-plugin`).
 

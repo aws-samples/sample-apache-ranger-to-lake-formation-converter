@@ -13,12 +13,12 @@ class AwsConfigTest {
     void allFieldsSet() {
         AwsConfig config = new AwsConfig(
                 "us-east-1", "123456789012",
-                "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "EXAMPLE_ACCESS_KEY_ID", "EXAMPLE_SECRET_ACCESS_KEY",
                 "arn:aws:iam::123456789012:role/MyRole");
         assertEquals("us-east-1", config.getRegion());
         assertEquals("123456789012", config.getCatalogId());
-        assertEquals("AKIAIOSFODNN7EXAMPLE", config.getAccessKey());
-        assertEquals("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", config.getSecretKey());
+        assertEquals("EXAMPLE_ACCESS_KEY_ID", config.getAccessKey());
+        assertEquals("EXAMPLE_SECRET_ACCESS_KEY", config.getSecretKey());
         assertEquals("arn:aws:iam::123456789012:role/MyRole", config.getRoleArn());
     }
 

@@ -146,11 +146,18 @@ public class CedarToLFConverter {
         List<ParsedStatement> permits = new ArrayList<>();
         Set<ActionResourceKey> forbidSet = new HashSet<>();
         Set<ActionResourceKey> denyExceptionSet = new HashSet<>();
+        // Track forbid resource IDs per action for ancestor-hierarchy checks
+        // (e.g. a table-level forbid suppresses column-level permits per Cedar schema:
+        //  Column in [Table], Table in [Database], Database in [Catalog])
+        Map<String, Set<String>> forbidResourcesByAction = new HashMap<>();
 
         for (ParsedStatement stmt : statements) {
             ActionResourceKey key = new ActionResourceKey(stmt.action, stmt.resourceId);
             if ("forbid".equals(stmt.effect)) {
                 forbidSet.add(key);
+                forbidResourcesByAction
+                        .computeIfAbsent(stmt.action, a -> new HashSet<>())
+                        .add(stmt.resourceId);
             } else if ("permit".equals(stmt.effect) && stmt.isDenyException) {
                 denyExceptionSet.add(key);
                 permits.add(stmt);
@@ -164,8 +171,23 @@ public class CedarToLFConverter {
         for (ParsedStatement permit : permits) {
             ActionResourceKey key = new ActionResourceKey(permit.action, permit.resourceId);
 
-            // If there's a forbid for this (action, resource) and no deny-exception → skip
-            if (forbidSet.contains(key) && !denyExceptionSet.contains(key)) {
+            // If there's a forbid for this (action, resource) and no deny-exception → skip.
+            // Also check ancestor forbids: Cedar's entity hierarchy (Column in [Table],
+            // Table in [Database], Database in [Catalog]) means a forbid on a parent resource
+            // suppresses permits on descendant resources for the same action.
+            boolean isForbidden = forbidSet.contains(key);
+            if (!isForbidden && permit.resourceId != null) {
+                Set<String> forbidResources = forbidResourcesByAction.get(permit.action);
+                if (forbidResources != null) {
+                    for (String forbidId : forbidResources) {
+                        if (isAncestorResource(forbidId, permit.resourceId)) {
+                            isForbidden = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (isForbidden && !denyExceptionSet.contains(key)) {
                 LOG.debug("Deny overrides permit for principal={}, action={}, resource={}",
                         principal, permit.action, permit.resourceId);
                 continue;
@@ -414,6 +436,62 @@ public class CedarToLFConverter {
             this.rowFilter = rowFilter;
             this.grantable = grantable;
         }
+    }
+
+    /**
+     * Returns true if {@code forbidId} is an ancestor of {@code permitId} in the Cedar
+     * entity hierarchy defined by the DataCatalog schema:
+     * {@code Column in [Table], Table in [Database], Database in [Catalog]}.
+     *
+     * <p>Glue ARN shapes:
+     * <ul>
+     *   <li>Catalog:  {@code arn:aws:glue:{r}:{a}:catalog}</li>
+     *   <li>Database: {@code arn:aws:glue:{r}:{a}:database/{db}}</li>
+     *   <li>Table:    {@code arn:aws:glue:{r}:{a}:table/{db}/{tbl}}</li>
+     *   <li>Column:   {@code arn:aws:glue:{r}:{a}:column/{db}/{tbl}/{col}}</li>
+     * </ul>
+     *
+     * <p>A forbid on a parent resource suppresses a permit on a descendant resource.
+     * Only Glue ARNs participate in the hierarchy; S3/other ARNs return false.
+     */
+    static boolean isAncestorResource(String forbidId, String permitId) {
+        if (forbidId == null || permitId == null || forbidId.equals(permitId)) {
+            return false;
+        }
+        // Both must be Glue ARNs; split into prefix (before last colon) and resource path
+        int forbidColon = forbidId.lastIndexOf(':');
+        int permitColon = permitId.lastIndexOf(':');
+        if (forbidColon < 0 || permitColon < 0) return false;
+
+        // Account+region prefix must match (same catalog)
+        String forbidPrefix = forbidId.substring(0, forbidColon);
+        String permitPrefix = permitId.substring(0, permitColon);
+        if (!forbidPrefix.equals(permitPrefix)) return false;
+
+        String forbidRes = forbidId.substring(forbidColon + 1);  // e.g. "table/db/tbl"
+        String permitRes = permitId.substring(permitColon + 1);  // e.g. "column/db/tbl/col"
+
+        if (forbidRes.equals("catalog")) {
+            // Catalog forbid covers database, table, column
+            return permitRes.startsWith("database/")
+                    || permitRes.startsWith("table/")
+                    || permitRes.startsWith("column/");
+        }
+
+        if (forbidRes.startsWith("database/")) {
+            // Database forbid covers tables and columns in that database
+            String db = forbidRes.substring("database/".length());
+            return permitRes.startsWith("table/" + db + "/")
+                    || permitRes.startsWith("column/" + db + "/");
+        }
+
+        if (forbidRes.startsWith("table/")) {
+            // Table forbid covers columns in that table
+            String dbTable = forbidRes.substring("table/".length()); // "db/tbl"
+            return permitRes.startsWith("column/" + dbTable + "/");
+        }
+
+        return false;
     }
 
     /**

@@ -76,12 +76,12 @@ class ConversionServerMainTest {
                 rangerConfig:
                   rangerAdminUrl: "http://ranger:6080"
                   username: "admin"
-                  password: "admin123"
+                  password: "CHANGE_ME"
                 awsConfig:
                   region: "us-east-1"
                   catalogId: "123456789012"
-                  accessKey: "AKIAIOSFODNN7EXAMPLE"
-                  secretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                  accessKey: "EXAMPLE_ACCESS_KEY_ID"
+                  secretKey: "EXAMPLE_SECRET_ACCESS_KEY"
                 policyRefreshIntervalMs: 5000
                 server:
                   shutdownTimeoutSeconds: 60
@@ -154,7 +154,7 @@ class ConversionServerMainTest {
     @Test
     void buildCredentialsProvider_staticCreds_returnsStaticProvider() {
         AwsConfig config = new AwsConfig("us-east-1", "123456789012",
-                "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI", null);
+                "EXAMPLE_ACCESS_KEY_ID", "EXAMPLE_SECRET_ACCESS_KEY", null);
         var provider = ConversionServerMain.buildCredentialsProvider(config);
         assertNotNull(provider);
     }
