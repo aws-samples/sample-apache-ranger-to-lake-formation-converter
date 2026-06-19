@@ -18,7 +18,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- Dependency versions -->
-        <ranger.version>2.4.0</ranger.version>
+        <ranger.version>2.6.0</ranger.version>
         <aws.sdk.version>2.20.162</aws.sdk.version>
         <jackson.version>2.22.0</jackson.version>
         <slf4j.version>1.7.36</slf4j.version>
@@ -455,7 +455,7 @@
                 <ranger.admin.url>http://ranger-admin:6080</ranger.admin.url>
                 <ranger.admin.password>rangerR0cks!</ranger.admin.password>
                 <aws.region>us-east-1</aws.region>
-                <ranger.version>2.4.0</ranger.version>
+                <ranger.version>2.6.0</ranger.version>
                 <sync.interval.ms>30000</sync.interval.ms>
                 <lf.max.retries>5</lf.max.retries>
                 <lf.retry.backoff.ms>2000</lf.retry.backoff.ms>
@@ -616,7 +616,7 @@ project.properties['principal.role.mappings.yaml'] =
             <id>deploy-ranger-admin</id>
             <properties>
                 <ranger.admin.password>rangerR0cks!</ranger.admin.password>
-                <ranger.version>2.4.0</ranger.version>
+                <ranger.version>2.6.0</ranger.version>
             </properties>
             <build>
                 <plugins>
