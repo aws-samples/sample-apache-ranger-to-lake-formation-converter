@@ -15,6 +15,9 @@ COPY conf/ranger-lakeformation-audit.xml /app/ranger-lakeformation-audit.xml
 COPY conf/ranger-lakeformation-security.xml /app/ranger-lakeformation-security.xml
 COPY conf/ranger-lakeformation-policymgr-ssl.xml /app/ranger-lakeformation-policymgr-ssl.xml
 
+RUN groupadd --system appgroup && useradd --system --gid appgroup appuser
+USER appuser
+
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD pgrep -f "java.*app.jar" || exit 1

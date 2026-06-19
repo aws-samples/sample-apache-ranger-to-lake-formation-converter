@@ -4,4 +4,8 @@ ARG JAR_FILE
 COPY ${JAR_FILE} app.jar
 COPY integration-test/docker/server-config-it.yaml config-it.yaml
 COPY integration-test/docker/ranger-lakeformation-security-it.xml ranger-security.xml
+
+RUN groupadd --system appgroup && useradd --system --gid appgroup appuser
+USER appuser
+
 ENTRYPOINT ["java", "-jar", "app.jar", "/app/config-it.yaml"]

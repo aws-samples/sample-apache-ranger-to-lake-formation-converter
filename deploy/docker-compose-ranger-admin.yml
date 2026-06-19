@@ -1,6 +1,7 @@
 version: "3.8"
 services:
   ranger-db:
+    # checkov:skip=CKV_DOCKER_7: third-party Apache image requires writable filesystem for Postgres data
     image: apache/ranger-db:${RANGER_VERSION:-2.4.0}
     environment:
       POSTGRES_PASSWORD: "rangerR0cks!"
@@ -16,6 +17,7 @@ services:
       start_period: 10s
 
   ranger-solr:
+    # checkov:skip=CKV_DOCKER_7: third-party Apache image requires writable filesystem for Solr indexes
     image: apache/ranger-solr:${RANGER_VERSION:-2.4.0}
     ports:
       - "8983:8983"
@@ -29,6 +31,7 @@ services:
       start_period: 15s
 
   ranger-admin:
+    # checkov:skip=CKV_DOCKER_7: third-party Apache image requires writable filesystem for Ranger Admin startup
     image: apache/ranger:${RANGER_VERSION:-2.4.0}
     ports:
       - "6080:6080"

@@ -10,6 +10,9 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_REGION: ${AWS_REGION}
+    read_only: true
+    tmpfs:
+      - /tmp
     volumes:
       - ./server-config-deploy.yaml:/app/config-deploy.yaml:ro
     networks:
