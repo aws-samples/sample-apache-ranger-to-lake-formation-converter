@@ -1,0 +1,39 @@
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0
+            https://maven.apache.org/xsd/assembly-2.2.0.xsd">
+    <id>jar-with-dependencies</id>
+    <formats>
+        <format>jar</format>
+    </formats>
+    <includeBaseDirectory>false</includeBaseDirectory>
+    <dependencySets>
+        <!-- hadoop-client-runtime is a shaded uber-jar that embeds its own
+             jackson-databind pom.properties (2.12.7.1). Exclude its maven
+             metadata so grype reports the version we actually ship (2.22.0). -->
+        <dependencySet>
+            <outputDirectory>/</outputDirectory>
+            <useProjectArtifact>false</useProjectArtifact>
+            <unpack>true</unpack>
+            <scope>runtime</scope>
+            <includes>
+                <include>org.apache.hadoop:hadoop-client-runtime</include>
+            </includes>
+            <unpackOptions>
+                <excludes>
+                    <exclude>META-INF/maven/com.fasterxml.jackson.core/**</exclude>
+                </excludes>
+            </unpackOptions>
+        </dependencySet>
+        <!-- All other dependencies: unpack as-is -->
+        <dependencySet>
+            <outputDirectory>/</outputDirectory>
+            <useProjectArtifact>true</useProjectArtifact>
+            <unpack>true</unpack>
+            <scope>runtime</scope>
+            <excludes>
+                <exclude>org.apache.hadoop:hadoop-client-runtime</exclude>
+            </excludes>
+        </dependencySet>
+    </dependencySets>
+</assembly>

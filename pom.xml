@@ -269,9 +269,9 @@
                             <mainClass>com.amazonaws.policyconverters.app.ConversionServerMain</mainClass>
                         </manifest>
                     </archive>
-                    <descriptorRefs>
-                        <descriptorRef>jar-with-dependencies</descriptorRef>
-                    </descriptorRefs>
+                    <descriptors>
+                        <descriptor>src/assembly/jar-with-dependencies.xml</descriptor>
+                    </descriptors>
                 </configuration>
                 <executions>
                     <execution>
@@ -293,9 +293,9 @@
                                     <mainClass>com.amazonaws.policyconverters.app.AssessmentMain</mainClass>
                                 </manifest>
                             </archive>
-                            <descriptorRefs>
-                                <descriptorRef>jar-with-dependencies</descriptorRef>
-                            </descriptorRefs>
+                            <descriptors>
+                                <descriptor>src/assembly/jar-with-dependencies.xml</descriptor>
+                            </descriptors>
                             <finalName>assessment</finalName>
                             <appendAssemblyId>true</appendAssemblyId>
                         </configuration>
