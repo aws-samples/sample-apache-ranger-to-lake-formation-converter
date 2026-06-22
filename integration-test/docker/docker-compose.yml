@@ -53,7 +53,7 @@ services:
   conversion-server:
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:exec
     image: ranger-lf-it:local
     depends_on:
       ranger-admin:

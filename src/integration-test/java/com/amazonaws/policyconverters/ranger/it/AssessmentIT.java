@@ -4,6 +4,7 @@ import com.amazonaws.policyconverters.assessment.AssessmentConfig;
 import com.amazonaws.policyconverters.assessment.AssessmentReporter;
 import com.amazonaws.policyconverters.assessment.AssessmentResult;
 import com.amazonaws.policyconverters.assessment.AssessmentRunner;
+import com.amazonaws.policyconverters.assessment.RangerAdminPolicySource;
 import com.amazonaws.policyconverters.config.PrincipalMappingConfig;
 import com.amazonaws.policyconverters.config.RangerServiceConfig;
 import com.amazonaws.policyconverters.model.GapEntry.GapType;
@@ -352,7 +353,9 @@ public class AssessmentIT {
                     .consoleOnly(false)
                     .build();
 
-            AssessmentResult result = new AssessmentRunner().run(config);
+            AssessmentResult result = new AssessmentRunner().run(config,
+                    new RangerAdminPolicySource(config.getRangerAdminUrl(), config.getRangerUsername(),
+                            config.getRangerPassword(), config.getServices()));
             new AssessmentReporter().report(result, config, System.out);
 
             // ---- Basic sanity ----
@@ -441,7 +444,9 @@ public class AssessmentIT {
                     .consoleOnly(true)
                     .build();
 
-            AssessmentResult result = new AssessmentRunner().run(config);
+            AssessmentResult result = new AssessmentRunner().run(config,
+                    new RangerAdminPolicySource(config.getRangerAdminUrl(), config.getRangerUsername(),
+                            config.getRangerPassword(), config.getServices()));
             assertTrue(result.getTotalPolicies() >= 1, "Expected at least one policy");
 
             long fileCount = Files.list(outputDir).count();

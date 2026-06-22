@@ -38,6 +38,7 @@ checkpointPath: /app/dry-run-output/sync-checkpoint.json
 
 maxLfRetries: 3
 lfRetryBackoffMs: 500
+deadLetterLogPath: /tmp/dead-letter.log
 
 # Tag metadata sync configuration.
 # Synchronizes Ranger tag definitions and resource-tag mappings into AWS LF-Tags.

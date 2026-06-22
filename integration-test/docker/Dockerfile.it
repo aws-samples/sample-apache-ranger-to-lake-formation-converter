@@ -1,11 +1,12 @@
-FROM amazoncorretto:21
+FROM public.ecr.aws/amazoncorretto/amazoncorretto:21-al2023
 WORKDIR /app
 ARG JAR_FILE
 COPY ${JAR_FILE} app.jar
 COPY integration-test/docker/server-config-it.yaml config-it.yaml
 COPY integration-test/docker/ranger-lakeformation-security-it.xml ranger-security.xml
 
-RUN groupadd --system appgroup && useradd --system --gid appgroup appuser
+RUN dnf install -y shadow-utils && dnf clean all \
+ && groupadd --system appgroup && useradd --system --gid appgroup appuser
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

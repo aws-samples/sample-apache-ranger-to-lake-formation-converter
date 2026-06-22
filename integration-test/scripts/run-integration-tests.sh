@@ -149,7 +149,7 @@ while true; do
 
   if [ "${CONTAINER_STATE}" = "running" ]; then
     # Verify the Java process is alive inside the container
-    if docker exec docker-conversion-server-1 pgrep -f 'java.*ConversionServerMain' > /dev/null 2>&1; then
+    if docker compose -f "${COMPOSE_FILE}" exec -T conversion-server pgrep -f 'java.*ConversionServerMain' > /dev/null 2>&1; then
       echo "conversion-server is running and healthy."
       break
     fi
