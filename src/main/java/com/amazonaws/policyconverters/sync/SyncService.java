@@ -12,6 +12,7 @@ import com.amazonaws.policyconverters.model.GapReport;
 import com.amazonaws.policyconverters.model.TagSyncResult;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation;
 import com.amazonaws.policyconverters.lakeformation.LFPermissionOperation.OperationType;
+import com.amazonaws.policyconverters.lakeformation.LFPermission;
 import com.amazonaws.policyconverters.lakeformation.LFResource;
 import com.amazonaws.policyconverters.config.SyncConfig;
 import com.amazonaws.policyconverters.reporting.GapReporter;
@@ -31,8 +32,10 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1080,55 +1083,88 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             List<LFPermissionOperation> previous,
             List<LFPermissionOperation> current) {
 
-        // Build sets of permission keys for efficient lookup
-        Map<PermissionKey, LFPermissionOperation> previousMap = buildPermissionMap(previous);
-        Map<PermissionKey, LFPermissionOperation> currentMap = buildPermissionMap(current);
+        // Diff at the individual-permission level, NOT at the whole-permission-set level.
+        //
+        // Two different Ranger policies may grant overlapping-but-different permission sets to
+        // the same (principal, resource) — e.g. policy A grants {SELECT, DESCRIBE} and policy B
+        // grants {SELECT, INSERT}. Lake Formation keys grants by (principal, resource, permission)
+        // with no policy attribution, so if policy B is deleted we must revoke only INSERT: SELECT
+        // must survive because policy A still grants it. Treating each policy's permission set as
+        // an atomic diff unit would emit a REVOKE for B's entire set (including SELECT) and
+        // collaterally destroy the SELECT that policy A still requires.
+        Map<PermissionAtom, LFPermissionOperation> previousAtoms = explodeToAtoms(previous);
+        Map<PermissionAtom, LFPermissionOperation> currentAtoms = explodeToAtoms(current);
 
-        List<LFPermissionOperation> newGrants = new ArrayList<>();
-        List<LFPermissionOperation> revocations = new ArrayList<>();
+        // New grants: atoms in current but not in previous.
+        Map<GrantGroupKey, GrantGroup> grantGroups = new LinkedHashMap<>();
+        for (Map.Entry<PermissionAtom, LFPermissionOperation> entry : currentAtoms.entrySet()) {
+            PermissionAtom atom = entry.getKey();
+            if (!previousAtoms.containsKey(atom)) {
+                addToGroup(grantGroups, atom, entry.getValue());
+            }
+        }
+
+        // Revocations: atoms in previous but not in current.
+        Map<GrantGroupKey, GrantGroup> revokeGroups = new LinkedHashMap<>();
         int unchangedCount = 0;
-
-        // Find new grants: in current but not in previous
-        for (Map.Entry<PermissionKey, LFPermissionOperation> entry : currentMap.entrySet()) {
-            if (!previousMap.containsKey(entry.getKey())) {
-                // New permission — ensure it's a GRANT
-                LFPermissionOperation op = entry.getValue();
-                if (op.getOperationType() != OperationType.GRANT) {
-                    op = new LFPermissionOperation(
-                            OperationType.GRANT,
-                            op.getSourcePolicyId(),
-                            op.getPrincipalArn(),
-                            op.getResource(),
-                            op.getPermissions(),
-                            op.isGrantable());
-                }
-                newGrants.add(op);
-            }
-        }
-
-        // Find revocations: in previous but not in current
-        for (Map.Entry<PermissionKey, LFPermissionOperation> entry : previousMap.entrySet()) {
-            if (!currentMap.containsKey(entry.getKey())) {
-                // Removed permission — create a REVOKE operation
-                LFPermissionOperation op = entry.getValue();
-                revocations.add(new LFPermissionOperation(
-                        OperationType.REVOKE,
-                        op.getSourcePolicyId(),
-                        op.getPrincipalArn(),
-                        op.getResource(),
-                        op.getPermissions(),
-                        op.isGrantable()));
-            }
-        }
-
-        // Count unchanged: in both previous and current
-        for (PermissionKey key : currentMap.keySet()) {
-            if (previousMap.containsKey(key)) {
+        for (Map.Entry<PermissionAtom, LFPermissionOperation> entry : previousAtoms.entrySet()) {
+            PermissionAtom atom = entry.getKey();
+            if (currentAtoms.containsKey(atom)) {
                 unchangedCount++;
+            } else {
+                addToGroup(revokeGroups, atom, entry.getValue());
             }
         }
+
+        List<LFPermissionOperation> newGrants = materialize(grantGroups, OperationType.GRANT);
+        List<LFPermissionOperation> revocations = materialize(revokeGroups, OperationType.REVOKE);
 
         return new PolicyDiff(newGrants, revocations, unchangedCount);
+    }
+
+    /**
+     * Explode each operation into one {@link PermissionAtom} per individual permission so the diff
+     * can reason about permissions independently of which policy contributed them. When the same
+     * atom is produced by multiple operations, the first-seen operation is retained as the
+     * representative (used only for its sourcePolicyId when re-materializing operations).
+     */
+    private static Map<PermissionAtom, LFPermissionOperation> explodeToAtoms(
+            List<LFPermissionOperation> operations) {
+        Map<PermissionAtom, LFPermissionOperation> atoms = new LinkedHashMap<>();
+        for (LFPermissionOperation op : operations) {
+            for (LFPermission permission : op.getPermissions()) {
+                PermissionAtom atom = new PermissionAtom(
+                        op.getPrincipalArn(), op.getResource(), permission, op.isGrantable());
+                atoms.putIfAbsent(atom, op);
+            }
+        }
+        return atoms;
+    }
+
+    /** Accumulate an atom into the group sharing its (principal, resource, grantable). */
+    private static void addToGroup(Map<GrantGroupKey, GrantGroup> groups,
+                                   PermissionAtom atom, LFPermissionOperation representative) {
+        GrantGroupKey key = new GrantGroupKey(atom.principalArn(), atom.resource(), atom.grantable());
+        GrantGroup group = groups.get(key);
+        if (group == null) {
+            group = new GrantGroup(representative.getSourcePolicyId());
+            groups.put(key, group);
+        }
+        group.permissions.add(atom.permission());
+    }
+
+    /** Re-materialize grouped atoms back into consolidated operations of the given type. */
+    private static List<LFPermissionOperation> materialize(
+            Map<GrantGroupKey, GrantGroup> groups, OperationType type) {
+        List<LFPermissionOperation> operations = new ArrayList<>(groups.size());
+        for (Map.Entry<GrantGroupKey, GrantGroup> entry : groups.entrySet()) {
+            GrantGroupKey key = entry.getKey();
+            GrantGroup group = entry.getValue();
+            operations.add(new LFPermissionOperation(
+                    type, group.sourcePolicyId, key.principalArn(), key.resource(),
+                    group.permissions, key.grantable()));
+        }
+        return operations;
     }
 
     /**
@@ -1279,6 +1315,28 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             sb.append(svc.getServiceType()).append(":").append(svc.getServiceInstanceName());
         }
         return sb.toString();
+    }
+
+    /**
+     * Identity of a single permission for atom-level diffing: one principal, one resource,
+     * one individual permission, and the grantable flag. Unlike {@link PermissionKey}, the
+     * permission is a single value rather than a set, so overlapping grants from different
+     * policies can be reconciled per-permission.
+     */
+    record PermissionAtom(String principalArn, LFResource resource,
+                          LFPermission permission, boolean grantable) {}
+
+    /** Groups atoms back together by everything except the individual permission. */
+    record GrantGroupKey(String principalArn, LFResource resource, boolean grantable) {}
+
+    /** Mutable accumulator of permissions for a {@link GrantGroupKey} during re-materialization. */
+    private static final class GrantGroup {
+        private final String sourcePolicyId;
+        private final EnumSet<LFPermission> permissions = EnumSet.noneOf(LFPermission.class);
+
+        GrantGroup(String sourcePolicyId) {
+            this.sourcePolicyId = sourcePolicyId;
+        }
     }
 
     /**

@@ -32,17 +32,20 @@ class SyncServicePropertyTest {
     ) {
         SyncService.PolicyDiff diff = SyncService.computeDiff(pair.previous, pair.current);
 
-        // Build permission key sets for verification
-        Set<SyncService.PermissionKey> previousKeys = toKeySet(pair.previous);
-        Set<SyncService.PermissionKey> currentKeys = toKeySet(pair.current);
+        // Diff correctness is stated at the individual-permission (atom) level: computeDiff
+        // reconciles permissions independently of which policy contributed them, so overlapping
+        // grants from different policies are handled per-permission. See
+        // SyncServiceTest#computeDiffDoesNotRevokePermissionStillGrantedByAnotherPolicy.
+        Set<SyncService.PermissionAtom> previousAtoms = toAtomSet(pair.previous);
+        Set<SyncService.PermissionAtom> currentAtoms = toAtomSet(pair.current);
 
-        // (a) New grants: permissions in current but not in previous
-        Set<SyncService.PermissionKey> expectedNewKeys = new HashSet<>(currentKeys);
-        expectedNewKeys.removeAll(previousKeys);
+        // (a) New grants: atoms in current but not in previous
+        Set<SyncService.PermissionAtom> expectedNewAtoms = new HashSet<>(currentAtoms);
+        expectedNewAtoms.removeAll(previousAtoms);
 
-        Set<SyncService.PermissionKey> actualNewKeys = toKeySet(diff.getNewGrants());
-        assertEquals(expectedNewKeys, actualNewKeys,
-                "New grants should be exactly the permissions in current but not in previous");
+        Set<SyncService.PermissionAtom> actualNewAtoms = toAtomSet(diff.getNewGrants());
+        assertEquals(expectedNewAtoms, actualNewAtoms,
+                "New grants should be exactly the permission atoms in current but not in previous");
 
         // All new grants must have GRANT operation type
         for (LFPermissionOperation op : diff.getNewGrants()) {
@@ -50,13 +53,13 @@ class SyncServicePropertyTest {
                     "New grant operations must have GRANT type");
         }
 
-        // (b) Revocations: permissions in previous but not in current
-        Set<SyncService.PermissionKey> expectedRevokeKeys = new HashSet<>(previousKeys);
-        expectedRevokeKeys.removeAll(currentKeys);
+        // (b) Revocations: atoms in previous but not in current
+        Set<SyncService.PermissionAtom> expectedRevokeAtoms = new HashSet<>(previousAtoms);
+        expectedRevokeAtoms.removeAll(currentAtoms);
 
-        Set<SyncService.PermissionKey> actualRevokeKeys = toKeySet(diff.getRevocations());
-        assertEquals(expectedRevokeKeys, actualRevokeKeys,
-                "Revocations should be exactly the permissions in previous but not in current");
+        Set<SyncService.PermissionAtom> actualRevokeAtoms = toAtomSet(diff.getRevocations());
+        assertEquals(expectedRevokeAtoms, actualRevokeAtoms,
+                "Revocations should be exactly the permission atoms in previous but not in current");
 
         // All revocations must have REVOKE operation type
         for (LFPermissionOperation op : diff.getRevocations()) {
@@ -64,23 +67,17 @@ class SyncServicePropertyTest {
                     "Revocation operations must have REVOKE type");
         }
 
-        // (c) Unchanged count: permissions present in both
-        Set<SyncService.PermissionKey> expectedUnchanged = new HashSet<>(previousKeys);
-        expectedUnchanged.retainAll(currentKeys);
+        // (c) Unchanged count: atoms present in both
+        Set<SyncService.PermissionAtom> expectedUnchanged = new HashSet<>(previousAtoms);
+        expectedUnchanged.retainAll(currentAtoms);
         assertEquals(expectedUnchanged.size(), diff.getUnchangedCount(),
-                "Unchanged count should equal the intersection of previous and current");
+                "Unchanged count should equal the atom intersection of previous and current");
 
-        // Verify completeness: grants + revocations + unchanged covers all unique keys
-        int totalUniqueKeys = new HashSet<>(previousKeys).size()
-                + new HashSet<>(currentKeys).size()
-                - expectedUnchanged.size();
-        // totalUniqueKeys = |previous ∪ current| = |previous| + |current| - |intersection|
-        // But we need to account for deduplication within each set
-        // grants + revocations + unchanged should equal |previous ∪ current|
+        // Completeness: grant atoms + revoke atoms + unchanged should equal |previous ∪ current|
         assertEquals(
-                diff.getNewGrants().size() + diff.getRevocations().size() + diff.getUnchangedCount(),
-                expectedNewKeys.size() + expectedRevokeKeys.size() + expectedUnchanged.size(),
-                "Total diff components should account for all unique permission keys");
+                actualNewAtoms.size() + actualRevokeAtoms.size() + diff.getUnchangedCount(),
+                expectedNewAtoms.size() + expectedRevokeAtoms.size() + expectedUnchanged.size(),
+                "Total diff components should account for all unique permission atoms");
     }
 
     // -----------------------------------------------------------------------
@@ -206,12 +203,19 @@ class SyncServicePropertyTest {
     // Helper methods
     // -----------------------------------------------------------------------
 
-    private static Set<SyncService.PermissionKey> toKeySet(List<LFPermissionOperation> ops) {
-        Set<SyncService.PermissionKey> keys = new HashSet<>();
+    /**
+     * Explode operations into individual permission atoms — the granularity at which
+     * {@link SyncService#computeDiff} reconciles permissions.
+     */
+    private static Set<SyncService.PermissionAtom> toAtomSet(List<LFPermissionOperation> ops) {
+        Set<SyncService.PermissionAtom> atoms = new HashSet<>();
         for (LFPermissionOperation op : ops) {
-            keys.add(SyncService.PermissionKey.of(op));
+            for (LFPermission permission : op.getPermissions()) {
+                atoms.add(new SyncService.PermissionAtom(
+                        op.getPrincipalArn(), op.getResource(), permission, op.isGrantable()));
+            }
         }
-        return keys;
+        return atoms;
     }
 
     // -----------------------------------------------------------------------
