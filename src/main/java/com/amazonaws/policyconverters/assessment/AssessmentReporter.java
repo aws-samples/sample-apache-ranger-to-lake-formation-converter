@@ -97,6 +97,28 @@ public class AssessmentReporter {
                 out.println("WARNING: could not write JSON report — " + e.getMessage());
             }
         }
+
+        if (config.getLfPoliciesOutputPath() != null) {
+            try {
+                writeLfPoliciesFile(result, config.getLfPoliciesOutputPath());
+                out.println("LF permission operations written to: "
+                        + config.getLfPoliciesOutputPath().toAbsolutePath());
+            } catch (IOException e) {
+                LOG.error("Failed to write LF policies file: {}", e.getMessage(), e);
+                out.println("WARNING: could not write LF policies file — " + e.getMessage());
+            }
+        }
+
+        if (config.getGapsOutputPath() != null) {
+            try {
+                writeGapsFile(result, config.getGapsOutputPath());
+                out.println("Gap report written to: "
+                        + config.getGapsOutputPath().toAbsolutePath());
+            } catch (IOException e) {
+                LOG.error("Failed to write gaps file: {}", e.getMessage(), e);
+                out.println("WARNING: could not write gaps file — " + e.getMessage());
+            }
+        }
     }
 
     private void printConsoleReport(AssessmentResult result, PrintStream out) {
@@ -193,6 +215,20 @@ public class AssessmentReporter {
             }
         }
         out.println();
+    }
+
+    private void writeGapsFile(AssessmentResult result, Path outputPath) throws IOException {
+        Path parent = outputPath.toAbsolutePath().getParent();
+        if (parent != null) Files.createDirectories(parent);
+        objectMapper.writeValue(outputPath.toFile(), result.getPolicyGapSummaries());
+        LOG.info("Gap report written to {}", outputPath.toAbsolutePath());
+    }
+
+    private void writeLfPoliciesFile(AssessmentResult result, Path outputPath) throws IOException {
+        Path parent = outputPath.toAbsolutePath().getParent();
+        if (parent != null) Files.createDirectories(parent);
+        objectMapper.writeValue(outputPath.toFile(), result.getProjectedOperations());
+        LOG.info("LF permission operations written to {}", outputPath.toAbsolutePath());
     }
 
     private Path writeJsonReport(AssessmentResult result, Path outputDir) throws IOException {

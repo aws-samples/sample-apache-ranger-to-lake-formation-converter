@@ -13,3 +13,6 @@ dead-letter.log
 checkpoint/
 .kiro/
 .claude/
+lf-operations*.json
+gaps.json
+assessment-report-*.json

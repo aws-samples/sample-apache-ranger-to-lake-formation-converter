@@ -33,8 +33,11 @@ import software.amazon.awssdk.services.glue.GlueClient;
 import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -176,18 +179,21 @@ public class AssessmentRunner {
         }
 
         GapReport gapReport = gapReporter.getReport();
-        int[] counts = computeConvertibilityCounts(allPolicies, ops, s3AgOps, gapReport);
+        ConvertibilityResult convertibility =
+                computeConvertibility(allPolicies, ops, s3AgOps, gapReport);
 
         return new AssessmentResult(
                 allPolicies.size(),
-                counts[0],
-                counts[1],
-                counts[2],
+                convertibility.fullyConvertible,
+                convertibility.partiallyConvertible,
+                convertibility.notConvertible,
                 ops.size(),
                 gapReport,
                 source.sourceLabel(),
                 assessedServices,
-                warnings);
+                warnings,
+                ops,
+                convertibility.policyGapSummaries);
     }
 
     /**
@@ -230,23 +236,44 @@ public class AssessmentRunner {
                 && cfg.getDelegates().isEmpty();
     }
 
+    // Gap types that are informational only and excluded from the gaps output file.
+    private static final Set<GapEntry.GapType> INFORMATIONAL_GAP_TYPES = new HashSet<>(Arrays.asList(
+            GapEntry.GapType.CANNOT_VALIDATE_S3_LOCATION,
+            GapEntry.GapType.WILDCARD_PATTERN
+    ));
+
+    private static final class ConvertibilityResult {
+        final int fullyConvertible;
+        final int partiallyConvertible;
+        final int notConvertible;
+        final List<PolicyGapSummary> policyGapSummaries;
+
+        ConvertibilityResult(int fullyConvertible, int partiallyConvertible, int notConvertible,
+                             List<PolicyGapSummary> policyGapSummaries) {
+            this.fullyConvertible = fullyConvertible;
+            this.partiallyConvertible = partiallyConvertible;
+            this.notConvertible = notConvertible;
+            this.policyGapSummaries = policyGapSummaries;
+        }
+    }
+
     /**
-     * Correlates policy IDs from gap entries and projected operations to classify
-     * each scanned policy as fully convertible, partially convertible, or not convertible.
-     *
-     * @return int[3]: [fullyConvertible, partiallyConvertible, notConvertible]
+     * Classifies each scanned policy as fully convertible, partially convertible, or not
+     * convertible, and builds per-policy gap summaries for actionable gaps.
      */
-    private int[] computeConvertibilityCounts(
+    private ConvertibilityResult computeConvertibility(
             List<RangerPolicy> allPolicies,
             List<LFPermissionOperation> ops,
             List<S3AccessGrantOperation> s3AgOps,
             GapReport gapReport) {
 
-        // Build set of policy IDs that appear in gap entries
-        Set<String> policiesWithGaps = new HashSet<>();
+        // Group actionable gap entries by policy ID (excluding informational gap types)
+        Map<String, List<GapEntry>> actionableGapsByPolicy = new LinkedHashMap<>();
         for (GapEntry entry : gapReport.getEntries()) {
-            if (entry.getPolicyId() != null) {
-                policiesWithGaps.add(entry.getPolicyId());
+            if (entry.getPolicyId() != null && !INFORMATIONAL_GAP_TYPES.contains(entry.getGapType())) {
+                actionableGapsByPolicy
+                        .computeIfAbsent(entry.getPolicyId(), k -> new ArrayList<>())
+                        .add(entry);
             }
         }
 
@@ -257,41 +284,49 @@ public class AssessmentRunner {
             String sourcePolicyId = op.getSourcePolicyId();
             if (sourcePolicyId != null) {
                 int colonIdx = sourcePolicyId.indexOf(':');
-                String policyId = colonIdx >= 0
-                        ? sourcePolicyId.substring(colonIdx + 1)
-                        : sourcePolicyId;
-                policiesWithOps.add(policyId);
+                policiesWithOps.add(colonIdx >= 0
+                        ? sourcePolicyId.substring(colonIdx + 1) : sourcePolicyId);
             }
         }
         for (S3AccessGrantOperation op : s3AgOps) {
             String sourcePolicyId = op.sourcePolicyId();
             if (sourcePolicyId != null) {
                 int colonIdx = sourcePolicyId.indexOf(':');
-                String policyId = colonIdx >= 0
-                        ? sourcePolicyId.substring(colonIdx + 1)
-                        : sourcePolicyId;
-                policiesWithOps.add(policyId);
+                policiesWithOps.add(colonIdx >= 0
+                        ? sourcePolicyId.substring(colonIdx + 1) : sourcePolicyId);
             }
         }
 
         int fullyConvertible = 0;
         int partiallyConvertible = 0;
         int notConvertible = 0;
+        List<PolicyGapSummary> summaries = new ArrayList<>();
 
         for (RangerPolicy policy : allPolicies) {
             String id = policy.getId() != null ? String.valueOf(policy.getId()) : null;
             boolean hasOps = id != null && policiesWithOps.contains(id);
-            boolean hasGaps = id != null && policiesWithGaps.contains(id);
+            List<GapEntry> gaps = id != null
+                    ? actionableGapsByPolicy.getOrDefault(id, Collections.emptyList())
+                    : Collections.emptyList();
+            boolean hasActionableGaps = !gaps.isEmpty();
 
-            if (hasOps && !hasGaps) {
+            PolicyGapSummary.Convertibility convertibility;
+            if (hasOps && !hasActionableGaps) {
                 fullyConvertible++;
-            } else if (hasOps && hasGaps) {
+                convertibility = null; // fully convertible — not included in gap file
+            } else if (hasOps) {
                 partiallyConvertible++;
+                convertibility = PolicyGapSummary.Convertibility.PARTIALLY_CONVERTIBLE;
             } else {
                 notConvertible++;
+                convertibility = PolicyGapSummary.Convertibility.NOT_CONVERTIBLE;
+            }
+
+            if (convertibility != null) {
+                summaries.add(new PolicyGapSummary(id, policy.getName(), convertibility, gaps));
             }
         }
 
-        return new int[]{fullyConvertible, partiallyConvertible, notConvertible};
+        return new ConvertibilityResult(fullyConvertible, partiallyConvertible, notConvertible, summaries);
     }
 }

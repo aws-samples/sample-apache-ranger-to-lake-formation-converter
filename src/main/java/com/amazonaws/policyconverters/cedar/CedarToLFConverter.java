@@ -21,6 +21,7 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -167,6 +168,7 @@ public class CedarToLFConverter {
         }
 
         List<LFPermissionOperation> operations = new ArrayList<>();
+        Map<MergeKey, EnumSet<LFPermission>> mergeMap = new LinkedHashMap<>();
 
         for (ParsedStatement permit : permits) {
             ActionResourceKey key = new ActionResourceKey(permit.action, permit.resourceId);
@@ -217,18 +219,54 @@ public class CedarToLFConverter {
                 continue;
             }
 
-            LFPermissionOperation op = new LFPermissionOperation(
+            // Accumulate into the merge map keyed on (sourcePolicyId, resource, grantable).
+            // Permissions from the same source policy on the same resource are merged into
+            // a single operation so one LF API call covers all permissions.
+            MergeKey mergeKey = new MergeKey(permit.sourcePolicyId, lfResource, permit.grantable);
+            mergeMap.computeIfAbsent(mergeKey, k -> EnumSet.noneOf(LFPermission.class))
+                    .add(lfPermission);
+        }
+
+        for (Map.Entry<MergeKey, EnumSet<LFPermission>> entry : mergeMap.entrySet()) {
+            MergeKey k = entry.getKey();
+            operations.add(new LFPermissionOperation(
                     OperationType.GRANT,
-                    permit.sourcePolicyId,
+                    k.sourcePolicyId,
                     principal,
-                    lfResource,
-                    EnumSet.of(lfPermission),
-                    permit.grantable
-            );
-            operations.add(op);
+                    k.resource,
+                    entry.getValue(),
+                    k.grantable
+            ));
         }
 
         return operations;
+    }
+
+    private static final class MergeKey {
+        final String sourcePolicyId;
+        final LFResource resource;
+        final boolean grantable;
+
+        MergeKey(String sourcePolicyId, LFResource resource, boolean grantable) {
+            this.sourcePolicyId = sourcePolicyId;
+            this.resource = resource;
+            this.grantable = grantable;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof MergeKey)) return false;
+            MergeKey that = (MergeKey) o;
+            return grantable == that.grantable
+                    && Objects.equals(sourcePolicyId, that.sourcePolicyId)
+                    && Objects.equals(resource, that.resource);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(sourcePolicyId, resource, grantable);
+        }
     }
 
     /**

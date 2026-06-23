@@ -59,6 +59,7 @@ import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.cloudwatch.CloudWatchClient;
@@ -743,6 +744,7 @@ public class ConversionServerMain {
      * Supports static credentials, STS AssumeRole, or default credential chain.
      */
     public static AwsCredentialsProvider buildCredentialsProvider(AwsConfig awsConfig) {
+        boolean hasProfile = awsConfig.getProfile() != null && !awsConfig.getProfile().isEmpty();
         boolean hasStaticCreds = awsConfig.getAccessKey() != null
                 && !awsConfig.getAccessKey().isEmpty()
                 && awsConfig.getSecretKey() != null
@@ -781,6 +783,9 @@ public class ConversionServerMain {
                             .roleSessionName("conversion-server")
                             .build())
                     .build();
+        } else if (hasProfile) {
+            LOG.info("Using AWS named profile: {}", awsConfig.getProfile());
+            return ProfileCredentialsProvider.create(awsConfig.getProfile());
         } else {
             LOG.info("Using default AWS credential chain");
             return DefaultCredentialsProvider.create();

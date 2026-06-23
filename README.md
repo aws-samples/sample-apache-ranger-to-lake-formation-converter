@@ -856,20 +856,26 @@ This produces `target/assessment-jar-with-dependencies.jar` in addition to the m
 
 ```
 server [<config-file>] [options]
-  --ranger-url <url>        Ranger Admin URL (required if no config file)
-  --ranger-user <user>      Ranger Admin username
-  --ranger-password <pass>  Ranger Admin password
-  --services <s1,s2,...>    Comma-separated service instance names to assess
-  --output-dir <dir>        Directory for JSON report (default: current dir)
-  --aws-region <region>     Enable Glue wildcard expansion with this region
-  --console-only            Print report to console only, skip JSON file
-  --skip-validation         Skip Cedar schema validation (required for large policy sets)
+  --ranger-url <url>               Ranger Admin URL (required if no config file)
+  --ranger-user <user>             Ranger Admin username
+  --ranger-password <pass>         Ranger Admin password
+  --services <s1,s2,...>           Comma-separated service instance names to assess
+  --output-dir <dir>               Directory for JSON report (default: current dir)
+  --aws-region <region>            Enable Glue wildcard expansion with this region
+  --aws-profile <profile>          AWS credentials profile for Glue/STS calls
+  --output-lf-policies-path <path> Write projected LF permission operations to this JSON file
+  --output-gaps-path <path>        Write partially/not-convertible policies with gap details to this JSON file
+  --console-only                   Print report to console only, skip JSON file
+  --skip-validation                Skip Cedar schema validation (required for large policy sets)
 
 file <export-file.json> [options]
-  --output-dir <dir>        Directory for JSON report (default: current dir)
-  --aws-region <region>     Enable Glue wildcard expansion with this region
-  --console-only            Print report to console only, skip JSON file
-  --skip-validation         Skip Cedar schema validation (required for large policy sets)
+  --output-dir <dir>               Directory for JSON report (default: current dir)
+  --aws-region <region>            Enable Glue wildcard expansion with this region
+  --aws-profile <profile>          AWS credentials profile for Glue/STS calls
+  --output-lf-policies-path <path> Write projected LF permission operations to this JSON file
+  --output-gaps-path <path>        Write partially/not-convertible policies with gap details to this JSON file
+  --console-only                   Print report to console only, skip JSON file
+  --skip-validation                Skip Cedar schema validation (required for large policy sets)
 ```
 
 ### Obtaining a Ranger Export File
@@ -909,9 +915,19 @@ java -jar target/assessment-jar-with-dependencies.jar \
   --output-dir ./assessment-results
 ```
 
-**With Glue wildcard expansion (requires AWS credentials in environment):**
+**With Glue wildcard expansion (requires AWS credentials):**
 
 ```bash
+# Using a named AWS profile
+java -jar target/assessment-jar-with-dependencies.jar \
+  server \
+  --ranger-url http://ranger-admin:6080 \
+  --ranger-user admin \
+  --ranger-password rangerR0cks! \
+  --aws-region us-east-1 \
+  --aws-profile my-profile
+
+# Using credentials already in the environment (env vars, instance profile, etc.)
 java -jar target/assessment-jar-with-dependencies.jar \
   server \
   --ranger-url http://ranger-admin:6080 \
@@ -928,6 +944,28 @@ java -jar target/assessment-jar-with-dependencies.jar \
   --console-only
 ```
 
+**Output projected LF operations to a file (one-shot apply inspection):**
+
+```bash
+java -jar target/assessment-jar-with-dependencies.jar \
+  file ./ranger-export.json \
+  --output-lf-policies-path ./lf-operations.json \
+  --console-only
+```
+
+The file contains a JSON array of Lake Formation `GRANT` operations — the same structure the sync server applies at runtime. With no `--aws-region` or principal mapping configured, principals appear as `ranger-user:alice` style placeholders and wildcard resources are unexpanded; re-run with those options to get real ARNs and fully resolved resource names.
+
+**Output a gap report for partially and non-convertible policies:**
+
+```bash
+java -jar target/assessment-jar-with-dependencies.jar \
+  file ./ranger-export.json \
+  --output-gaps-path ./gaps.json \
+  --console-only
+```
+
+The file contains one entry per policy classified as `PARTIALLY_CONVERTIBLE` or `NOT_CONVERTIBLE`, each with a `gaps` array describing the specific unsupported features and recommendations. Informational gaps (`WILDCARD_PATTERN`, `CANNOT_VALIDATE_S3_LOCATION`) are excluded so the file focuses on actionable items.
+
 **Large policy files (>~10,000 policies):**
 
 For large exports, Cedar schema validation exhausts JVM heap memory. Use `--skip-validation` and increase the heap size:
@@ -942,6 +980,8 @@ java -Xmx4g -jar target/assessment-jar-with-dependencies.jar \
 When `--skip-validation` is set, Cedar statements are parsed but not validated against the schema. Gap detection and convertibility counts remain accurate; only per-statement schema errors are suppressed.
 
 When `--aws-region` is provided, the tool queries the Glue Data Catalog to expand wildcard resource patterns (e.g., `db_*`) into explicit names before counting projected grants. Without it, wildcards are reported as-is and counted as `WILDCARD_PATTERN` gaps if they cannot be resolved.
+
+Use `--aws-profile` to specify which `~/.aws/credentials` profile to use for Glue and STS calls. Without it, the default AWS credential chain is used (environment variables, `~/.aws/credentials` default profile, EC2/ECS instance profile, etc.).
 
 #### Principal Mapping in Assessment Mode
 

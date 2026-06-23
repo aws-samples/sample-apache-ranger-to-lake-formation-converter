@@ -26,6 +26,8 @@ public class AssessmentConfig {
     private final boolean consoleOnly;
     private final boolean skipCedarValidation;
     private final S3AccessGrantsConfig s3AccessGrants;
+    private final Path lfPoliciesOutputPath;
+    private final Path gapsOutputPath;
 
     private AssessmentConfig(Builder builder) {
         this.rangerAdminUrl = builder.rangerAdminUrl;
@@ -38,6 +40,8 @@ public class AssessmentConfig {
         this.consoleOnly = builder.consoleOnly;
         this.skipCedarValidation = builder.skipCedarValidation;
         this.s3AccessGrants = builder.s3AccessGrants;
+        this.lfPoliciesOutputPath = builder.lfPoliciesOutputPath;
+        this.gapsOutputPath = builder.gapsOutputPath;
     }
 
     public String getRangerAdminUrl() {
@@ -80,6 +84,14 @@ public class AssessmentConfig {
         return s3AccessGrants;
     }
 
+    public Path getLfPoliciesOutputPath() {
+        return lfPoliciesOutputPath;
+    }
+
+    public Path getGapsOutputPath() {
+        return gapsOutputPath;
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -95,6 +107,8 @@ public class AssessmentConfig {
         private boolean consoleOnly = false;
         private boolean skipCedarValidation = false;
         private S3AccessGrantsConfig s3AccessGrants = null;
+        private Path lfPoliciesOutputPath = null;
+        private Path gapsOutputPath = null;
 
         public Builder rangerAdminUrl(String rangerAdminUrl) {
             this.rangerAdminUrl = rangerAdminUrl;
@@ -145,6 +159,16 @@ public class AssessmentConfig {
 
         public Builder s3AccessGrants(S3AccessGrantsConfig s3AccessGrants) {
             this.s3AccessGrants = s3AccessGrants;
+            return this;
+        }
+
+        public Builder lfPoliciesOutputPath(Path lfPoliciesOutputPath) {
+            this.lfPoliciesOutputPath = lfPoliciesOutputPath;
+            return this;
+        }
+
+        public Builder gapsOutputPath(Path gapsOutputPath) {
+            this.gapsOutputPath = gapsOutputPath;
             return this;
         }
 

@@ -52,15 +52,21 @@ public class AssessmentMain {
             "    --ranger-password <pass>  Ranger Admin password",
             "    --services <s1,s2,...>    Comma-separated service instance names",
             "    --output-dir <dir>        Directory for JSON report (default: current dir)",
-            "    --aws-region <region>     Enable Glue wildcard expansion",
-            "    --console-only            Print report to console, skip JSON file",
-            "    --skip-validation         Skip Cedar schema validation (use for large policy sets)",
+            "    --aws-region <region>              Enable Glue wildcard expansion",
+            "    --aws-profile <profile>            AWS credentials profile for Glue/STS calls",
+            "    --output-lf-policies-path <path>   Write projected LF permission operations to this JSON file",
+            "    --output-gaps-path <path>          Write partially/not-convertible policies with gap details to this JSON file",
+            "    --console-only                     Print report to console, skip JSON file",
+            "    --skip-validation                  Skip Cedar schema validation (use for large policy sets)",
             "",
             "  file <export-file.json> [options]",
-            "    --output-dir <dir>        Directory for JSON report (default: current dir)",
-            "    --aws-region <region>     Enable Glue wildcard expansion",
-            "    --console-only            Print report to console, skip JSON file",
-            "    --skip-validation         Skip Cedar schema validation (use for large policy sets)"
+            "    --output-dir <dir>                 Directory for JSON report (default: current dir)",
+            "    --aws-region <region>              Enable Glue wildcard expansion",
+            "    --aws-profile <profile>            AWS credentials profile for Glue/STS calls",
+            "    --output-lf-policies-path <path>   Write projected LF permission operations to this JSON file",
+            "    --output-gaps-path <path>          Write partially/not-convertible policies with gap details to this JSON file",
+            "    --console-only                     Print report to console, skip JSON file",
+            "    --skip-validation                  Skip Cedar schema validation (use for large policy sets)"
     );
 
     public static void main(String[] args) {
@@ -103,6 +109,7 @@ public class AssessmentMain {
 
         // Parse CLI flags, overriding config file values
         String awsRegion = null;
+        String awsProfile = null;
         for (int i = 0; i < flagArgs.size(); i++) {
             String flag = flagArgs.get(i);
             switch (flag) {
@@ -135,7 +142,13 @@ public class AssessmentMain {
                     awsRegion = nextArg(flagArgs, i++, flag);
                     break;
                 case "--aws-profile":
-                    nextArg(flagArgs, i++, flag); // accepted, reserved for future use
+                    awsProfile = nextArg(flagArgs, i++, flag);
+                    break;
+                case "--output-lf-policies-path":
+                    configBuilder.lfPoliciesOutputPath(Paths.get(nextArg(flagArgs, i++, flag)));
+                    break;
+                case "--output-gaps-path":
+                    configBuilder.gapsOutputPath(Paths.get(nextArg(flagArgs, i++, flag)));
                     break;
                 case "--console-only":
                     configBuilder.consoleOnly(true);
@@ -150,8 +163,8 @@ public class AssessmentMain {
             }
         }
 
-        if (awsRegion != null) {
-            configBuilder.awsConfig(new AwsConfig(awsRegion, null, null, null, null));
+        if (awsRegion != null || awsProfile != null) {
+            configBuilder.awsConfig(new AwsConfig(awsRegion, null, null, null, null, awsProfile));
         }
 
         AssessmentConfig config = configBuilder.build();
@@ -192,6 +205,7 @@ public class AssessmentMain {
 
         AssessmentConfig.Builder configBuilder = AssessmentConfig.builder();
         String awsRegion = null;
+        String awsProfile = null;
         List<String> flagArgs = new ArrayList<>(Arrays.asList(args).subList(1, args.length));
 
         for (int i = 0; i < flagArgs.size(); i++) {
@@ -207,6 +221,15 @@ public class AssessmentMain {
                 case "--aws-region":
                     awsRegion = nextArg(flagArgs, i++, flag);
                     break;
+                case "--aws-profile":
+                    awsProfile = nextArg(flagArgs, i++, flag);
+                    break;
+                case "--output-lf-policies-path":
+                    configBuilder.lfPoliciesOutputPath(Paths.get(nextArg(flagArgs, i++, flag)));
+                    break;
+                case "--output-gaps-path":
+                    configBuilder.gapsOutputPath(Paths.get(nextArg(flagArgs, i++, flag)));
+                    break;
                 case "--console-only":
                     configBuilder.consoleOnly(true);
                     break;
@@ -220,8 +243,8 @@ public class AssessmentMain {
             }
         }
 
-        if (awsRegion != null) {
-            configBuilder.awsConfig(new AwsConfig(awsRegion, null, null, null, null));
+        if (awsRegion != null || awsProfile != null) {
+            configBuilder.awsConfig(new AwsConfig(awsRegion, null, null, null, null, awsProfile));
         }
 
         AssessmentConfig config = configBuilder.build();
