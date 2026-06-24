@@ -26,22 +26,28 @@ class SyncServiceDiffPropertyTest {
     // **Validates: Requirements 3.2**
     // -----------------------------------------------------------------------
 
+    // NOTE: These properties are stated at the individual-permission (atom) level, not the
+    // whole-permission-set level. The diff reconciles permissions independently of which policy
+    // contributed them, so overlapping grants from different policies are handled correctly (a
+    // permission is only revoked when no remaining operation grants it). See
+    // SyncServiceTest#computeDiffDoesNotRevokePermissionStillGrantedByAnotherPolicy.
+
     @Property(tries = 100)
     void newGrantsAreExactlyInCurrentButNotPrevious(
             @ForAll("snapshotPairs") SnapshotPair pair
     ) {
         SyncService.PolicyDiff diff = SyncService.computeDiff(pair.previous, pair.current);
 
-        Set<SyncService.PermissionKey> previousKeys = toKeySet(pair.previous);
-        Set<SyncService.PermissionKey> currentKeys = toKeySet(pair.current);
+        Set<SyncService.PermissionAtom> previousAtoms = toAtomSet(pair.previous);
+        Set<SyncService.PermissionAtom> currentAtoms = toAtomSet(pair.current);
 
-        // Expected new grants: in current but not in previous
-        Set<SyncService.PermissionKey> expectedNewKeys = new HashSet<>(currentKeys);
-        expectedNewKeys.removeAll(previousKeys);
+        // Expected new grants: atoms in current but not in previous
+        Set<SyncService.PermissionAtom> expectedNewAtoms = new HashSet<>(currentAtoms);
+        expectedNewAtoms.removeAll(previousAtoms);
 
-        Set<SyncService.PermissionKey> actualNewKeys = toKeySet(diff.getNewGrants());
-        assertEquals(expectedNewKeys, actualNewKeys,
-                "New grants should be exactly the permissions in current but not in previous");
+        Set<SyncService.PermissionAtom> actualNewAtoms = toAtomSet(diff.getNewGrants());
+        assertEquals(expectedNewAtoms, actualNewAtoms,
+                "New grants should be exactly the permission atoms in current but not in previous");
 
         // All new grants must have GRANT operation type
         for (LFPermissionOperation op : diff.getNewGrants()) {
@@ -56,16 +62,16 @@ class SyncServiceDiffPropertyTest {
     ) {
         SyncService.PolicyDiff diff = SyncService.computeDiff(pair.previous, pair.current);
 
-        Set<SyncService.PermissionKey> previousKeys = toKeySet(pair.previous);
-        Set<SyncService.PermissionKey> currentKeys = toKeySet(pair.current);
+        Set<SyncService.PermissionAtom> previousAtoms = toAtomSet(pair.previous);
+        Set<SyncService.PermissionAtom> currentAtoms = toAtomSet(pair.current);
 
-        // Expected revocations: in previous but not in current
-        Set<SyncService.PermissionKey> expectedRevokeKeys = new HashSet<>(previousKeys);
-        expectedRevokeKeys.removeAll(currentKeys);
+        // Expected revocations: atoms in previous but not in current
+        Set<SyncService.PermissionAtom> expectedRevokeAtoms = new HashSet<>(previousAtoms);
+        expectedRevokeAtoms.removeAll(currentAtoms);
 
-        Set<SyncService.PermissionKey> actualRevokeKeys = toKeySet(diff.getRevocations());
-        assertEquals(expectedRevokeKeys, actualRevokeKeys,
-                "Revocations should be exactly the permissions in previous but not in current");
+        Set<SyncService.PermissionAtom> actualRevokeAtoms = toAtomSet(diff.getRevocations());
+        assertEquals(expectedRevokeAtoms, actualRevokeAtoms,
+                "Revocations should be exactly the permission atoms in previous but not in current");
 
         // All revocations must have REVOKE operation type
         for (LFPermissionOperation op : diff.getRevocations()) {
@@ -80,15 +86,15 @@ class SyncServiceDiffPropertyTest {
     ) {
         SyncService.PolicyDiff diff = SyncService.computeDiff(pair.previous, pair.current);
 
-        Set<SyncService.PermissionKey> previousKeys = toKeySet(pair.previous);
-        Set<SyncService.PermissionKey> currentKeys = toKeySet(pair.current);
+        Set<SyncService.PermissionAtom> previousAtoms = toAtomSet(pair.previous);
+        Set<SyncService.PermissionAtom> currentAtoms = toAtomSet(pair.current);
 
-        // Expected unchanged: intersection of previous and current
-        Set<SyncService.PermissionKey> intersection = new HashSet<>(previousKeys);
-        intersection.retainAll(currentKeys);
+        // Expected unchanged: intersection of previous and current atoms
+        Set<SyncService.PermissionAtom> intersection = new HashSet<>(previousAtoms);
+        intersection.retainAll(currentAtoms);
 
         assertEquals(intersection.size(), diff.getUnchangedCount(),
-                "Unchanged count should equal the size of the intersection");
+                "Unchanged count should equal the size of the atom intersection");
     }
 
     @Property(tries = 100)
@@ -97,16 +103,18 @@ class SyncServiceDiffPropertyTest {
     ) {
         SyncService.PolicyDiff diff = SyncService.computeDiff(pair.previous, pair.current);
 
-        Set<SyncService.PermissionKey> previousKeys = toKeySet(pair.previous);
-        Set<SyncService.PermissionKey> currentKeys = toKeySet(pair.current);
+        Set<SyncService.PermissionAtom> previousAtoms = toAtomSet(pair.previous);
+        Set<SyncService.PermissionAtom> currentAtoms = toAtomSet(pair.current);
 
-        // |previous ∪ current| = newGrants + revocations + unchanged
-        Set<SyncService.PermissionKey> union = new HashSet<>(previousKeys);
-        union.addAll(currentKeys);
+        // |previous ∪ current| (atoms) = grantAtoms + revokeAtoms + unchanged
+        Set<SyncService.PermissionAtom> union = new HashSet<>(previousAtoms);
+        union.addAll(currentAtoms);
 
-        int diffTotal = diff.getNewGrants().size() + diff.getRevocations().size() + diff.getUnchangedCount();
+        int diffTotal = toAtomSet(diff.getNewGrants()).size()
+                + toAtomSet(diff.getRevocations()).size()
+                + diff.getUnchangedCount();
         assertEquals(union.size(), diffTotal,
-                "Union of previous and current should equal grants + revocations + unchanged");
+                "Union of previous and current atoms should equal grants + revocations + unchanged");
     }
 
     @Property(tries = 100)
@@ -115,14 +123,14 @@ class SyncServiceDiffPropertyTest {
     ) {
         SyncService.PolicyDiff diff = SyncService.computeDiff(pair.previous, pair.current);
 
-        Set<SyncService.PermissionKey> grantKeys = toKeySet(diff.getNewGrants());
-        Set<SyncService.PermissionKey> revokeKeys = toKeySet(diff.getRevocations());
+        Set<SyncService.PermissionAtom> grantAtoms = toAtomSet(diff.getNewGrants());
+        Set<SyncService.PermissionAtom> revokeAtoms = toAtomSet(diff.getRevocations());
 
-        // Grants and revocations must be disjoint
-        Set<SyncService.PermissionKey> overlap = new HashSet<>(grantKeys);
-        overlap.retainAll(revokeKeys);
+        // Grants and revocations must be disjoint at the atom level
+        Set<SyncService.PermissionAtom> overlap = new HashSet<>(grantAtoms);
+        overlap.retainAll(revokeAtoms);
         assertTrue(overlap.isEmpty(),
-                "New grants and revocations must be disjoint sets");
+                "New grant atoms and revocation atoms must be disjoint sets");
     }
 
     // -----------------------------------------------------------------------
@@ -185,12 +193,19 @@ class SyncServiceDiffPropertyTest {
     // Helpers
     // -----------------------------------------------------------------------
 
-    private static Set<SyncService.PermissionKey> toKeySet(List<LFPermissionOperation> ops) {
-        Set<SyncService.PermissionKey> keys = new HashSet<>();
+    /**
+     * Explode operations into individual permission atoms — the granularity at which
+     * {@link SyncService#computeDiff} reconciles permissions.
+     */
+    private static Set<SyncService.PermissionAtom> toAtomSet(List<LFPermissionOperation> ops) {
+        Set<SyncService.PermissionAtom> atoms = new HashSet<>();
         for (LFPermissionOperation op : ops) {
-            keys.add(SyncService.PermissionKey.of(op));
+            for (LFPermission permission : op.getPermissions()) {
+                atoms.add(new SyncService.PermissionAtom(
+                        op.getPrincipalArn(), op.getResource(), permission, op.isGrantable()));
+            }
         }
-        return keys;
+        return atoms;
     }
 
     static class SnapshotPair {

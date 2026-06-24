@@ -62,6 +62,30 @@ class ExpectedPermissionsComputerTest {
         return item;
     }
 
+    private JsonNode buildPolicyWithId(long id, boolean isEnabled, String service, int policyType,
+            JsonNode policyItems, JsonNode resources) {
+        ObjectNode p = (ObjectNode) buildPolicy(isEnabled, service, policyType, policyItems, resources);
+        p.put("id", id);
+        return p;
+    }
+
+    private JsonNode buildMultiAccessItem(String user, List<String> accessTypes, boolean delegateAdmin) {
+        ObjectNode item = MAPPER.createObjectNode();
+        ArrayNode users = MAPPER.createArrayNode();
+        users.add(user);
+        item.set("users", users);
+        ArrayNode accesses = MAPPER.createArrayNode();
+        for (String accessType : accessTypes) {
+            ObjectNode access = MAPPER.createObjectNode();
+            access.put("type", accessType);
+            access.put("isAllowed", true);
+            accesses.add(access);
+        }
+        item.set("accesses", accesses);
+        item.put("delegateAdmin", delegateAdmin);
+        return item;
+    }
+
     private ObjectNode buildTableResources(String db, String table) {
         ObjectNode resources = MAPPER.createObjectNode();
         ObjectNode dbRes = MAPPER.createObjectNode();
@@ -202,6 +226,86 @@ class ExpectedPermissionsComputerTest {
         assertEquals("mydb.events", perm.resourceId());
         assertEquals("SELECT", perm.permission());
         assertFalse(perm.grantable());
+    }
+
+    /**
+     * Regression: a bare-table SELECT must NOT be treated as a real column-restricted
+     * TABLE_WITH_COLUMNS grant for the purpose of TABLE/TWC conflict resolution.
+     * <p>
+     * Lake Formation stores a bare-table SELECT as a TableWithColumns (all-columns) resource, and
+     * the expected set mirrors that for comparison parity. But in the production sync service the
+     * TABLE/TWC conflict check keys on actual column presence ({@code columnNames}), which a
+     * bare-table SELECT lacks — so a bare-table SELECT and other bare-table actions from sibling
+     * policies are all TABLE-class and never conflict. A genuine conflict only arises from a
+     * real column-level Ranger policy.
+     * <p>
+     * Scenario mirrors the simulator finding: policy 148 grants ALTER (table) and policy 150 grants
+     * {SELECT, DELETE, DROP} (table) to the same principal on the same table. The expected set must
+     * retain SELECT — the lower-id ALTER policy must not phantom-conflict the SELECT away.
+     */
+    @Test
+    void bareTableSelectIsNotStrippedByPhantomTableTwcConflict() {
+        // Policy 148: ALTER on mydb.events (table-level). Lower id, so under the buggy logic its
+        // TABLE class "wins" and strips the higher-id SELECT. Uses lakeformation service so the
+        // access types map directly (mirrors the real finding: both policies were lakeformation).
+        JsonNode policy148 = buildPolicyWithId(148, true, "lakeformation", 0,
+                singleItemArray(buildItem("alice", "alter", false)),
+                buildTableResources("mydb", "events"));
+        // Policy 150: SELECT, DELETE, DROP on mydb.events (table-level)
+        JsonNode policy150 = buildPolicyWithId(150, true, "lakeformation", 0,
+                singleItemArray(buildMultiAccessItem("alice", List.of("select", "delete", "drop"), false)),
+                buildTableResources("mydb", "events"));
+
+        Set<SimulatorPermission> result = computer.compute(List.of(policy148, policy150));
+
+        Set<String> perms = result.stream()
+                .filter(p -> p.resourceId().equals("mydb.events"))
+                .map(SimulatorPermission::permission)
+                .collect(Collectors.toSet());
+        assertTrue(perms.contains("SELECT"),
+                "Bare-table SELECT must survive — no real column grant exists, so there is no "
+                        + "TABLE/TWC conflict. Got: " + perms);
+        assertEquals(Set.of("SELECT", "DELETE", "DROP", "ALTER"), perms,
+                "All table-level permissions from both policies should be present");
+    }
+
+    /**
+     * Complement to {@link #bareTableSelectIsNotStrippedByPhantomTableTwcConflict}: a GENUINE
+     * TABLE/TWC conflict (a real column-level grant alongside a table-level grant from a different
+     * policy) must still be resolved — the lower-id policy wins. This guards against the
+     * bare-table-SELECT fix accidentally disabling legitimate conflict detection.
+     */
+    @Test
+    void genuineColumnVsTableConflictStillResolves() {
+        // Policy 200: table-level SELECT,DROP on mydb.events (lower id → TABLE wins)
+        JsonNode tablePolicy = buildPolicyWithId(200, true, "lakeformation", 0,
+                singleItemArray(buildMultiAccessItem("alice", List.of("select", "drop"), false)),
+                buildTableResources("mydb", "events"));
+        // Policy 300: genuine COLUMN-level SELECT on mydb.events (higher id → TWC loses)
+        JsonNode columnPolicy = buildPolicyWithId(300, true, "lakeformation", 0,
+                singleItemArray(buildItem("alice", "select", false)),
+                buildColumnResources("mydb", "events", "salary"));
+
+        Set<SimulatorPermission> result = computer.compute(List.of(tablePolicy, columnPolicy));
+
+        // TABLE wins (id 200 < 300): the genuine column-restricted TWC SELECT is removed.
+        // The bare-table SELECT from the winning policy remains (reported as TABLE_WITH_COLUMNS).
+        Set<String> twcPerms = result.stream()
+                .filter(p -> p.resourceType().equals("TABLE_WITH_COLUMNS"))
+                .map(SimulatorPermission::permission)
+                .collect(Collectors.toSet());
+        Set<String> tablePerms = result.stream()
+                .filter(p -> p.resourceType().equals("TABLE"))
+                .map(SimulatorPermission::permission)
+                .collect(Collectors.toSet());
+        // The losing column grant is gone; winning table policy's DROP remains, plus its
+        // bare-table SELECT (displayed as TWC). There must be exactly one SELECT (from the winner),
+        // not a separate surviving column grant.
+        assertTrue(tablePerms.contains("DROP"), "Winning table policy DROP must remain");
+        assertEquals(Set.of("SELECT"), twcPerms,
+                "Only the winning policy's bare-table SELECT remains (column grant removed)");
+        long selectCount = result.stream().filter(p -> p.permission().equals("SELECT")).count();
+        assertEquals(1, selectCount, "Exactly one SELECT entry — the losing column grant was removed");
     }
 
     // -----------------------------------------------------------------------

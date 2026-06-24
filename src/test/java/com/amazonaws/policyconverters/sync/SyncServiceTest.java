@@ -537,6 +537,61 @@ class SyncServiceTest {
         assertEquals(0, diff.getUnchangedCount());
     }
 
+    /**
+     * Regression for the cross-policy overlapping-grant revoke bug.
+     * <p>
+     * Two distinct policies grant overlapping-but-different permission sets to the same
+     * principal on the same resource: policy A grants {SELECT, DESCRIBE} and policy B grants
+     * {SELECT, INSERT}. When policy B is later deleted, only INSERT should be revoked — SELECT
+     * must survive because policy A still grants it.
+     * <p>
+     * Lake Formation keys grants by (principal, resource, permission) with no policy
+     * attribution, so revoking policy B's whole permission set (which includes SELECT) would
+     * collaterally destroy the SELECT that policy A still requires. The diff must therefore
+     * reason at the individual-permission level, not treat each policy's permission set as an
+     * atomic unit.
+     */
+    @Test
+    void computeDiffDoesNotRevokePermissionStillGrantedByAnotherPolicy() {
+        LFResource resource = new LFResource("catalog-1", "default_sim", "sessions", null, null);
+
+        // previous: both policies present
+        LFPermissionOperation policyAprev = new LFPermissionOperation(
+                OperationType.GRANT, "A", "arn:user/analyst", resource,
+                EnumSet.of(LFPermission.SELECT, LFPermission.DESCRIBE), false);
+        LFPermissionOperation policyBprev = new LFPermissionOperation(
+                OperationType.GRANT, "B", "arn:user/analyst", resource,
+                EnumSet.of(LFPermission.SELECT, LFPermission.INSERT), false);
+
+        // current: policy B deleted, policy A unchanged
+        LFPermissionOperation policyAcurr = new LFPermissionOperation(
+                OperationType.GRANT, "A", "arn:user/analyst", resource,
+                EnumSet.of(LFPermission.SELECT, LFPermission.DESCRIBE), false);
+
+        SyncService.PolicyDiff diff = SyncService.computeDiff(
+                Arrays.asList(policyAprev, policyBprev),
+                Collections.singletonList(policyAcurr));
+
+        // Only INSERT should be revoked. SELECT and DESCRIBE remain (A still grants them).
+        Set<LFPermission> revokedPerms = EnumSet.noneOf(LFPermission.class);
+        for (LFPermissionOperation op : diff.getRevocations()) {
+            assertEquals(OperationType.REVOKE, op.getOperationType());
+            assertEquals("arn:user/analyst", op.getPrincipalArn());
+            assertEquals(resource, op.getResource());
+            revokedPerms.addAll(op.getPermissions());
+        }
+        assertEquals(EnumSet.of(LFPermission.INSERT), revokedPerms,
+                "Only INSERT should be revoked; SELECT must survive because policy A still grants it");
+
+        // No spurious new grants — SELECT and DESCRIBE were already present.
+        Set<LFPermission> grantedPerms = EnumSet.noneOf(LFPermission.class);
+        for (LFPermissionOperation op : diff.getNewGrants()) {
+            grantedPerms.addAll(op.getPermissions());
+        }
+        assertTrue(grantedPerms.isEmpty(),
+                "No new grants expected; all surviving permissions were already present");
+    }
+
     @Test
     void grantableTrueOnOperationFlowsThroughToApplyBatch() {
         syncService.start(syncConfig);

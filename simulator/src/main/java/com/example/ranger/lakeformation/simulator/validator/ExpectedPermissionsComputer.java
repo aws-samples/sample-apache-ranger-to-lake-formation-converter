@@ -137,7 +137,31 @@ public class ExpectedPermissionsComputer {
             });
         }
 
-        return permits;
+        // Final display normalization (after conflict resolution): LF's ListPermissions API returns
+        // a bare-table SELECT as a TableWithColumns (all-columns) resource, which LFPermissionsFetcher
+        // normalizes to TABLE_WITH_COLUMNS. Mirror that here so the expected set matches LF actual
+        // output. This is intentionally done AFTER Pass 3 so bare-table SELECT does not masquerade as
+        // a real column grant during conflict detection.
+        return normalizeBareTableSelectToTwc(permits);
+    }
+
+    /**
+     * Rewrite each bare-table {@code (TABLE, SELECT)} entry to {@code (TABLE_WITH_COLUMNS, SELECT)}
+     * to match how Lake Formation's ListPermissions reports bare-table SELECT grants. Genuine
+     * column-level grants are already TABLE_WITH_COLUMNS and are left unchanged.
+     */
+    private Set<SimulatorPermission> normalizeBareTableSelectToTwc(Set<SimulatorPermission> permits) {
+        Set<SimulatorPermission> normalized = new HashSet<>(permits.size() * 2);
+        for (SimulatorPermission p : permits) {
+            if ("TABLE".equals(p.resourceType()) && "SELECT".equals(p.permission())) {
+                normalized.add(new SimulatorPermission(
+                        p.principalArn(), "TABLE_WITH_COLUMNS", p.resourceId(), p.permission(),
+                        p.grantable()));
+            } else {
+                normalized.add(p);
+            }
+        }
+        return normalized;
     }
 
     private boolean shouldProcess(JsonNode policy) {
@@ -186,15 +210,15 @@ public class ExpectedPermissionsComputer {
             }
             if (finalPerms.isEmpty()) continue;
             for (String arn : arns) {
-                // LF's ListPermissions API returns bare-table SELECT as TableWithColumns (cols=None).
-                // Mirror that in the expected set so the comparison matches LF actual output.
-                // LFPermissionsFetcher normalizes TableWithColumns/cols=None → TABLE_WITH_COLUMNS.
+                // Emit the spec's real resource type here. A bare-table SELECT stays TABLE-class
+                // (only genuine column-level specs are TABLE_WITH_COLUMNS) so that the TABLE/TWC
+                // conflict pass keys on actual column presence — mirroring the production sync
+                // service, which keys conflicts on columnNames. The bare-table-SELECT → TWC display
+                // rewrite (to match LF's ListPermissions output) is applied AFTER conflict
+                // resolution; see normalizeBareTableSelectToTwc.
                 for (String perm : finalPerms) {
-                    String resourceType = spec.resourceType();
-                    if ("TABLE".equals(resourceType) && "SELECT".equals(perm)) {
-                        resourceType = "TABLE_WITH_COLUMNS";
-                    }
-                    result.add(new SimulatorPermission(arn, resourceType, spec.resourceId(), perm, grantable));
+                    result.add(new SimulatorPermission(
+                            arn, spec.resourceType(), spec.resourceId(), perm, grantable));
                 }
             }
         }
