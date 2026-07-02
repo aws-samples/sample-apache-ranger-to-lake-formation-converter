@@ -175,4 +175,70 @@ class ConversionServerMainTest {
         assertEquals("amazon-emr-spark", service.getServiceType());
         assertEquals("spark-instance", service.getServiceInstanceName());
     }
+
+    @Test
+    void mergeServicePolicies_combinesAllPoliciesAcrossServices() {
+        org.apache.ranger.plugin.model.RangerPolicy lfPolicy =
+                new org.apache.ranger.plugin.model.RangerPolicy();
+        lfPolicy.setId(1L);
+        lfPolicy.setService("lakeformation");
+        org.apache.ranger.plugin.util.ServicePolicies lf =
+                new org.apache.ranger.plugin.util.ServicePolicies();
+        lf.setServiceName("lakeformation");
+        lf.setPolicies(List.of(lfPolicy));
+
+        org.apache.ranger.plugin.model.RangerPolicy hivePolicy =
+                new org.apache.ranger.plugin.model.RangerPolicy();
+        hivePolicy.setId(2L);
+        hivePolicy.setService("hive");
+        org.apache.ranger.plugin.util.ServicePolicies hive =
+                new org.apache.ranger.plugin.util.ServicePolicies();
+        hive.setServiceName("hive");
+        hive.setPolicies(List.of(hivePolicy));
+
+        org.apache.ranger.plugin.util.ServicePolicies merged =
+                ConversionServerMain.mergeServicePolicies(List.of(lf, hive));
+
+        assertNotNull(merged);
+        assertEquals(2, merged.getPolicies().size());
+        // Each policy retains its own service field so the converter routes by adapter.
+        assertTrue(merged.getPolicies().stream()
+                .anyMatch(p -> "lakeformation".equals(p.getService())));
+        assertTrue(merged.getPolicies().stream()
+                .anyMatch(p -> "hive".equals(p.getService())));
+    }
+
+    @Test
+    void mergeServicePolicies_skipsNullFetchesAndReturnsRemainder() {
+        org.apache.ranger.plugin.model.RangerPolicy hivePolicy =
+                new org.apache.ranger.plugin.model.RangerPolicy();
+        hivePolicy.setId(2L);
+        hivePolicy.setService("hive");
+        org.apache.ranger.plugin.util.ServicePolicies hive =
+                new org.apache.ranger.plugin.util.ServicePolicies();
+        hive.setServiceName("hive");
+        hive.setPolicies(List.of(hivePolicy));
+
+        // A null entry represents a service whose REST fetch failed this cycle.
+        java.util.List<org.apache.ranger.plugin.util.ServicePolicies> fetches =
+                new java.util.ArrayList<>();
+        fetches.add(null);
+        fetches.add(hive);
+
+        org.apache.ranger.plugin.util.ServicePolicies merged =
+                ConversionServerMain.mergeServicePolicies(fetches);
+
+        assertNotNull(merged);
+        assertEquals(1, merged.getPolicies().size());
+        assertEquals("hive", merged.getPolicies().get(0).getService());
+    }
+
+    @Test
+    void mergeServicePolicies_allNull_returnsNull() {
+        java.util.List<org.apache.ranger.plugin.util.ServicePolicies> fetches =
+                new java.util.ArrayList<>();
+        fetches.add(null);
+        fetches.add(null);
+        assertNull(ConversionServerMain.mergeServicePolicies(fetches));
+    }
 }

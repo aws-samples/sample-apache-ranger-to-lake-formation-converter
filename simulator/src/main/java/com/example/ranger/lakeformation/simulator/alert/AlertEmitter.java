@@ -14,8 +14,11 @@ public interface AlertEmitter {
 
         @Override
         public void emit(ValidationResult result, ReproductionBundle bundle) {
+            // bundle may be null for alerts that have no reproduction bundle (e.g. a
+            // fail-loud PersistentMutationFailureException abort).
+            Object detectedAt = bundle != null ? bundle.detectedAt() : "n/a";
             LOG.warn("SIMULATOR ALERT [{}]: {} — bundle: {}",
-                    result.outcome(), result.description(), bundle.detectedAt());
+                    result.outcome(), result.description(), detectedAt);
         }
     }
 

@@ -67,10 +67,13 @@ class HivePolicyGeneratorTest {
         assertFalse(resources.containsKey("table"), "database policy should NOT have 'table' in resources");
     }
 
-    // 6. generateTablePolicy() only produces valid lakeformation service access types
+    // 6. generateTablePolicy() only produces valid Hive service access types.
+    // Hive vocabulary differs from LakeFormation: insert/delete/describe are NOT Hive
+    // access types (the Hive servicedef rejects them). The HiveServiceAdapter maps the
+    // Hive vocabulary to LF actions (e.g. update->INSERT, create->CREATE_TABLE).
     @Test
-    void generateTablePolicy_usesLakeFormationAccessTypes() {
-        Set<String> validTypes = Set.of("select", "insert", "delete", "describe", "alter", "drop");
+    void generateTablePolicy_usesHiveAccessTypes() {
+        Set<String> validTypes = Set.of("select", "update", "create", "drop", "alter", "read", "write");
         for (int seed = 0; seed < 20; seed++) {
             Map<String, Object> policy = generator(seed).generateTablePolicy("p-" + seed);
             @SuppressWarnings("unchecked")
@@ -82,7 +85,7 @@ class HivePolicyGeneratorTest {
                 for (Map<String, Object> access : accesses) {
                     String type = (String) access.get("type");
                     assertTrue(validTypes.contains(type),
-                            "Access type '" + type + "' is not a valid lakeformation service access type");
+                            "Access type '" + type + "' is not a valid Hive service access type");
                 }
             }
         }
@@ -109,10 +112,11 @@ class HivePolicyGeneratorTest {
         }
     }
 
-    // 8. generateDatabasePolicy() uses the native lakeformation service access types
+    // 8. generateDatabasePolicy() uses the native Hive service access types
     @Test
-    void generateDatabasePolicy_usesLakeFormationCreateTable() {
-        // generateDatabasePolicy must use "create_table" and "drop" (native lakeformation service access types)
+    void generateDatabasePolicy_usesHiveCreate() {
+        // generateDatabasePolicy must use "create" and "drop" (native Hive service access types).
+        // "create" maps to LF CREATE_TABLE via the HiveServiceAdapter.
         for (int seed = 0; seed < 20; seed++) {
             Map<String, Object> policy = generator(seed).generateDatabasePolicy("dp-" + seed);
             @SuppressWarnings("unchecked")
@@ -122,8 +126,8 @@ class HivePolicyGeneratorTest {
                 List<Map<String, Object>> accesses = (List<Map<String, Object>>) item.get("accesses");
                 for (Map<String, Object> access : accesses) {
                     String type = (String) access.get("type");
-                    assertTrue(Set.of("create_table", "drop").contains(type),
-                            "generateDatabasePolicy access type '" + type + "' must be 'create_table' or 'drop'");
+                    assertTrue(Set.of("create", "drop").contains(type),
+                            "generateDatabasePolicy access type '" + type + "' must be 'create' or 'drop'");
                 }
             }
         }

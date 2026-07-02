@@ -35,6 +35,28 @@ lfRetryBackoffMs: 1000
 deadLetterLogPath: "/tmp/ranger-sim/dead-letter.jsonl"
 checkpointPath: "/tmp/ranger-sim/sync-checkpoint.json"
 
+# Multi-service mode via lightweight direct-REST fetch (Option A).
+# useRestPolicyFetch=true makes the sync service fetch policies for EACH listed
+# service instance via the Ranger Admin REST API and merge them, instead of
+# standing up a per-service PolicyRefresher plugin. This exercises the full
+# Ranger -> Cedar -> LF translation path for every source service type, not
+# just lakeformation.
+useRestPolicyFetch: true
+rangerServices:
+  - serviceType: "lakeformation"
+    serviceInstanceName: "lakeformation"
+  - serviceType: "hive"
+    serviceInstanceName: "hive"
+  - serviceType: "trino"
+    serviceInstanceName: "trino"
+    # Trino policies are only processed when their catalog matches this name.
+    # The simulator's Trino generator authors policies under catalog "hive".
+    gdcCatalogName: "hive"
+  - serviceType: "amazon-emr-emrfs"
+    serviceInstanceName: "amazon-emr-emrfs"
+  - serviceType: "amazon-emr-spark"
+    serviceInstanceName: "amazon-emr-spark"
+
 server:
   shutdownTimeoutSeconds: 30
   logLevel: INFO

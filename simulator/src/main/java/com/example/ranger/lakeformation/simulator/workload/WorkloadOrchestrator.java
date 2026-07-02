@@ -18,8 +18,8 @@ import java.util.*;
  * Batch size is 1–10, chosen uniformly at random.
  */
 public class WorkloadOrchestrator {
-    private static final int BATCH_MIN = 1;
-    private static final int BATCH_MAX = 10;
+    private static final int BATCH_MIN = 2;
+    private static final int BATCH_MAX = 20;
     private static final int WEIGHT_CREATE  = 30;
     private static final int WEIGHT_UPDATE  = 50;
     private static final int WEIGHT_DISABLE = 65;

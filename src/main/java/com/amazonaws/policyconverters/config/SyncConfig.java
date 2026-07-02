@@ -35,6 +35,7 @@ public class SyncConfig {
     private final TagSyncConfig tagSync;
     private final S3AccessGrantsConfig s3AccessGrants;
     private final ReverseSyncConfig reverseSyncConfig;
+    private final boolean useRestPolicyFetch;
 
     /**
      * Backward-compatible constructor without checkpointPath, wildcardRefreshIntervalSeconds,
@@ -49,7 +50,7 @@ public class SyncConfig {
             Long lfRetryBackoffMs,
             String deadLetterLogPath) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
-                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, null, null, null, null, null, null);
+                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, null, null, null, null, null, null, null);
     }
 
     /**
@@ -67,7 +68,7 @@ public class SyncConfig {
             Integer wildcardRefreshIntervalSeconds) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
                 maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
-                wildcardRefreshIntervalSeconds, null, null, null, null);
+                wildcardRefreshIntervalSeconds, null, null, null, null, null);
     }
 
     /**
@@ -86,7 +87,7 @@ public class SyncConfig {
             List<RangerServiceConfig> rangerServices) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
                 maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
-                wildcardRefreshIntervalSeconds, rangerServices, null, null, null);
+                wildcardRefreshIntervalSeconds, rangerServices, null, null, null, null);
     }
 
     /**
@@ -106,7 +107,7 @@ public class SyncConfig {
             TagSyncConfig tagSync) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
                 maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
-                wildcardRefreshIntervalSeconds, rangerServices, tagSync, null, null);
+                wildcardRefreshIntervalSeconds, rangerServices, tagSync, null, null, null);
     }
 
     /**
@@ -127,7 +128,30 @@ public class SyncConfig {
             S3AccessGrantsConfig s3AccessGrants) {
         this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
                 maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
-                wildcardRefreshIntervalSeconds, rangerServices, tagSync, s3AccessGrants, null);
+                wildcardRefreshIntervalSeconds, rangerServices, tagSync, s3AccessGrants, null, null);
+    }
+
+    /**
+     * Backward-compatible constructor without useRestPolicyFetch.
+     */
+    public SyncConfig(
+            RangerConnectionConfig rangerConfig,
+            AwsConfig awsConfig,
+            PrincipalMappingConfig principalMapping,
+            Long policyRefreshIntervalMs,
+            Integer maxLfRetries,
+            Long lfRetryBackoffMs,
+            String deadLetterLogPath,
+            String checkpointPath,
+            Integer wildcardRefreshIntervalSeconds,
+            List<RangerServiceConfig> rangerServices,
+            TagSyncConfig tagSync,
+            S3AccessGrantsConfig s3AccessGrants,
+            ReverseSyncConfig reverseSyncConfig) {
+        this(rangerConfig, awsConfig, principalMapping, policyRefreshIntervalMs,
+                maxLfRetries, lfRetryBackoffMs, deadLetterLogPath, checkpointPath,
+                wildcardRefreshIntervalSeconds, rangerServices, tagSync, s3AccessGrants,
+                reverseSyncConfig, null);
     }
 
     @JsonCreator
@@ -144,7 +168,8 @@ public class SyncConfig {
             @JsonProperty("rangerServices") List<RangerServiceConfig> rangerServices,
             @JsonProperty("tagSync") TagSyncConfig tagSync,
             @JsonProperty("s3AccessGrants") S3AccessGrantsConfig s3AccessGrants,
-            @JsonProperty("reverseSync") ReverseSyncConfig reverseSyncConfig) {
+            @JsonProperty("reverseSync") ReverseSyncConfig reverseSyncConfig,
+            @JsonProperty("useRestPolicyFetch") Boolean useRestPolicyFetch) {
         this.rangerConfig = rangerConfig;
         this.awsConfig = awsConfig;
         this.principalMapping = principalMapping;
@@ -162,6 +187,7 @@ public class SyncConfig {
         this.tagSync = tagSync != null ? tagSync : new TagSyncConfig(false, null, 0L);
         this.s3AccessGrants = s3AccessGrants;
         this.reverseSyncConfig = reverseSyncConfig != null ? reverseSyncConfig : new ReverseSyncConfig(null, null, null, null, null, null, null);
+        this.useRestPolicyFetch = useRestPolicyFetch != null ? useRestPolicyFetch : false;
     }
 
     public RangerConnectionConfig getRangerConfig() {
@@ -216,6 +242,16 @@ public class SyncConfig {
         return reverseSyncConfig;
     }
 
+    /**
+     * When true (and rangerServices is configured), the sync service fetches
+     * policies for each configured service instance via the Ranger Admin REST API
+     * and merges them, instead of standing up a per-service PolicyRefresher plugin.
+     * Lightweight multi-service path used by the simulator harness. Defaults to false.
+     */
+    public boolean isUseRestPolicyFetch() {
+        return useRestPolicyFetch;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -233,7 +269,8 @@ public class SyncConfig {
                 && Objects.equals(rangerServices, that.rangerServices)
                 && Objects.equals(tagSync, that.tagSync)
                 && Objects.equals(s3AccessGrants, that.s3AccessGrants)
-                && Objects.equals(reverseSyncConfig, that.reverseSyncConfig);
+                && Objects.equals(reverseSyncConfig, that.reverseSyncConfig)
+                && useRestPolicyFetch == that.useRestPolicyFetch;
     }
 
     @Override
@@ -241,7 +278,8 @@ public class SyncConfig {
         return Objects.hash(rangerConfig, awsConfig, principalMapping,
                 policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs,
                 deadLetterLogPath, checkpointPath, wildcardRefreshIntervalSeconds,
-                rangerServices, tagSync, s3AccessGrants, reverseSyncConfig);
+                rangerServices, tagSync, s3AccessGrants, reverseSyncConfig,
+                useRestPolicyFetch);
     }
 
     @Override
@@ -260,6 +298,7 @@ public class SyncConfig {
                 ", tagSync=" + tagSync +
                 ", s3AccessGrants=" + s3AccessGrants +
                 ", reverseSyncConfig=" + reverseSyncConfig +
+                ", useRestPolicyFetch=" + useRestPolicyFetch +
                 '}';
     }
 }

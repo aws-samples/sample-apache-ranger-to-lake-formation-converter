@@ -6,9 +6,11 @@
   "rangerAdminUser": "admin",
   "rangerAdminPassword": "rangerR0cks!",
   "rangerServiceName": "lakeformation",
+  "hiveServiceName": "hive",
   "trinoServiceName": "trino",
-  "emrfsServiceName": "emrfs",
-  "tagServiceName": "Atlas",
+  "emrfsServiceName": "amazon-emr-emrfs",
+  "emrSparkServiceName": "amazon-emr-spark",
+  "tagServiceName": "cl_tag",
   "awsProfile": "hocanint+ranger-test1",
   "principalPool": ["analyst", "etl_user", "data_admin", "viewer"],
   "principalMappings": {

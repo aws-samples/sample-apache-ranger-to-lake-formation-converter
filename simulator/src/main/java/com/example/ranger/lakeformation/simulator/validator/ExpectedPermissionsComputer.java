@@ -280,18 +280,41 @@ public class ExpectedPermissionsComputer {
             return specs;
         }
 
-        // Table-level (with or without columns)
+        // Mirror production RangerToCedarConverter.promoteResourceLevel: a column resource of
+        // "*" on a concrete (non-wildcard) table means "all columns" = the whole table, so it is
+        // promoted to TABLE level (full actions), NOT treated as a column-restricted
+        // TABLE_WITH_COLUMNS SELECT-only grant. A genuine specific-column grant stays TWC.
         List<String> tablePatterns = resourceValues(resources, "table");
+        boolean columnIsWildcard = hasColumn && isAllWildcard(resourceValues(resources, "column"));
+
         for (String db : databases) {
             for (String tablePattern : tablePatterns) {
+                // column=* on a concrete table → promote to TABLE. column=* on table=* stays
+                // column-scoped (per-table expansion below yields TWC per concrete table).
+                boolean promoteToTable = columnIsWildcard && !isWildcardPattern(tablePattern);
+                boolean isColumnScoped = hasColumn && !promoteToTable;
+
                 List<String> tables = resolveTablePattern(db, tablePattern);
                 for (String table : tables) {
-                    specs.add(new ResourceSpec(hasColumn ? "TABLE_WITH_COLUMNS" : "TABLE",
-                            db + "." + table, hasColumn));
+                    specs.add(new ResourceSpec(isColumnScoped ? "TABLE_WITH_COLUMNS" : "TABLE",
+                            db + "." + table, isColumnScoped));
                 }
             }
         }
         return specs;
+    }
+
+    /** True if every value is one or more '*'/'?' wildcard characters (mirrors production isAllWildcard). */
+    private boolean isAllWildcard(List<String> values) {
+        if (values == null || values.isEmpty()) return false;
+        for (String v : values) {
+            if (v == null || !v.matches("[*?]+")) return false;
+        }
+        return true;
+    }
+
+    private boolean isWildcardPattern(String pattern) {
+        return pattern != null && (pattern.contains("*") || pattern.contains("?"));
     }
 
     private List<String> resolveTablePattern(String db, String pattern) {

@@ -34,4 +34,18 @@ class AlertEmitterTest {
         AlertEmitter emitter = new AlertEmitter.NoOpAlertEmitter();
         emitter.emit(ValidationResult.pass(), minimalBundle());
     }
+
+    @Test
+    void logAlertEmitterShouldNotThrowWhenBundleIsNull() {
+        // Fail-loud alerts (e.g. PersistentMutationFailureException) have no reproduction
+        // bundle. emit(result, null) must not NPE.
+        AlertEmitter emitter = new AlertEmitter.LogAlertEmitter();
+        emitter.emit(ValidationResult.pass(), null);
+    }
+
+    @Test
+    void noOpAlertEmitterShouldNotThrowWhenBundleIsNull() {
+        AlertEmitter emitter = new AlertEmitter.NoOpAlertEmitter();
+        emitter.emit(ValidationResult.pass(), null);
+    }
 }

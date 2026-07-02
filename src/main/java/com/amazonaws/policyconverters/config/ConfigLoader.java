@@ -276,7 +276,8 @@ public class ConfigLoader {
                 newRangerConfig, newAwsConfig, config.getPrincipalMapping(),
                 policyRefreshIntervalMs, maxLfRetries, lfRetryBackoffMs, deadLetterLogPath,
                 checkpointPath, config.getWildcardRefreshIntervalSeconds(),
-                config.getRangerServices()
+                config.getRangerServices(), config.getTagSync(), config.getS3AccessGrants(),
+                config.getReverseSyncConfig(), config.isUseRestPolicyFetch()
         );
     }
 

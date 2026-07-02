@@ -273,9 +273,15 @@ public class ConversionServerMain {
                     Path.of(syncConfig.getCheckpointPath()), new ObjectMapper());
         }
 
-        // Determine multi-service vs single-service mode (Req 6.2, 6.3, 7.1)
+        // Determine multi-service vs single-service mode (Req 6.2, 6.3, 7.1).
+        // Three modes:
+        //   - production multi-service (PolicyRefresher per service): rangerServices set, useRestPolicyFetch=false
+        //   - REST multi-service (lightweight direct-REST fetch + merge): rangerServices set, useRestPolicyFetch=true
+        //   - single-service (legacy LakeFormation-only): rangerServices empty
         List<RangerServiceConfig> rangerServiceConfigs = syncConfig.getRangerServices();
-        boolean multiServiceMode = rangerServiceConfigs != null && !rangerServiceConfigs.isEmpty();
+        boolean hasRangerServices = rangerServiceConfigs != null && !rangerServiceConfigs.isEmpty();
+        boolean restMultiServiceMode = hasRangerServices && syncConfig.isUseRestPolicyFetch();
+        boolean multiServiceMode = hasRangerServices && !restMultiServiceMode;
 
         // Collect tag service names from config so converters can detect them by name, not heuristic
         Set<String> tagServiceNames = new HashSet<>();
@@ -326,6 +332,30 @@ public class ConversionServerMain {
                             service.getServiceType(), service.getServiceInstanceName(), e.getMessage(), e);
                 }
             }
+        } else if (restMultiServiceMode) {
+            // --- REST multi-service pipeline (lightweight, Option A) ---
+            // Register an adapter per configured service type so the converter can
+            // route each policy by its service field, but fetch policies via the
+            // direct-REST executor (no per-service PolicyRefresher plugin).
+            LOG.info("REST multi-service mode: registering {} service adapter(s), fetching via Ranger Admin REST",
+                    rangerServiceConfigs.size());
+
+            for (RangerServiceConfig cfg : rangerServiceConfigs) {
+                BaseRangerService service = createRangerService(cfg);
+                SourcePolicyAdapter adapter = service.createAdapter(awsContext);
+                adapterRegistry.put(cfg.getServiceType(), adapter);
+                allAdapters.add(adapter);
+                LOG.info("Registered adapter for service: serviceType={}, instanceName={}",
+                        cfg.getServiceType(), cfg.getServiceInstanceName());
+            }
+
+            RangerToCedarConverter rangerToCedarConverter = new RangerToCedarConverter(
+                    adapterRegistry, principalMapper, catalogResolver, gapReporter, cedarSchemaProvider, tagServiceNames);
+
+            // Single SyncService fed by onPoliciesUpdated() from the REST executor.
+            syncService = new SyncService(
+                    (RangerPlugin) null, rangerToCedarConverter, cedarToLFConverter,
+                    lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore);
         } else {
             // --- Single-service pipeline (backward compatibility, Req 6.2) ---
             LOG.info("Single-service mode: using legacy LakeFormation plugin wiring");
@@ -388,9 +418,20 @@ public class ConversionServerMain {
             String rangerPassword = rangerConnectionConfig != null
                     ? rangerConnectionConfig.getPassword() : null;
 
-            executor = createSyncCycleExecutor(plugin, syncService,
-                    finalReverseSyncService, finalReverseSyncConfig,
-                    rangerAdminUrl, rangerUsername, rangerPassword);
+            if (restMultiServiceMode) {
+                // Fetch each configured service instance via REST and merge.
+                List<String> instanceNames = new ArrayList<>();
+                for (RangerServiceConfig cfg : rangerServiceConfigs) {
+                    instanceNames.add(cfg.getServiceInstanceName());
+                }
+                executor = createMultiServiceRestSyncCycleExecutor(syncService,
+                        finalReverseSyncService, finalReverseSyncConfig,
+                        rangerAdminUrl, rangerUsername, rangerPassword, instanceNames);
+            } else {
+                executor = createSyncCycleExecutor(plugin, syncService,
+                        finalReverseSyncService, finalReverseSyncConfig,
+                        rangerAdminUrl, rangerUsername, rangerPassword);
+            }
         }
 
         // Wire MetricsEmitter into all adapters and the static AccessTypeMapper
@@ -559,6 +600,102 @@ public class ConversionServerMain {
      * SyncService pipeline, and optionally triggers reverse-sync after each
      * forward-sync cycle.
      */
+    /**
+     * Merges per-service {@link ServicePolicies} fetches into a single envelope.
+     * <p>
+     * Each source policy retains its own {@code service} field, so the downstream
+     * {@link com.amazonaws.policyconverters.ranger.RangerToCedarConverter} routes it
+     * to the correct {@link com.amazonaws.policyconverters.cedar.SourcePolicyAdapter}
+     * by service type. Null entries (a service whose REST fetch failed this cycle)
+     * are skipped so one unreachable service does not blank out the whole cycle.
+     *
+     * @param fetches per-service fetch results, some of which may be null
+     * @return a merged {@link ServicePolicies}, or null if every fetch was null
+     */
+    static ServicePolicies mergeServicePolicies(List<ServicePolicies> fetches) {
+        List<RangerPolicy> merged = new ArrayList<>();
+        boolean anyPresent = false;
+        long maxVersion = 0L;
+        for (ServicePolicies sp : fetches) {
+            if (sp == null) {
+                continue;
+            }
+            anyPresent = true;
+            if (sp.getPolicies() != null) {
+                merged.addAll(sp.getPolicies());
+            }
+            if (sp.getPolicyVersion() != null && sp.getPolicyVersion() > maxVersion) {
+                maxVersion = sp.getPolicyVersion();
+            }
+        }
+        if (!anyPresent) {
+            return null;
+        }
+        ServicePolicies result = new ServicePolicies();
+        result.setServiceName("multi-service");
+        result.setPolicies(merged);
+        result.setPolicyVersion(maxVersion);
+        return result;
+    }
+
+    /**
+     * Creates a SyncCycleExecutor that fetches policies via the Ranger Admin REST
+     * API for EACH configured service instance, merges them, and feeds the combined
+     * set through the SyncService pipeline. This is the lightweight multi-service
+     * path: it reuses the direct-REST fetch (no per-service PolicyRefresher or
+     * ranger-&lt;type&gt;-security.xml plumbing) while still exercising the
+     * multi-adapter RangerToCedarConverter routing.
+     *
+     * @param serviceInstanceNames the Ranger service instance names to fetch each cycle
+     */
+    static SyncCycleExecutor createMultiServiceRestSyncCycleExecutor(
+            SyncService syncService,
+            ReverseSyncService reverseSyncService,
+            ReverseSyncConfig reverseSyncConfig,
+            String rangerAdminUrl, String username, String password,
+            List<String> serviceInstanceNames) {
+        return () -> {
+            long startMs = System.currentTimeMillis();
+            try {
+                List<ServicePolicies> fetches = new ArrayList<>();
+                for (String instanceName : serviceInstanceNames) {
+                    fetches.add(fetchPoliciesFromRangerAdmin(
+                            rangerAdminUrl, username, password, instanceName));
+                }
+                ServicePolicies merged = mergeServicePolicies(fetches);
+                int policyCount = 0;
+                if (merged != null) {
+                    policyCount = merged.getPolicies() != null ? merged.getPolicies().size() : 0;
+                    syncService.onPoliciesUpdated(merged);
+                } else {
+                    LOG.warn("No policies available from any configured Ranger service instance: {}",
+                            serviceInstanceNames);
+                }
+
+                if (reverseSyncService != null && reverseSyncConfig != null
+                        && reverseSyncConfig.isEnabled()) {
+                    try {
+                        com.amazonaws.policyconverters.cedar.CedarPolicySet cedarPolicySet =
+                                syncService.getLastCedarPolicySet();
+                        if (cedarPolicySet != null) {
+                            reverseSyncService.execute(reverseSyncConfig, cedarPolicySet);
+                        } else {
+                            LOG.debug("No Cedar policy set available for reverse-sync");
+                        }
+                    } catch (Exception e) {
+                        LOG.error("Reverse-sync cycle failed: {}", e.getMessage(), e);
+                    }
+                }
+
+                long durationMs = System.currentTimeMillis() - startMs;
+                return SyncCycleResult.success(durationMs, policyCount, 0, 0, 0);
+            } catch (Exception e) {
+                long durationMs = System.currentTimeMillis() - startMs;
+                return SyncCycleResult.failure(durationMs, e);
+            }
+        };
+    }
+
     static SyncCycleExecutor createSyncCycleExecutor(RangerPlugin plugin, SyncService syncService,
                                                       ReverseSyncService reverseSyncService,
                                                       ReverseSyncConfig reverseSyncConfig,

@@ -84,11 +84,16 @@ public class SimulatorMain {
         // rng is used only on the main simulator loop thread — generators and orchestrator do not share threads.
         Random rng = new Random();
 
-        HivePolicyGenerator hivePolicyGenerator = new HivePolicyGenerator(
+        // LakeFormation-vocabulary policies target the lakeformation service directly.
+        LakeFormationPolicyGenerator lfPolicyGenerator = new LakeFormationPolicyGenerator(
                 databaseTables, principals, config.getRangerServiceName(), rng);
+        // Hive-vocabulary policies target the dedicated hive service; the HiveServiceAdapter
+        // maps the Hive access-type vocabulary to LF actions.
+        HivePolicyGenerator hivePolicyGenerator = new HivePolicyGenerator(
+                databaseTables, principals, config.getHiveServiceName(), rng);
         TrinoServiceGenerator trinoServiceGenerator = new TrinoServiceGenerator(
                 databaseTables, principals, config.getTrinoServiceName(), rng);
-        // Data-location policies are registered under the primary LF service name — same service as Hive.
+        // Data-location policies are registered under the primary LF service name.
         DataLocationPolicyGenerator dataLocationGenerator = new DataLocationPolicyGenerator(
                 config.getS3Prefixes(), principals, config.getRangerServiceName(), rng);
         TagPolicyGenerator tagPolicyGenerator = new TagPolicyGenerator(
@@ -98,28 +103,45 @@ public class SimulatorMain {
         EmrSparkPolicyGenerator emrSparkPolicyGenerator = new EmrSparkPolicyGenerator(
                 databaseTables, principals, config.getEmrSparkServiceName(), rng);
 
-        // "hive-all" omitted: lakeformation Ranger service rejects "all" as an access type.
-        // generateAllAccessTablePolicy() is kept in HivePolicyGenerator for future use against
-        // a Hive-type service that supports "all", but is not wired here.
+        // Each generator targets a dedicated Ranger service so the full Ranger -> Cedar -> LF
+        // translation path is exercised per source service type:
+        //   lf-*      -> lakeformation service (LF access-type vocabulary)
+        //   hive-*    -> hive service          (Hive vocabulary; HiveServiceAdapter maps to LF)
+        //   trino     -> trino service
+        //   emrfs     -> amazon-emr-emrfs service
+        //   emrspark-*-> amazon-emr-spark service
+        //   datalocation/tag -> lakeformation / tag services
+        //
+        // "hive-all"/lf-all omitted: the lakeformation Ranger service rejects "all" as an access type.
         List<GeneratorEntry> generators = List.of(
-            new GeneratorEntry("hive",            hivePolicyGenerator::generateTablePolicy,            25),
-            new GeneratorEntry("trino",           trinoServiceGenerator::generate,                     16),
-            new GeneratorEntry("datalocation",    dataLocationGenerator::generate,                     12),
-            new GeneratorEntry("tag",             tagPolicyGenerator::generate,                         8),
-            new GeneratorEntry("emrfs",           emrfsPolicyGenerator::generate,                       5),
-            new GeneratorEntry("hive-multi",      hivePolicyGenerator::generateMultiUserTablePolicy,   10),
-            new GeneratorEntry("hive-db",         hivePolicyGenerator::generateDatabasePolicy,          5),
-            new GeneratorEntry("hive-col",        hivePolicyGenerator::generateColumnPolicy,            5),
+            // LakeFormation-vocabulary policies (target the lakeformation service directly)
+            new GeneratorEntry("lf",              lfPolicyGenerator::generateTablePolicy,              15),
+            new GeneratorEntry("lf-multi",        lfPolicyGenerator::generateMultiUserTablePolicy,      6),
+            new GeneratorEntry("lf-db",           lfPolicyGenerator::generateDatabasePolicy,            3),
+            new GeneratorEntry("lf-col",          lfPolicyGenerator::generateColumnPolicy,              3),
+            new GeneratorEntry("lf-unmapped",     lfPolicyGenerator::generateUnmappedPrincipalPolicy,   2),
+            new GeneratorEntry("lf-grantable",    lfPolicyGenerator::generateGrantableTablePolicy,      2),
+            new GeneratorEntry("lf-deny",         lfPolicyGenerator::generateDenyTablePolicy,           3),
+            // Hive-vocabulary policies (target the dedicated hive service)
+            new GeneratorEntry("hive",            hivePolicyGenerator::generateTablePolicy,            15),
+            new GeneratorEntry("hive-multi",      hivePolicyGenerator::generateMultiUserTablePolicy,    6),
+            new GeneratorEntry("hive-db",         hivePolicyGenerator::generateDatabasePolicy,          3),
+            new GeneratorEntry("hive-col",        hivePolicyGenerator::generateColumnPolicy,            3),
             new GeneratorEntry("hive-unmapped",   hivePolicyGenerator::generateUnmappedPrincipalPolicy, 2),
-            new GeneratorEntry("hive-grantable",  hivePolicyGenerator::generateGrantableTablePolicy,    3),
-            new GeneratorEntry("hive-wildcard",    hivePolicyGenerator::generateWildcardTablePolicy,       3),
-            new GeneratorEntry("hive-deny",        hivePolicyGenerator::generateDenyTablePolicy,           4),
-            new GeneratorEntry("hive-group",       hivePolicyGenerator::generateGroupTablePolicy,          1),
-            new GeneratorEntry("hive-role",        hivePolicyGenerator::generateRoleTablePolicy,           1),
-            new GeneratorEntry("emrspark",         emrSparkPolicyGenerator::generateTablePolicy,           8),
-            new GeneratorEntry("emrspark-db",      emrSparkPolicyGenerator::generateDatabasePolicy,        3),
-            new GeneratorEntry("emrspark-col",     emrSparkPolicyGenerator::generateColumnPolicy,          2),
-            new GeneratorEntry("emrspark-deny",    emrSparkPolicyGenerator::generateDenyTablePolicy,       2)
+            new GeneratorEntry("hive-grantable",  hivePolicyGenerator::generateGrantableTablePolicy,    2),
+            new GeneratorEntry("hive-wildcard",   hivePolicyGenerator::generateWildcardTablePolicy,     3),
+            new GeneratorEntry("hive-deny",       hivePolicyGenerator::generateDenyTablePolicy,         3),
+            new GeneratorEntry("hive-group",      hivePolicyGenerator::generateGroupTablePolicy,        1),
+            new GeneratorEntry("hive-role",       hivePolicyGenerator::generateRoleTablePolicy,         1),
+            // Other services
+            new GeneratorEntry("trino",           trinoServiceGenerator::generate,                     12),
+            new GeneratorEntry("datalocation",    dataLocationGenerator::generate,                      8),
+            new GeneratorEntry("tag",             tagPolicyGenerator::generate,                          6),
+            new GeneratorEntry("emrfs",           emrfsPolicyGenerator::generate,                        5),
+            new GeneratorEntry("emrspark",        emrSparkPolicyGenerator::generateTablePolicy,          8),
+            new GeneratorEntry("emrspark-db",     emrSparkPolicyGenerator::generateDatabasePolicy,       3),
+            new GeneratorEntry("emrspark-col",    emrSparkPolicyGenerator::generateColumnPolicy,         2),
+            new GeneratorEntry("emrspark-deny",   emrSparkPolicyGenerator::generateDenyTablePolicy,      2)
         );
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
                 new ArrayList<>(), generators, rng);
@@ -184,6 +206,17 @@ public class SimulatorMain {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 LOG.info("Simulator interrupted, shutting down");
+            } catch (PersistentMutationFailureException e) {
+                // A whole service's mutations are being rejected every time — fail loudly
+                // instead of continuing to report "all permissions correct" for a service
+                // whose policies never reach Ranger.
+                alertEmitter.emit(new ValidationResult(ValidationResult.Outcome.PERSISTENT_VIOLATION,
+                        java.util.Set.of(), java.util.Set.of(),
+                        "Persistent mutation failures for service '" + e.getServiceName() + "' ("
+                                + e.getConsecutiveFailures() + " consecutive). Aborting run: "
+                                + e.getMessage()), null);
+                LOG.error("Aborting simulator: {}", e.getMessage());
+                throw e;
             }
         }
     }
@@ -252,9 +285,13 @@ public class SimulatorMain {
     }
 
     private static List<String> buildAllServiceNames(SimulatorConfig config) {
-        // All four service names have non-null defaults in SimulatorConfig.
+        // Every service the workload generates policies for must be listed here so the
+        // Phase-2 correctness oracle fetches ALL Ranger policies when computing expected
+        // LF permissions. Omitting a service makes its correctly-synced grants look like
+        // over-grants (the oracle never sees the backing policy).
         List<String> names = new ArrayList<>();
         names.add(config.getRangerServiceName());
+        names.add(config.getHiveServiceName());
         names.add(config.getTrinoServiceName());
         names.add(config.getEmrfsServiceName());
         names.add(config.getEmrSparkServiceName());

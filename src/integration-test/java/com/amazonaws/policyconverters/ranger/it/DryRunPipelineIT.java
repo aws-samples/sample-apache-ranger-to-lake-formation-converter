@@ -199,10 +199,18 @@ public abstract class DryRunPipelineIT {
         CedarToLFConverter cedarToLFConverter = new CedarToLFConverter(
                 cedarSchemaProvider, gapReporter, null);
 
+        // Dead-letter logger writing into the per-test output dir. Needed so the
+        // TABLE/TABLE_WITH_COLUMNS conflict path (detectAndGapTableTwcConflicts) can log
+        // gaps instead of NPE-ing on a null logger.
+        java.io.BufferedWriter deadLetterWriter = Files.newBufferedWriter(
+                outputDirectory.resolve("dead-letter.jsonl"));
+        com.amazonaws.policyconverters.sync.DeadLetterLogger deadLetterLogger =
+                new com.amazonaws.policyconverters.sync.DeadLetterLogger(deadLetterWriter);
+
         RangerPlugin plugin = new RangerPlugin();
         syncService = new SyncService(
                 plugin, rangerToCedarConverter, cedarToLFConverter,
-                dryRunClient, gapReporter, null);
+                dryRunClient, gapReporter, deadLetterLogger);
 
         // Start the sync service so onPoliciesUpdated is accepted
         SyncConfig config = new SyncConfig(null, null, null, null, null, null, null);

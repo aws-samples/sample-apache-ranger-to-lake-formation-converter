@@ -7,11 +7,14 @@ import java.util.*;
  * Produces policies that cover database, table, and column levels.
  */
 public class HivePolicyGenerator {
-    // Native lakeformation Ranger service access types (verified against the service definition)
+    // Native Hive Ranger service access types (verified against ranger-servicedef-hive.json).
+    // Hive vocabulary differs from LakeFormation: it has no insert/delete/describe. The
+    // HiveServiceAdapter maps these to LF actions (select->SELECT, update->INSERT,
+    // create->CREATE_TABLE, drop->DROP, alter->ALTER, read->SELECT, write->INSERT).
     private static final List<String> TABLE_ACCESS_TYPES =
-            List.of("select", "insert", "delete", "describe", "alter", "drop");
+            List.of("select", "update", "create", "drop", "alter", "read", "write");
     // Column-level policies: only "select" produces an LF grant (TABLE_WITH_COLUMNS SELECT).
-    // insert/delete on a column resource are accepted by Ranger but produce no LF permission.
+    // Other access types on a column resource are accepted by Ranger but produce no LF permission.
     private static final List<String> COLUMN_ACCESS_TYPES = List.of("select");
     private static final List<String> COLUMN_NAMES =
             List.of("id", "name", "value", "created_at", "status", "amount", "category", "region");
@@ -21,7 +24,7 @@ public class HivePolicyGenerator {
     private final List<String> databases;                     // ordered key list for random selection
     private final List<String> principalNames;                // Ranger user names (not ARNs)
     private final Random random;
-    private final String hiveServiceName;                     // e.g. "hive" or "lakeformation"
+    private final String hiveServiceName;                     // the Hive Ranger service instance name
 
     public HivePolicyGenerator(Map<String, List<String>> databaseTables,
                                List<String> principalNames, String hiveServiceName, Random random) {
@@ -74,7 +77,7 @@ public class HivePolicyGenerator {
                 "isEnabled", true,
                 "policyType", 0,
                 "resources", resources,
-                "policyItems", List.of(buildItem(List.of(user), List.of("create_table", "drop"), false)),
+                "policyItems", List.of(buildItem(List.of(user), List.of("create", "drop"), false)),
                 "denyPolicyItems", List.of()
         );
     }

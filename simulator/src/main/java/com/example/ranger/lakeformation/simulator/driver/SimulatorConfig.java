@@ -16,10 +16,11 @@ public class SimulatorConfig {
     private static final int DEFAULT_CYCLE_WAIT_TIMEOUT_SECONDS = 300;
     private static final int DEFAULT_STATUS_PORT = 18080;
     private static final String DEFAULT_STATUS_HOST = "localhost";
+    private static final String DEFAULT_HIVE_SERVICE_NAME      = "hive";
     private static final String DEFAULT_TRINO_SERVICE_NAME     = "trino";
-    private static final String DEFAULT_EMRFS_SERVICE_NAME     = "emrfs";
+    private static final String DEFAULT_EMRFS_SERVICE_NAME     = "amazon-emr-emrfs";
     private static final String DEFAULT_EMR_SPARK_SERVICE_NAME = "amazon-emr-spark";
-    private static final String DEFAULT_TAG_SERVICE_NAME       = "Atlas";
+    private static final String DEFAULT_TAG_SERVICE_NAME       = "cl_tag";
     private static final List<String> DEFAULT_S3_PREFIXES  =
             List.of("s3://my-bucket/data/", "s3://my-bucket/logs/");
 
@@ -41,6 +42,7 @@ public class SimulatorConfig {
      * When null, GlueCatalogDiscovery is used at startup to populate this list.
      */
     private final Map<String, List<String>> databases;
+    private final String hiveServiceName;
     private final String trinoServiceName;
     private final String emrfsServiceName;
     private final String emrSparkServiceName;
@@ -86,7 +88,8 @@ public class SimulatorConfig {
             @JsonProperty("roleArn")                 String  roleArn,
             @JsonProperty("validateEmrSpark")        Boolean validateEmrSpark,
             @JsonProperty("awsProfile")              String  awsProfile,
-            @JsonProperty("s3agInstanceArn")         String  s3agInstanceArn) {
+            @JsonProperty("s3agInstanceArn")         String  s3agInstanceArn,
+            @JsonProperty("hiveServiceName")         String  hiveServiceName) {
         this.cycleIntervalSeconds = cycleIntervalSeconds != null ? cycleIntervalSeconds : DEFAULT_CYCLE_INTERVAL_SECONDS;
         this.awsRegion = awsRegion != null ? awsRegion : DEFAULT_AWS_REGION;
         this.rangerAdminUrl = rangerAdminUrl;
@@ -101,6 +104,7 @@ public class SimulatorConfig {
         this.statusHost = statusHost != null ? statusHost : DEFAULT_STATUS_HOST;
         this.reproductionBundleDir = reproductionBundleDir != null ? reproductionBundleDir : "reproduction-bundles";
         this.databases = databases;
+        this.hiveServiceName      = hiveServiceName      != null ? hiveServiceName      : DEFAULT_HIVE_SERVICE_NAME;
         this.trinoServiceName     = trinoServiceName     != null ? trinoServiceName     : DEFAULT_TRINO_SERVICE_NAME;
         this.emrfsServiceName     = emrfsServiceName     != null ? emrfsServiceName     : DEFAULT_EMRFS_SERVICE_NAME;
         this.emrSparkServiceName  = emrSparkServiceName  != null ? emrSparkServiceName  : DEFAULT_EMR_SPARK_SERVICE_NAME;
@@ -129,6 +133,7 @@ public class SimulatorConfig {
     public String getReproductionBundleDir() { return reproductionBundleDir; }
     /** Returns the configured databases map, or null if Glue discovery should be used. */
     public Map<String, List<String>> getDatabases() { return databases; }
+    public String       getHiveServiceName()     { return hiveServiceName; }
     public String       getTrinoServiceName()    { return trinoServiceName; }
     public String       getEmrfsServiceName()    { return emrfsServiceName; }
     public String       getEmrSparkServiceName() { return emrSparkServiceName; }

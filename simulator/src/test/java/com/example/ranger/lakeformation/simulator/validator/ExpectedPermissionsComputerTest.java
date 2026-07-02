@@ -308,6 +308,52 @@ class ExpectedPermissionsComputerTest {
         assertEquals(1, selectCount, "Exactly one SELECT entry — the losing column grant was removed");
     }
 
+    /**
+     * A column resource of {@code ["*"]} on a CONCRETE table means "all columns" = the whole table.
+     * Production ({@code RangerToCedarConverter.promoteResourceLevel}) promotes this from column to
+     * TABLE level, so non-SELECT actions (alter/write/...) produce full TABLE-level grants — NOT a
+     * TABLE_WITH_COLUMNS SELECT-only grant. The oracle must mirror that, otherwise these table grants
+     * are falsely flagged as over-grants.
+     */
+    @Test
+    void columnWildcardOnConcreteTable_promotesToTableLevel_fullActions() {
+        // emr-spark policy: column=* on mydb.orders, actions alter+write → TABLE ALTER + INSERT.
+        JsonNode resources = buildColumnResources("mydb", "orders", "*");
+        JsonNode policy = buildPolicy(true, "amazon-emr-spark", 0,
+                singleItemArray(buildMultiAccessItem("alice", List.of("alter", "write"), false)),
+                resources);
+
+        Set<SimulatorPermission> result = computer.compute(List.of(policy));
+
+        Set<String> perms = result.stream().map(SimulatorPermission::permission).collect(Collectors.toSet());
+        Set<String> types = result.stream().map(SimulatorPermission::resourceType).collect(Collectors.toSet());
+        assertEquals(Set.of("ALTER", "INSERT"), perms,
+                "column=* on a concrete table must grant full TABLE actions, not be stripped to SELECT. Got: " + perms);
+        assertEquals(Set.of("TABLE"), types,
+                "column=* on a concrete table is promoted to TABLE level. Got: " + types);
+    }
+
+    /**
+     * A GENUINE specific-column resource (e.g. column=["salary"]) stays TABLE_WITH_COLUMNS and is
+     * still stripped to SELECT-only — the promotion only applies to the column=* wildcard case.
+     */
+    @Test
+    void genuineSpecificColumn_staysTwcSelectOnly() {
+        JsonNode resources = buildColumnResources("mydb", "orders", "salary");
+        JsonNode policy = buildPolicy(true, "amazon-emr-spark", 0,
+                singleItemArray(buildMultiAccessItem("alice", List.of("alter", "write", "select"), false)),
+                resources);
+
+        Set<SimulatorPermission> result = computer.compute(List.of(policy));
+
+        Set<String> perms = result.stream().map(SimulatorPermission::permission).collect(Collectors.toSet());
+        Set<String> types = result.stream().map(SimulatorPermission::resourceType).collect(Collectors.toSet());
+        assertEquals(Set.of("SELECT"), perms,
+                "A specific-column grant only supports SELECT in LF. Got: " + perms);
+        assertEquals(Set.of("TABLE_WITH_COLUMNS"), types,
+                "A specific-column grant stays TABLE_WITH_COLUMNS. Got: " + types);
+    }
+
     // -----------------------------------------------------------------------
     // Test 6: "all" access expands to 6 permissions
     // -----------------------------------------------------------------------

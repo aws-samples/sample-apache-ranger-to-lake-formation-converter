@@ -232,6 +232,34 @@ class ConfigLoaderTest {
     }
 
     @Test
+    void load_preservesUseRestPolicyFetchThroughEnvironmentOverrides() throws IOException {
+        String yaml =
+                "rangerConfig:\n" +
+                "  rangerAdminUrl: http://ranger:6080\n" +
+                "  username: admin\n" +
+                "awsConfig:\n" +
+                "  region: us-east-1\n" +
+                "  catalogId: \"123456789012\"\n" +
+                "useRestPolicyFetch: true\n" +
+                "rangerServices:\n" +
+                "  - serviceType: lakeformation\n" +
+                "    serviceInstanceName: lakeformation\n" +
+                "  - serviceType: hive\n" +
+                "    serviceInstanceName: hive\n";
+
+        File yamlFile = tempDir.resolve("multi-config.yaml").toFile();
+        writeFile(yamlFile, yaml);
+
+        // load() applies environment overrides; the rebuilt SyncConfig must not drop
+        // useRestPolicyFetch or rangerServices.
+        SyncConfig config = loader.load(yamlFile.getAbsolutePath());
+        assertTrue(config.isUseRestPolicyFetch(),
+                "useRestPolicyFetch must survive environment-override rebuild");
+        assertNotNull(config.getRangerServices());
+        assertEquals(2, config.getRangerServices().size());
+    }
+
+    @Test
     void maskSensitiveValues_passwordAndSecretKeyMasked() throws IOException {
         String yaml =
                 "rangerConfig:\n" +

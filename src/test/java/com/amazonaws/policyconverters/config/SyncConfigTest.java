@@ -266,4 +266,30 @@ class SyncConfigTest {
                 null, null, null, null, null, null, null, null, null, null);
         assertNotEquals(withRsc, withoutRsc);
     }
+
+    @Test
+    void useRestPolicyFetch_defaultsToFalse() {
+        SyncConfig config = new SyncConfig(null, null, null,
+                null, null, null, null, null, null, null, null, null, null);
+        assertFalse(config.isUseRestPolicyFetch());
+    }
+
+    @Test
+    void useRestPolicyFetch_jsonRoundTrip() throws Exception {
+        SyncConfig original = new SyncConfig(null, null, null,
+                null, null, null, null, null, null, null, null, null, null, true);
+        String json = mapper.writeValueAsString(original);
+        SyncConfig deserialized = mapper.readValue(json, SyncConfig.class);
+        assertTrue(deserialized.isUseRestPolicyFetch());
+    }
+
+    @Test
+    void useRestPolicyFetch_deserializesFromYaml() throws Exception {
+        String yaml = "rangerConfig:\n"
+                + "  rangerAdminUrl: \"http://localhost:6080\"\n"
+                + "useRestPolicyFetch: true\n";
+        ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
+        SyncConfig config = yamlMapper.readValue(yaml, SyncConfig.class);
+        assertTrue(config.isUseRestPolicyFetch());
+    }
 }
