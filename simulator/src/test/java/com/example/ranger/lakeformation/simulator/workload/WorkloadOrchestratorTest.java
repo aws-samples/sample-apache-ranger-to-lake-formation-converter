@@ -164,6 +164,48 @@ class WorkloadOrchestratorTest {
     }
 
     @Test
+    void updateReusesResourceFromCreate() {
+        // A generator that emits a DIFFERENT resource on every call. If UPDATE regenerated the
+        // resource freely (the old behavior), an UPDATE payload would carry a resource that
+        // differs from the CREATE's. The orchestrator must pin the resource to the CREATE's,
+        // so every UPDATE for a given policy id carries the exact resource its CREATE used.
+        final int[] counter = {0};
+        List<GeneratorEntry> gens = List.of(
+            new GeneratorEntry("hive", id -> {
+                int n = counter[0]++;
+                Map<String, Object> resources = Map.of(
+                        "database", Map.of("values", List.of("db" + n)),
+                        "table",    Map.of("values", List.of("tbl" + n)));
+                return Map.of("service", "hive", "name", id, "resources", resources,
+                        "policyItems", List.of(Map.of("users", List.of("u" + n))));
+            }, 100)
+        );
+        WorkloadOrchestrator orch = new WorkloadOrchestrator(new ArrayList<>(), gens, new Random(11L));
+
+        // Track the resource each policy id was CREATEd with, then assert every UPDATE matches.
+        Map<String, Object> createdResource = new HashMap<>();
+        int updatesChecked = 0;
+        for (int cycle = 0; cycle < 200; cycle++) {
+            for (MutationOperation op : orch.generateBatch()) {
+                if (op instanceof MutationOperation.CreatePolicy c) {
+                    createdResource.put(c.policyId(), asMap(c.policyPayload()).get("resources"));
+                } else if (op instanceof MutationOperation.UpdatePolicy u) {
+                    Object updateResource = asMap(u.policyPayload()).get("resources");
+                    assertEquals(createdResource.get(u.policyId()), updateResource,
+                            "UPDATE resource must equal the CREATE resource for id " + u.policyId());
+                    updatesChecked++;
+                }
+            }
+        }
+        assertTrue(updatesChecked > 0, "Test must observe at least one UPDATE to be meaningful");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object payload) {
+        return (Map<String, Object>) payload;
+    }
+
+    @Test
     void batchWithEmptyExistingIdsContainsOnlyCreateOperations() {
         // When existingPolicyIds is initially empty, any roll >= WEIGHT_CREATE returns null
         // and is filtered. Only CREATE ops (which also populate existingPolicyIds) can appear.

@@ -38,6 +38,11 @@ public class SimulatorConfig {
     private final String statusHost;
     private final String reproductionBundleDir;
     /**
+     * Optional path for the human-readable round-by-round report (Ranger mutations, derived LF
+     * grants/revokes, and full LF state per cycle). When null, no report is written.
+     */
+    private final String roundReportPath;
+    /**
      * Optional static resource map: db → list of table names.
      * When null, GlueCatalogDiscovery is used at startup to populate this list.
      */
@@ -89,7 +94,8 @@ public class SimulatorConfig {
             @JsonProperty("validateEmrSpark")        Boolean validateEmrSpark,
             @JsonProperty("awsProfile")              String  awsProfile,
             @JsonProperty("s3agInstanceArn")         String  s3agInstanceArn,
-            @JsonProperty("hiveServiceName")         String  hiveServiceName) {
+            @JsonProperty("hiveServiceName")         String  hiveServiceName,
+            @JsonProperty("roundReportPath")         String  roundReportPath) {
         this.cycleIntervalSeconds = cycleIntervalSeconds != null ? cycleIntervalSeconds : DEFAULT_CYCLE_INTERVAL_SECONDS;
         this.awsRegion = awsRegion != null ? awsRegion : DEFAULT_AWS_REGION;
         this.rangerAdminUrl = rangerAdminUrl;
@@ -103,6 +109,7 @@ public class SimulatorConfig {
         this.statusPort = statusPort != null ? statusPort : DEFAULT_STATUS_PORT;
         this.statusHost = statusHost != null ? statusHost : DEFAULT_STATUS_HOST;
         this.reproductionBundleDir = reproductionBundleDir != null ? reproductionBundleDir : "reproduction-bundles";
+        this.roundReportPath = (roundReportPath != null && !roundReportPath.isBlank()) ? roundReportPath : null;
         this.databases = databases;
         this.hiveServiceName      = hiveServiceName      != null ? hiveServiceName      : DEFAULT_HIVE_SERVICE_NAME;
         this.trinoServiceName     = trinoServiceName     != null ? trinoServiceName     : DEFAULT_TRINO_SERVICE_NAME;
@@ -131,6 +138,8 @@ public class SimulatorConfig {
     public int getStatusPort() { return statusPort; }
     public String getStatusHost() { return statusHost; }
     public String getReproductionBundleDir() { return reproductionBundleDir; }
+    /** Returns the round-by-round report path, or null if no report should be written. */
+    public String getRoundReportPath() { return roundReportPath; }
     /** Returns the configured databases map, or null if Glue discovery should be used. */
     public Map<String, List<String>> getDatabases() { return databases; }
     public String       getHiveServiceName()     { return hiveServiceName; }

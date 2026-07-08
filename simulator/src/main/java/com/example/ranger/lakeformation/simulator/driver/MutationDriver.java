@@ -105,6 +105,15 @@ public class MutationDriver {
     }
 
     /**
+     * Resolve an internal simulator policy ID (sim-policy-{nanoTime}) to the numeric ID
+     * assigned by Ranger at creation time. Returns the input unchanged if no mapping exists
+     * (e.g. the create failed, or the ID is already a Ranger numeric ID).
+     */
+    public String resolveRangerId(String internalId) {
+        return internalToRangerIdMap.getOrDefault(internalId, internalId);
+    }
+
+    /**
      * Returns the Ranger service name carried by a create/update operation's payload,
      * or null for operations (disable/enable/delete) that reference a policy by ID only.
      */

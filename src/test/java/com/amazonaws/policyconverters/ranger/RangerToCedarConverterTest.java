@@ -47,6 +47,7 @@ class RangerToCedarConverterTest {
     private RangerToCedarConverter converter;
     private RangerToCedarConverter hiveConverter;
     private RangerToCedarConverter emrSparkConverter;
+    private RangerToCedarConverter trinoConverter;
     private GapReporter gapReporter;
 
     @BeforeEach
@@ -81,6 +82,80 @@ class RangerToCedarConverterTest {
         emrRegistry.put("amazon-emr-spark", emrSparkAdapter);
         emrSparkConverter = new RangerToCedarConverter(emrRegistry, new PassthroughPrincipalMapper(),
                 new PassthroughCatalogResolver(), gapReporter, schemaProvider);
+
+        // Trino uses the catalog/schema/table resource hierarchy ("schema" == Glue database).
+        AwsContext trinoCtx = new AwsContext("us-east-1", "123456789012", "123456789012");
+        TrinoServiceAdapter trinoAdapter = new TrinoServiceAdapter(trinoCtx, "hive");
+        Map<String, SourcePolicyAdapter> trinoRegistry = new HashMap<>();
+        trinoRegistry.put("trino", trinoAdapter);
+        trinoConverter = new RangerToCedarConverter(trinoRegistry, new PassthroughPrincipalMapper(),
+                new PassthroughCatalogResolver(), gapReporter, schemaProvider);
+    }
+
+    /**
+     * Build a Trino table-level policy: catalog=hive, schema=testdb, table=testtable.
+     * Trino's resource keys are catalog/schema/table (no "database" key).
+     */
+    private static RangerPolicy buildTrinoTablePolicy() {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(3L);
+        policy.setName("test_trino_table_policy");
+        policy.setService("trino");
+        policy.setPolicyType(0);
+
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource catalogRes = new RangerPolicyResource();
+        catalogRes.setValues(Collections.singletonList("hive"));
+        resources.put("catalog", catalogRes);
+        RangerPolicyResource schemaRes = new RangerPolicyResource();
+        schemaRes.setValues(Collections.singletonList("testdb"));
+        resources.put("schema", schemaRes);
+        RangerPolicyResource tableRes = new RangerPolicyResource();
+        tableRes.setValues(Collections.singletonList("testtable"));
+        resources.put("table", tableRes);
+        policy.setResources(resources);
+
+        return policy;
+    }
+
+    @Test
+    void trinoTablePolicyProducesPermitStatements() {
+        // Regression: a Trino table-level policy (catalog/schema/table) must produce an LF grant.
+        // Previously expandResources only read the "database" key, so Trino's "schema" key was
+        // never resolved and the policy was dropped with "no resources resolved after expansion".
+        RangerPolicy policy = buildTrinoTablePolicy();
+        policy.setPolicyItems(Collections.singletonList(buildItem("alice", "alter")));
+
+        CedarPolicySet result = trinoConverter.convert(Collections.singletonList(policy));
+
+        assertTrue(result.getPermitCount() > 0,
+                "Trino table policy should produce permit statements (schema must map to database)");
+        assertTrue(result.toCedarString().contains("testtable"),
+                "Cedar output should reference the Trino table");
+    }
+
+    @Test
+    void trinoSchemaPolicyProducesPermitStatements() {
+        // Trino schema-level policy (catalog + schema, no table) → LF DATABASE grant.
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(4L);
+        policy.setName("test_trino_schema_policy");
+        policy.setService("trino");
+        policy.setPolicyType(0);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource catalogRes = new RangerPolicyResource();
+        catalogRes.setValues(Collections.singletonList("hive"));
+        resources.put("catalog", catalogRes);
+        RangerPolicyResource schemaRes = new RangerPolicyResource();
+        schemaRes.setValues(Collections.singletonList("testdb"));
+        resources.put("schema", schemaRes);
+        policy.setResources(resources);
+        policy.setPolicyItems(Collections.singletonList(buildItem("alice", "create")));
+
+        CedarPolicySet result = trinoConverter.convert(Collections.singletonList(policy));
+
+        assertTrue(result.getPermitCount() > 0,
+                "Trino schema policy should produce permit statements (schema must map to database)");
     }
 
     @Test

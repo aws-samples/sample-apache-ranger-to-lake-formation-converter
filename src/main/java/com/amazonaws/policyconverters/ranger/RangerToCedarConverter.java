@@ -237,6 +237,17 @@ public class RangerToCedarConverter {
 
         if (resourceCombinations.isEmpty()) {
             LOG.warn("Policy {} ({}) - no resources resolved after expansion", policyId, policyName);
+            // Record a gap so a silently-dropped policy is visible in the assessment/gap report
+            // and not lost to a WARN log line alone.
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.UNMAPPED_RESOURCE,
+                    buildResourcePath(policy),
+                    "Policy resources could not be resolved to any Lake Formation resource "
+                            + "after wildcard/catalog expansion (resource level '" + resourceLevel
+                            + "'). The policy produces no LF grants.",
+                    "Verify the policy's resource keys match the service definition and that any "
+                            + "wildcard patterns resolve against the Glue catalog."
+            ));
             return Collections.emptyList();
         }
 
@@ -556,7 +567,7 @@ public class RangerToCedarConverter {
             return combinations;
         }
 
-        List<String> dbPatterns = getResourceValues(resources, "database");
+        List<String> dbPatterns = getDatabaseValues(resources);
         if (dbPatterns.isEmpty()) {
             return combinations;
         }
@@ -715,6 +726,21 @@ public class RangerToCedarConverter {
             return Collections.emptyList();
         }
         return res.getValues();
+    }
+
+    /**
+     * Return the database-level resource values, accepting either the {@code database} key (Hive,
+     * LakeFormation, EMR Spark) or the {@code schema} key (Trino, Presto). Trino/Presto model the
+     * catalog→schema→table hierarchy, where "schema" is the Glue database. Without this fallback
+     * every Trino/Presto table- and schema-level policy resolves to zero resources and is silently
+     * dropped.
+     */
+    private List<String> getDatabaseValues(Map<String, RangerPolicyResource> resources) {
+        List<String> dbValues = getResourceValues(resources, "database");
+        if (!dbValues.isEmpty()) {
+            return dbValues;
+        }
+        return getResourceValues(resources, "schema");
     }
 
     private void recordCustomConditionGaps(RangerPolicy policy, String policyId, String policyName) {

@@ -22,5 +22,6 @@
   "cycleWaitTimeoutSeconds": 120,
   "statusHost": "localhost",
   "statusPort": 18080,
-  "reproductionBundleDir": "/tmp/ranger-sim/bundles"
+  "reproductionBundleDir": "/tmp/ranger-sim/bundles",
+  "roundReportPath": "/tmp/ranger-sim/round-report.txt"
 }

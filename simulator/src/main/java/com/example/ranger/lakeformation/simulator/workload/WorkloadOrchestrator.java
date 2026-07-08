@@ -28,6 +28,11 @@ public class WorkloadOrchestrator {
 
     private final List<String> existingPolicyIds;
     private final Map<String, GeneratorEntry> policyIdToGenerator;
+    // Resource node (db/table, catalog/schema/table, column, data-location, ...) each policy was
+    // CREATEd with. UPDATE reuses this so a policy's resource stays fixed for its lifetime —
+    // an UPDATE only varies principals/accesses/enabled, mirroring how real Ranger admins edit
+    // an existing policy rather than repurposing it onto an entirely different table.
+    private final Map<String, Object> policyIdToResource;
     private final List<GeneratorEntry> generators;
     private final int totalWeight;
     private final Random random;
@@ -36,6 +41,7 @@ public class WorkloadOrchestrator {
                                 List<GeneratorEntry> generators, Random random) {
         this.existingPolicyIds   = new ArrayList<>(existingPolicyIds);
         this.policyIdToGenerator = new HashMap<>();
+        this.policyIdToResource  = new HashMap<>();
         this.generators          = List.copyOf(generators);
         this.totalWeight         = generators.stream().mapToInt(GeneratorEntry::weight).sum();
         this.random              = random;
@@ -62,6 +68,9 @@ public class WorkloadOrchestrator {
             Map<String, Object> payload = entry.generator().generate(newId);
             existingPolicyIds.add(newId);
             policyIdToGenerator.put(newId, entry);
+            if (payload != null && payload.get("resources") != null) {
+                policyIdToResource.put(newId, payload.get("resources"));
+            }
             return new MutationOperation.CreatePolicy(Instant.now(), newId, payload);
         }
         if (existingPolicyIds.isEmpty()) return null;
@@ -69,6 +78,9 @@ public class WorkloadOrchestrator {
             String id = randomFrom(existingPolicyIds);
             GeneratorEntry entry = policyIdToGenerator.getOrDefault(id, pickGenerator());
             Map<String, Object> payload = entry.generator().generate(id);
+            // Pin the resource to the one this policy was created with, so an UPDATE only
+            // changes principals/accesses/enabled — not which table/database it targets.
+            payload = pinResource(id, payload);
             return new MutationOperation.UpdatePolicy(Instant.now(), id, payload);
         }
         if (roll < WEIGHT_DISABLE) {
@@ -83,9 +95,25 @@ public class WorkloadOrchestrator {
             String id = randomFrom(existingPolicyIds);
             existingPolicyIds.remove(id);
             policyIdToGenerator.remove(id);
+            policyIdToResource.remove(id);
             return new MutationOperation.DeletePolicy(Instant.now(), id);
         }
         return null;
+    }
+
+    /**
+     * Return a copy of {@code payload} with its {@code resources} node replaced by the resource
+     * the given policy was originally created with. If no original resource is recorded (e.g. the
+     * policy predates this run) or the payload has no resources, the payload is returned unchanged.
+     */
+    private Map<String, Object> pinResource(String id, Map<String, Object> payload) {
+        Object originalResource = policyIdToResource.get(id);
+        if (originalResource == null || payload == null || !payload.containsKey("resources")) {
+            return payload;
+        }
+        Map<String, Object> pinned = new LinkedHashMap<>(payload);
+        pinned.put("resources", originalResource);
+        return pinned;
     }
 
     private GeneratorEntry pickGenerator() {

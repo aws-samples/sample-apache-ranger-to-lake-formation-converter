@@ -252,7 +252,10 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
                                                    String column,
                                                    String dataLocation) {
         switch (resourceLevel) {
+            // "database" is the converter's canonical name for the schema/database level; Presto's
+            // own resource key is "schema". Accept both so the converter's database-level branch works.
             case "schema":
+            case "database":
                 return new CedarEntityRef("DataCatalog::Database", buildDatabaseArn(database));
             case "table":
                 return new CedarEntityRef("DataCatalog::Table", buildTableArn(database, table));

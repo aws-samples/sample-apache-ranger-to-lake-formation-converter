@@ -193,14 +193,27 @@ public class SimulatorMain {
         BundleWriter bundleWriter = new BundleWriter(Paths.get(config.getReproductionBundleDir()));
         AlertEmitter alertEmitter = new AlertEmitter.LogAlertEmitter();
 
+        // Optional human-readable round-by-round report (mutations, derived LF grants/revokes,
+        // full LF state per cycle). Enabled only when roundReportPath is set in the config.
+        RoundReporter roundReporter = config.getRoundReportPath() != null
+                ? new RoundReporter(Paths.get(config.getRoundReportPath()))
+                : null;
+        if (roundReporter != null) {
+            LOG.info("Round-by-round report enabled: {}", roundReporter.getReportPath());
+        }
+        // LF snapshot from the end of the previous cycle, used to derive this cycle's grants/revokes.
+        // Starts empty (round 0 baseline is a clean account).
+        Set<SimulatorPermission> previousLfState = new HashSet<>();
+
         List<String> allServiceNames = buildAllServiceNames(config);
 
         long cycleNumber = 0;
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                runOneCycle(cycleNumber, config, allServiceNames, rangerClient, mutationLog, orchestrator, mutationDriver,
+                previousLfState = runOneCycle(cycleNumber, config, allServiceNames, rangerClient, mutationLog, orchestrator, mutationDriver,
                         statusClient, cycleWaiter, remediationRunner, lfFetcher, s3AgFetcher,
-                        expectedComputer, phase1, phase2, bundleWriter, alertEmitter);
+                        expectedComputer, phase1, phase2, bundleWriter, alertEmitter,
+                        roundReporter, previousLfState);
                 cycleNumber++;
                 Thread.sleep(Duration.ofSeconds(config.getCycleIntervalSeconds()).toMillis());
             } catch (InterruptedException e) {
@@ -299,8 +312,13 @@ public class SimulatorMain {
         return names;
     }
 
+    /**
+     * Run one simulator cycle and return the LF permission snapshot observed at the end of the
+     * cycle (post-remediation if a violation occurred). The returned set becomes the next cycle's
+     * "previous state" for deriving grants/revokes in the round report.
+     */
     @SuppressWarnings("java:S107")
-    private void runOneCycle(long cycleNumber, SimulatorConfig config,
+    private Set<SimulatorPermission> runOneCycle(long cycleNumber, SimulatorConfig config,
                               List<String> allServiceNames,
                               RangerPolicyClient rangerClient, MutationLog mutationLog,
                               WorkloadOrchestrator orchestrator, MutationDriver mutationDriver,
@@ -309,7 +327,9 @@ public class SimulatorMain {
                               LFPermissionsFetcher lfFetcher, S3AgPermissionsFetcher s3AgFetcher,
                               ExpectedPermissionsComputer expectedComputer,
                               Phase1DriftValidator phase1, Phase2CorrectnessValidator phase2,
-                              BundleWriter bundleWriter, AlertEmitter alertEmitter) throws Exception {
+                              BundleWriter bundleWriter, AlertEmitter alertEmitter,
+                              RoundReporter roundReporter,
+                              Set<SimulatorPermission> previousLfState) throws Exception {
         LOG.info("=== Simulator cycle {} ===", cycleNumber);
 
         // Step 1: Record current sync cycle number
@@ -326,7 +346,12 @@ public class SimulatorMain {
             syncCycleAfter = cycleWaiter.waitForCycleAfter(syncCycleBefore);
         } catch (CycleTimeoutException e) {
             LOG.error("Sync cycle timeout: {}", e.getMessage());
-            return;
+            // No new LF snapshot observed — report the mutations against the unchanged state so
+            // the round still appears in the report, then carry the previous state forward.
+            // Ranger policies were not fetched this cycle; pass an empty list.
+            writeRound(roundReporter, cycleNumber, batch, mutationDriver,
+                    java.util.List.of(), previousLfState, previousLfState);
+            return previousLfState;
         }
 
         // Step 4: Fetch actual permissions (filtered to managed principals only)
@@ -360,7 +385,8 @@ public class SimulatorMain {
         if (!phase2Result.isViolation()) {
             phase1.updateCheckpoint(lfActual);
             LOG.info("Cycle {} complete — all permissions correct", cycleNumber);
-            return;
+            writeRound(roundReporter, cycleNumber, batch, mutationDriver, rangerPolicies, previousLfState, lfActual);
+            return lfActual;
         }
 
         // Step 7: Violation detected — write bundle and attempt remediation
@@ -383,13 +409,18 @@ public class SimulatorMain {
             alertEmitter.emit(new ValidationResult(ValidationResult.Outcome.PERSISTENT_VIOLATION,
                     phase2Result.overGrants(), phase2Result.underGrants(),
                     "Remediation timeout: " + e.getMessage()), bundle);
-            return;
+            // Report the round against the pre-remediation snapshot we did observe.
+            writeRound(roundReporter, cycleNumber, batch, mutationDriver, rangerPolicies, previousLfState, lfActual);
+            return lfActual;
         }
 
         // Re-validate after remediation
         Set<SimulatorPermission> lfAfterRemediation = new HashSet<>();
         lfAfterRemediation.addAll(lfFetcher.fetchAll());
         lfAfterRemediation.addAll(s3AgFetcher.fetchAll());
+        if (!managedArns.isEmpty()) {
+            lfAfterRemediation.removeIf(p -> !managedArns.contains(p.principalArn()));
+        }
         ValidationResult recheck = phase2.validate(lfAfterRemediation, rangerPolicies);
 
         if (!recheck.isViolation()) {
@@ -403,6 +434,31 @@ public class SimulatorMain {
                     recheck.overGrants(), recheck.underGrants(),
                     "Persistent violation after remediation cycle " + remediationCycle), bundle);
             LOG.error("PERSISTENT VIOLATION detected after remediation cycle {}", remediationCycle);
+        }
+        // Report against the post-remediation snapshot — the true end-of-cycle LF state.
+        writeRound(roundReporter, cycleNumber, batch, mutationDriver, rangerPolicies, previousLfState, lfAfterRemediation);
+        return lfAfterRemediation;
+    }
+
+    /**
+     * Emit one round to the report if reporting is enabled. Failures to write the report are
+     * logged but never abort the simulator — the report is a diagnostic aid, not core function.
+     *
+     * @param rangerPolicies current Ranger policies across all services (for the Ranger State
+     *                       section); may be empty if they could not be fetched this cycle.
+     */
+    private static void writeRound(RoundReporter reporter, long cycleNumber,
+                                   List<MutationOperation> batch, MutationDriver driver,
+                                   List<com.fasterxml.jackson.databind.JsonNode> rangerPolicies,
+                                   Set<SimulatorPermission> previousState,
+                                   Set<SimulatorPermission> currentState) {
+        if (reporter == null) {
+            return;
+        }
+        try {
+            reporter.appendRound(cycleNumber, batch, driver, rangerPolicies, previousState, currentState);
+        } catch (IOException e) {
+            LOG.warn("Failed to write round report for cycle {}: {}", cycleNumber, e.getMessage());
         }
     }
 }
