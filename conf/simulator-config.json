@@ -23,5 +23,6 @@
   "statusHost": "localhost",
   "statusPort": 18080,
   "reproductionBundleDir": "/tmp/ranger-sim/bundles",
-  "roundReportPath": "/tmp/ranger-sim/round-report.txt"
+  "roundReportPath": "/tmp/ranger-sim/round-report.txt",
+  "validateEmrSpark": true
 }

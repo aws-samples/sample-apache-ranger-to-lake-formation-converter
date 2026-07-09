@@ -206,7 +206,18 @@ public class ExpectedPermissionsComputer {
                 // INSERT/DELETE/ALTER etc. on a column resource are ignored by the sync service.
                 finalPerms = permissions.contains("SELECT") ? Set.of("SELECT") : Set.of();
             } else {
-                finalPerms = permissions;
+                // Filter to permissions valid at this resource level, mirroring the production
+                // service adapters (e.g. TrinoServiceAdapter.TABLE_VALID_ACTIONS /
+                // DATABASE_VALID_ACTIONS). Without this, a table-level policy with a "create"
+                // access type would emit (TABLE, CREATE_TABLE) — but CREATE_TABLE is a database
+                // permission that LF rejects on a table, so the sync service never grants it.
+                Set<String> valid = validActionsFor(spec.resourceType());
+                if (valid == null) {
+                    finalPerms = permissions; // no resource-level filter (e.g. DATA_LOCATION)
+                } else {
+                    finalPerms = new LinkedHashSet<>(permissions);
+                    finalPerms.retainAll(valid);
+                }
             }
             if (finalPerms.isEmpty()) continue;
             for (String arn : arns) {
@@ -345,6 +356,22 @@ public class ExpectedPermissionsComputer {
         Set<String> copy = new LinkedHashSet<>(perms);
         copy.remove("DESCRIBE");
         return copy;
+    }
+
+    // Permissions LF accepts at each resource level, mirroring the production service adapters'
+    // TABLE_VALID_ACTIONS / DATABASE_VALID_ACTIONS. CREATE_TABLE/CREATE_DATABASE are database-only;
+    // SELECT/INSERT/DELETE are table-only. The sync service drops out-of-level permissions, so the
+    // oracle must too or it produces phantom under-grants (e.g. table-level "create" → CREATE_TABLE).
+    private static final Set<String> TABLE_VALID_ACTIONS =
+            Set.of("SELECT", "INSERT", "DELETE", "DESCRIBE", "ALTER", "DROP");
+    private static final Set<String> DATABASE_VALID_ACTIONS =
+            Set.of("CREATE_TABLE", "CREATE_DATABASE", "ALTER", "DROP", "DESCRIBE");
+
+    private static Set<String> validActionsFor(String resourceType) {
+        if ("DATABASE".equals(resourceType)) return DATABASE_VALID_ACTIONS;
+        if ("TABLE".equals(resourceType)) return TABLE_VALID_ACTIONS;
+        // TABLE_WITH_COLUMNS is handled via the isColumn() branch; DATA_LOCATION passes through.
+        return null; // null = no filtering (data location / other)
     }
 
     private record ResourceSpec(String resourceType, String resourceId, boolean isColumn) {}

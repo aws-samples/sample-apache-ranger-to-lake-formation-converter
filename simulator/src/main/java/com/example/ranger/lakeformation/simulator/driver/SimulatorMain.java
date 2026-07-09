@@ -165,18 +165,22 @@ public class SimulatorMain {
         S3AgPermissionsFetcher s3AgFetcher = new S3AgPermissionsFetcher(s3ControlClient, accountId,
                 s3AgInstanceArn != null ? s3AgInstanceArn : "");
 
-        // Scope the validator to only the services the sync service actually processes.
-        // EMR Spark is only included when validateEmrSpark=true in the config (requires the
-        // sync service to have amazon-emr-spark in its rangerServices list).
-        Set<String> managedServiceNames;
+        // Scope the validator to the services the sync service actually converts to LF grants.
+        // The sync service (server-config-simulator-test.yaml, rangerServices) processes
+        // lakeformation, hive, and trino on every cycle, so all three must be in the oracle's
+        // expected set — otherwise their correctly-synced grants look like over-grants and their
+        // pending grants look like under-grants. EMR Spark stays gated behind validateEmrSpark
+        // because it is only synced when amazon-emr-spark is in the sync service's rangerServices
+        // list. EMRFS (S3 Access Grants) is validated separately via S3AgPermissionsFetcher, and
+        // tag policies produce no direct LF grants — both are intentionally excluded here.
+        Set<String> managedServiceNames = new HashSet<>();
+        managedServiceNames.add(config.getRangerServiceName().toLowerCase(java.util.Locale.ROOT));
+        managedServiceNames.add(config.getHiveServiceName().toLowerCase(java.util.Locale.ROOT));
+        managedServiceNames.add(config.getTrinoServiceName().toLowerCase(java.util.Locale.ROOT));
         if (config.isValidateEmrSpark()) {
-            managedServiceNames = Set.of(
-                    config.getRangerServiceName().toLowerCase(java.util.Locale.ROOT),
-                    config.getEmrSparkServiceName().toLowerCase(java.util.Locale.ROOT));
-        } else {
-            managedServiceNames = Set.of(
-                    config.getRangerServiceName().toLowerCase(java.util.Locale.ROOT));
+            managedServiceNames.add(config.getEmrSparkServiceName().toLowerCase(java.util.Locale.ROOT));
         }
+        managedServiceNames = Set.copyOf(managedServiceNames);
 
         // Use discovered/configured resource map for wildcard expansion in the independent validator
         ExpectedPermissionsComputer expectedComputer = new ExpectedPermissionsComputer(

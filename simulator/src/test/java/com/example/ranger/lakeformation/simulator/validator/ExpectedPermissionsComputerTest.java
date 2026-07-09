@@ -700,7 +700,12 @@ class ExpectedPermissionsComputerTest {
     // -----------------------------------------------------------------------
 
     @Test
-    void hiveCreateAccessTypeProducesCreateTablePermission() {
+    void hiveCreateAccessTypeOnTableProducesNoGrant() {
+        // CREATE_TABLE is a database-level LF permission. A hive "create" access on a TABLE
+        // resource is filtered out at table level by HiveServiceAdapter.TABLE_VALID_ACTIONS
+        // (which excludes CREATE_TABLE), so the sync service grants nothing — the oracle must
+        // match. Regression: previously the oracle emitted a phantom (TABLE, CREATE_TABLE),
+        // producing hundreds of false under-grants against real LF state.
         String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
                 + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
                 + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
@@ -711,12 +716,27 @@ class ExpectedPermissionsComputerTest {
 
         Set<SimulatorPermission> result = compute(json);
 
+        assertTrue(result.isEmpty(),
+                "hive 'create' on a TABLE resource must produce no LF grant (CREATE_TABLE is "
+                        + "database-only and is filtered at table level)");
+    }
+
+    @Test
+    void hiveCreateAccessTypeOnDatabaseProducesCreateTable() {
+        // The valid case: "create" on a database-only resource → (DATABASE, CREATE_TABLE).
+        String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"create\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+
+        Set<SimulatorPermission> result = compute(json);
+
         assertEquals(1, result.size());
         SimulatorPermission perm = result.iterator().next();
-        assertEquals("CREATE_TABLE", perm.permission(),
-                "hive 'create' must map to CREATE_TABLE");
-        assertEquals("TABLE", perm.resourceType(),
-                "CREATE_TABLE is a non-SELECT permission — resource type stays TABLE");
+        assertEquals("CREATE_TABLE", perm.permission(), "hive 'create' on a database → CREATE_TABLE");
+        assertEquals("DATABASE", perm.resourceType(), "CREATE_TABLE applies to the DATABASE resource");
     }
 
     @Test
