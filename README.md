@@ -1,6 +1,4 @@
 
-> This tool is work in progress although has enough implemented to provide benefits for customers. Please contact hocanint@amazon.com if you wish to contribute. 
-
 # Ranger Lake Formation Sync Plugin
 
 A Java utility that bridges Apache Ranger access control policies to AWS Lake Formation permissions. It converts Ranger's policy model (allow/deny rules on users, groups, roles) into Lake Formation's grant/revoke permission model via an intermediate Cedar policy representation, enabling organizations to manage Lake Formation permissions through Ranger Admin until customers can completely migrate to Lake Formation.
