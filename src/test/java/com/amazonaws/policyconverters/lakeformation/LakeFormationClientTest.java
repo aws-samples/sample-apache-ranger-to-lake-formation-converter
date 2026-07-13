@@ -443,7 +443,9 @@ class LakeFormationClientTest {
     // --- Bug fix: TABLE vs TABLE_WITH_COLUMNS conflict resolution ---
 
     @Test
-    void resolveTableColumnConflicts_mergesColumnPermissionsIntoTableGrant() {
+    void resolveTableColumnConflicts_noTableSelect_dropsColumnWithoutEscalating() {
+        // Table has INSERT/DELETE but NOT SELECT. A column SELECT must NOT be merged in — that
+        // would escalate to SELECT on all columns. The TWC is dropped; the TABLE grant is unchanged.
         LFResource tableResource = new LFResource("cat1", "db1", "tbl1", null, null);
         LFResource colResource = new LFResource("cat1", "db1", "tbl1",
                 new java.util.HashSet<>(Arrays.asList("col1")), null);
@@ -460,15 +462,42 @@ class LakeFormationClientTest {
         List<LFPermissionOperation> result =
                 LakeFormationClient.resolveTableColumnConflicts(Arrays.asList(tableOp, colOp));
 
-        assertEquals(1, result.size(), "TABLE_WITH_COLUMNS entry should be merged away");
-        LFPermissionOperation merged = result.get(0);
-        assertTrue(merged.getPermissions().contains(LFPermission.SELECT));
-        assertTrue(merged.getPermissions().contains(LFPermission.INSERT));
-        assertTrue(merged.getPermissions().contains(LFPermission.DELETE));
-        assertNotNull(merged.getResource().getTableName());
-        assertTrue(merged.getResource().getColumnNames() == null
-                || merged.getResource().getColumnNames().isEmpty(),
-                "Merged op should be TABLE-level (no columns)");
+        assertEquals(1, result.size(), "TABLE_WITH_COLUMNS entry should be dropped");
+        LFPermissionOperation survivor = result.get(0);
+        assertEquals(EnumSet.of(LFPermission.INSERT, LFPermission.DELETE), survivor.getPermissions(),
+                "TABLE grant must be unchanged — column SELECT must NOT be merged in (no escalation)");
+        assertTrue(survivor.getResource().getColumnNames() == null
+                || survivor.getResource().getColumnNames().isEmpty(),
+                "Survivor is the TABLE-level grant");
+    }
+
+    @Test
+    void resolveTableColumnConflicts_tableHasSelect_subsumesColumnGrant() {
+        // Table already has SELECT, which covers all columns. The column SELECT is redundant and
+        // dropped; the TABLE grant (SELECT, INSERT) is retained unchanged.
+        LFResource tableResource = new LFResource("cat1", "db1", "tbl1", null, null);
+        LFResource colResource = new LFResource("cat1", "db1", "tbl1",
+                new java.util.HashSet<>(Arrays.asList("col1")), null);
+
+        LFPermissionOperation tableOp = new LFPermissionOperation(
+                LFPermissionOperation.OperationType.GRANT, "p1",
+                "arn:aws:iam::123456789012:role/R", tableResource,
+                EnumSet.of(LFPermission.SELECT, LFPermission.INSERT), false);
+        LFPermissionOperation colOp = new LFPermissionOperation(
+                LFPermissionOperation.OperationType.GRANT, "p2",
+                "arn:aws:iam::123456789012:role/R", colResource,
+                EnumSet.of(LFPermission.SELECT), false);
+
+        List<LFPermissionOperation> result =
+                LakeFormationClient.resolveTableColumnConflicts(Arrays.asList(tableOp, colOp));
+
+        assertEquals(1, result.size(), "Redundant TABLE_WITH_COLUMNS entry should be dropped");
+        LFPermissionOperation survivor = result.get(0);
+        assertEquals(EnumSet.of(LFPermission.SELECT, LFPermission.INSERT), survivor.getPermissions(),
+                "TABLE grant retained unchanged");
+        assertTrue(survivor.getResource().getColumnNames() == null
+                || survivor.getResource().getColumnNames().isEmpty(),
+                "Survivor is the TABLE-level grant");
     }
 
     @Test

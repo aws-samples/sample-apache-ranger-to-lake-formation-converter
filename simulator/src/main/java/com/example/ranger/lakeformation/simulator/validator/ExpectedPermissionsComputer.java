@@ -91,25 +91,33 @@ public class ExpectedPermissionsComputer {
         });
 
         // Pass 3: TABLE/TWC conflict resolution (mirrors SyncService.detectAndGapTableTwcConflicts).
-        // For each (principalArn, resourceId) that has both TABLE and TABLE_WITH_COLUMNS entries,
-        // the type whose minimum policy ID is lower wins; all permissions from the losing type
-        // are removed from the expected set.
+        // For each (principalArn, resourceId) that has both a TABLE grant and a TWC grant:
+        //   Rule B (subsumption): if any TABLE permission is SELECT, a table-level SELECT covers
+        //     every column, so the column-restricted TWC SELECT is redundant — drop the TWC and
+        //     keep all TABLE permissions. Not a real conflict.
+        //   Rule A (genuine conflict): otherwise the lowest active policy id decides the winning
+        //     TYPE. If TWC has the lower id, TWC wins and all TABLE perms are removed; otherwise
+        //     the TWC perms are removed and all TABLE perms win.
+        // At this point a bare-table SELECT is still (TABLE, SELECT) — the display rewrite to
+        // TABLE_WITH_COLUMNS happens afterwards — so "table has SELECT" is detected correctly here.
         Map<String, Long> tableMinId = new HashMap<>();   // key → min policyId for TABLE perms
         Map<String, Long> twcMinId   = new HashMap<>();   // key → min policyId for TWC perms
+        Set<String> tableSelectKeys  = new HashSet<>();   // keys with a TABLE-level SELECT
 
         for (SimulatorPermission p : permits) {
             String key = p.principalArn() + "|" + p.resourceId();
             long id = permToMinPolicyId.getOrDefault(p, Long.MAX_VALUE);
-            if ("TABLE_WITH_COLUMNS".equals(p.resourceType()) && "SELECT".equals(p.permission())
-                    && !p.resourceId().endsWith(".*")) {
-                // TWC permission (column-restricted SELECT — not a bare table SELECT)
+            if (isTwcPerm(p)) {
                 twcMinId.merge(key, id, Math::min);
             } else if ("TABLE".equals(p.resourceType())) {
                 tableMinId.merge(key, id, Math::min);
+                if ("SELECT".equals(p.permission())) {
+                    tableSelectKeys.add(key);
+                }
             }
         }
 
-        // Find keys that have both TABLE and TWC entries — conflict exists
+        // Keys that have both TABLE and TWC entries — a conflict to resolve.
         Set<String> conflictKeys = new HashSet<>(tableMinId.keySet());
         conflictKeys.retainAll(twcMinId.keySet());
 
@@ -117,22 +125,23 @@ public class ExpectedPermissionsComputer {
             permits.removeIf(p -> {
                 String key = p.principalArn() + "|" + p.resourceId();
                 if (!conflictKeys.contains(key)) return false;
+                boolean isTablePerm = "TABLE".equals(p.resourceType());
+                boolean isTwcPerm   = isTwcPerm(p);
+                if (!isTablePerm && !isTwcPerm) return false;
+
+                // Rule B: table-level SELECT subsumes the TWC → drop only the TWC.
+                if (tableSelectKeys.contains(key)) {
+                    return isTwcPerm;
+                }
+
+                // Rule A: lowest-id type wins the whole (principal, table).
                 long tId = tableMinId.get(key);
                 long wId = twcMinId.get(key);
-                long permId = permToMinPolicyId.getOrDefault(p, Long.MAX_VALUE);
-                boolean isTablePerm = "TABLE".equals(p.resourceType());
-                boolean isTwcPerm   = "TABLE_WITH_COLUMNS".equals(p.resourceType())
-                        && "SELECT".equals(p.permission()) && !p.resourceId().endsWith(".*");
-                if (!isTablePerm && !isTwcPerm) return false;
-                // Same minimum ID: one policy expands to both types — not an inter-policy conflict.
-                if (tId == wId) return false;
-                // The side with the higher minimum policy ID loses
+                if (tId == wId) return false; // one policy expands to both types — not inter-policy
                 if (tId < wId) {
-                    // TABLE wins — remove TWC permissions for this key
-                    return isTwcPerm && permId >= wId;
+                    return isTwcPerm;   // TABLE type wins — remove TWC
                 } else {
-                    // TWC wins — remove TABLE permissions for this key
-                    return isTablePerm && permId >= tId;
+                    return isTablePerm; // TWC type wins — remove TABLE
                 }
             });
         }
@@ -372,6 +381,16 @@ public class ExpectedPermissionsComputer {
         if ("TABLE".equals(resourceType)) return TABLE_VALID_ACTIONS;
         // TABLE_WITH_COLUMNS is handled via the isColumn() branch; DATA_LOCATION passes through.
         return null; // null = no filtering (data location / other)
+    }
+
+    /**
+     * True for a genuine column-restricted TWC SELECT permission (not a bare-table SELECT, which
+     * is TABLE-class until the final display normalization, and not a wildcard-table entry).
+     */
+    private static boolean isTwcPerm(SimulatorPermission p) {
+        return "TABLE_WITH_COLUMNS".equals(p.resourceType())
+                && "SELECT".equals(p.permission())
+                && !p.resourceId().endsWith(".*");
     }
 
     private record ResourceSpec(String resourceType, String resourceId, boolean isColumn) {}

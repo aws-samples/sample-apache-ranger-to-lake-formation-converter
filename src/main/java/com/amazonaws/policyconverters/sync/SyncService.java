@@ -35,6 +35,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -957,66 +958,65 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(op);
         }
 
-        Set<String> losingPolicyIds = new HashSet<>();
+        // Operations to remove, collected by object identity so that suppressing a losing TWC
+        // does not affect a same-policy grant on a different table. (A single Ranger policy can
+        // produce grants for many tables; only the conflicting ones must be dropped.)
+        Set<LFPermissionOperation> losingOps = Collections.newSetFromMap(new IdentityHashMap<>());
         Set<String> currentConflictKeys = new HashSet<>();
 
         for (Map.Entry<String, List<LFPermissionOperation>> entry : grouped.entrySet()) {
             List<LFPermissionOperation> group = entry.getValue();
-            boolean hasTable = group.stream().anyMatch(o -> o.getResource().getColumnNames() == null);
-            boolean hasTwc   = group.stream().anyMatch(o -> o.getResource().getColumnNames() != null
-                    && !o.getResource().getColumnNames().isEmpty());
-            if (!hasTable || !hasTwc) {
+            List<LFPermissionOperation> tableOps = new ArrayList<>();
+            List<LFPermissionOperation> twcOps = new ArrayList<>();
+            for (LFPermissionOperation op : group) {
+                Set<String> cols = op.getResource().getColumnNames();
+                if (cols == null || cols.isEmpty()) {
+                    tableOps.add(op);
+                } else {
+                    twcOps.add(op);
+                }
+            }
+            if (tableOps.isEmpty() || twcOps.isEmpty()) {
+                continue; // no cross-type coexistence → nothing to resolve
+            }
+
+            // Rule B (subsumption): a TABLE-level SELECT grants SELECT on every column, which fully
+            // covers any column-restricted TWC SELECT (TWC grants are SELECT-only). So if any table
+            // op already carries SELECT, the TWC adds no access — drop it silently as redundant, not
+            // as a conflict. All table permissions are retained (they merge naturally via the diff).
+            boolean tableHasSelect = tableOps.stream()
+                    .anyMatch(o -> o.getPermissions().contains(LFPermission.SELECT));
+            if (tableHasSelect) {
+                losingOps.addAll(twcOps);
                 continue;
             }
 
-            // Conflict detected. Lower policy ID wins.
+            // Rule A (genuine conflict): no table-level SELECT exists, so TABLE and TWC grants are
+            // irreconcilable. The lowest active policy id decides the winning TYPE (created first):
+            // if it is a TWC grant, TWC wins and all table grants are rejected; otherwise the TWC
+            // grants are rejected and all table grants win. All ops of the winning type are kept.
             String conflictKey = entry.getKey();
             currentConflictKeys.add(conflictKey);
 
-            // Determine winning policy ID (lowest numeric value; non-numeric IDs sort lexically
-            // after numeric ones so they naturally lose to a numeric winner).
-            String winningPolicyId = null;
-            long winningNumeric = Long.MAX_VALUE;
-            for (LFPermissionOperation op : group) {
-                String rawId = op.getSourcePolicyId(); // "serviceType:policyId" or bare id
-                String idPart = rawId != null && rawId.contains(":")
-                        ? rawId.substring(rawId.lastIndexOf(':') + 1) : rawId;
-                long numeric;
-                try {
-                    numeric = Long.parseLong(idPart);
-                } catch (NumberFormatException e) {
-                    numeric = Long.MAX_VALUE;
-                }
-                if (winningPolicyId == null || numeric < winningNumeric
-                        || (numeric == winningNumeric && rawId.compareTo(winningPolicyId) < 0)) {
-                    winningNumeric = numeric;
-                    winningPolicyId = rawId;
-                }
-            }
-
-            for (LFPermissionOperation op : group) {
-                if (!op.getSourcePolicyId().equals(winningPolicyId)) {
-                    losingPolicyIds.add(op.getSourcePolicyId());
-                }
-            }
+            boolean twcWins = lowestPolicyId(twcOps) < lowestPolicyId(tableOps);
+            List<LFPermissionOperation> losers = twcWins ? tableOps : twcOps;
+            String winningType = twcWins ? "TABLE_WITH_COLUMNS" : "TABLE";
+            losingOps.addAll(losers);
 
             boolean isNew = activeConflicts.add(conflictKey);
             if (isNew) {
-                // Log every losing operation to the dead-letter once.
-                for (LFPermissionOperation op : group) {
-                    if (!op.getSourcePolicyId().equals(winningPolicyId)) {
-                        String msg = "CONFLICTING_LF_RESOURCE_TYPE: TABLE and TABLE_WITH_COLUMNS"
-                                + " grants cannot coexist for the same (principal, table)."
-                                + " Winning policyId=" + winningPolicyId
-                                + ". Resolve by removing one of the conflicting Ranger policies.";
-                        deadLetterLogger.logGapOperation(op, msg);
-                        LOG.warn("TABLE/TWC conflict detected: principal={}, table={}/{}, "
-                                + "losingPolicyId={}, winningPolicyId={}",
-                                op.getPrincipalArn(),
-                                op.getResource().getDatabaseName(),
-                                op.getResource().getTableName(),
-                                op.getSourcePolicyId(), winningPolicyId);
-                    }
+                for (LFPermissionOperation op : losers) {
+                    String msg = "CONFLICTING_LF_RESOURCE_TYPE: TABLE and TABLE_WITH_COLUMNS"
+                            + " grants cannot coexist for the same (principal, table) when no"
+                            + " table-level SELECT is present. Winning type=" + winningType
+                            + ". Resolve by removing one of the conflicting Ranger policies.";
+                    deadLetterLogger.logGapOperation(op, msg);
+                    LOG.warn("TABLE/TWC conflict detected: principal={}, table={}/{}, "
+                            + "losingPolicyId={}, winningType={}",
+                            op.getPrincipalArn(),
+                            op.getResource().getDatabaseName(),
+                            op.getResource().getTableName(),
+                            op.getSourcePolicyId(), winningType);
                 }
             }
         }
@@ -1029,17 +1029,42 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             LOG.info("TABLE/TWC conflict resolved: {}", key);
         }
 
-        if (losingPolicyIds.isEmpty()) {
+        if (losingOps.isEmpty()) {
             return operations;
         }
 
         List<LFPermissionOperation> filtered = new ArrayList<>(operations.size());
         for (LFPermissionOperation op : operations) {
-            if (!losingPolicyIds.contains(op.getSourcePolicyId())) {
+            if (!losingOps.contains(op)) {
                 filtered.add(op);
             }
         }
         return filtered;
+    }
+
+    /**
+     * Lowest numeric source-policy id among the given operations. A source id is
+     * {@code "serviceType:policyId"} or a bare id; non-numeric ids sort after all numeric ones
+     * (return {@link Long#MAX_VALUE}) so a numeric id always wins the tie-break. Returns
+     * {@code Long.MAX_VALUE} for an empty list.
+     */
+    private static long lowestPolicyId(List<LFPermissionOperation> ops) {
+        long lowest = Long.MAX_VALUE;
+        for (LFPermissionOperation op : ops) {
+            String rawId = op.getSourcePolicyId();
+            String idPart = rawId != null && rawId.contains(":")
+                    ? rawId.substring(rawId.lastIndexOf(':') + 1) : rawId;
+            long numeric;
+            try {
+                numeric = Long.parseLong(idPart);
+            } catch (NumberFormatException e) {
+                numeric = Long.MAX_VALUE;
+            }
+            if (numeric < lowest) {
+                lowest = numeric;
+            }
+        }
+        return lowest;
     }
 
     /**

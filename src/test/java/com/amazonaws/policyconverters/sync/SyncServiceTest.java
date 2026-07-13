@@ -30,6 +30,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -780,11 +781,12 @@ class SyncServiceTest {
     // ---------------------------------------------------------------
 
     /**
-     * TABLE op for policy 100 + TWC op for policy 200 on the same (principal, table).
-     * Lower ID (100) wins; policy 200 (TWC) is suppressed and logged as GAP.
+     * TABLE SELECT (policy 100) + TWC SELECT (policy 200) on the same (principal, table).
+     * The table-level SELECT subsumes the column-restricted TWC SELECT (Rule B), so the TWC is
+     * dropped as redundant — silently, NOT as a conflict/gap — and the TABLE op is applied.
      */
     @Test
-    void tableTwcConflict_lowerIdWins_loserSuppressedAndGapped() {
+    void tableTwcConflict_tableSelectSubsumesTwc_noGap() {
         BaseRangerService mockRangerService = mock(BaseRangerService.class);
         when(mockRangerService.getServiceType()).thenReturn("lakeformation");
         when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
@@ -824,23 +826,22 @@ class SyncServiceTest {
 
         svc.executeSyncCycle();
 
-        // applyBatch must only see the winning (TABLE) op
+        // applyBatch must only see the surviving TABLE op; the redundant TWC is dropped.
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
         verify(lakeFormationClient).applyBatch(captor.capture(), eq(deadLetterLogger));
         List<LFPermissionOperation> applied = captor.getValue();
-        assertEquals(1, applied.size(), "Only the winning op should reach applyBatch");
+        assertEquals(1, applied.size(), "Only the TABLE op should reach applyBatch");
         assertEquals("lakeformation:100", applied.get(0).getSourcePolicyId());
 
-        // Dead-letter must have a GAP entry for the losing TWC op
-        ArgumentCaptor<LFPermissionOperation> gapCaptor = ArgumentCaptor.forClass(LFPermissionOperation.class);
-        verify(deadLetterLogger).logGapOperation(gapCaptor.capture(), contains("CONFLICTING_LF_RESOURCE_TYPE"));
-        assertEquals("lakeformation:200", gapCaptor.getValue().getSourcePolicyId());
+        // Subsumption is not a conflict — no dead-letter gap should be logged.
+        verify(deadLetterLogger, never()).logGapOperation(any(), anyString());
     }
 
     /**
-     * TWC op for policy 50 + TABLE op for policy 300 on the same (principal, table).
-     * TWC has the lower ID (50) → TWC wins, TABLE loses.
+     * Genuine conflict (no table-level SELECT, so Rule B does not apply): TWC SELECT (policy 50)
+     * + TABLE INSERT (policy 300) on the same (principal, table). TWC has the lower id → the TWC
+     * TYPE wins, the TABLE op loses and is gapped.
      */
     @Test
     void tableTwcConflict_twcWinsWhenItHasLowerId() {
@@ -870,11 +871,12 @@ class SyncServiceTest {
                 OperationType.GRANT, "lakeformation:50", "arn:aws:iam::123:role/analyst",
                 twcRes, EnumSet.of(LFPermission.SELECT), false);
 
-        // TABLE op — policy 300 (higher → loses)
+        // TABLE op — policy 300 (higher id). INSERT (no SELECT) so Rule B subsumption does NOT
+        // apply and this stays a genuine conflict; the higher-id TABLE type loses.
         LFResource tableRes = new LFResource("cat", "db", "events", null, null);
         LFPermissionOperation tableOp = new LFPermissionOperation(
                 OperationType.GRANT, "lakeformation:300", "arn:aws:iam::123:role/analyst",
-                tableRes, EnumSet.of(LFPermission.SELECT), false);
+                tableRes, EnumSet.of(LFPermission.INSERT), false);
 
         when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(twcOp, tableOp));
         when(lakeFormationClient.applyBatch(anyList(), any()))
@@ -918,10 +920,12 @@ class SyncServiceTest {
         when(mockPs.getForbidCount()).thenReturn(0);
         when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
 
+        // TABLE INSERT (no SELECT) so Rule B does not subsume the TWC — this stays a genuine
+        // conflict, which is what "gap logged only once" is meant to exercise.
         LFResource tableRes = new LFResource("cat", "db", "sales", null, null);
         LFPermissionOperation tableOp = new LFPermissionOperation(
                 OperationType.GRANT, "lakeformation:10", "arn:aws:iam::123:role/analyst",
-                tableRes, EnumSet.of(LFPermission.SELECT), false);
+                tableRes, EnumSet.of(LFPermission.INSERT), false);
         LFResource twcRes = new LFResource("cat", "db", "sales",
                 java.util.Set.of("amount"), null);
         LFPermissionOperation twcOp = new LFPermissionOperation(
@@ -988,6 +992,138 @@ class SyncServiceTest {
         ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
         verify(lakeFormationClient).applyBatch(captor.capture(), eq(deadLetterLogger));
         assertEquals(2, captor.getValue().size());
+        verify(deadLetterLogger, never()).logGapOperation(any(), anyString());
+    }
+
+    /**
+     * Multi-policy conflict (the multi-service case that exposed the bug): THREE table grants
+     * from different policies + one TWC, none of the table grants being SELECT. Regression: the
+     * old code kept only the single lowest-id policy and dropped the other valid TABLE grants.
+     * Correct behavior: all TABLE grants survive (they merge), only the TWC is rejected/gapped.
+     */
+    @Test
+    void tableTwcConflict_multipleTablePolicies_allTableGrantsSurvive() {
+        BaseRangerService mockRangerService = mock(BaseRangerService.class);
+        when(mockRangerService.getServiceType()).thenReturn("lakeformation");
+        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
+        when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
+        when(mockRangerService.getLatestPolicies()).thenReturn(createServicePolicies(1L, 1));
+
+        SyncService svc = new SyncService(
+                Collections.singletonList(mockRangerService),
+                rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger,
+                null, null);
+        svc.start(syncConfig);
+
+        CedarPolicySet mockPs = mock(CedarPolicySet.class);
+        when(mockPs.getPermitCount()).thenReturn(4);
+        when(mockPs.getForbidCount()).thenReturn(0);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
+
+        String principal = "arn:aws:iam::123:role/etl_user";
+        LFResource tableRes = new LFResource("cat", "db", "sessions", null, null);
+        // Lowest id (12) is a TABLE op → TABLE type wins. No table SELECT, so Rule B is inactive.
+        LFPermissionOperation t12 = new LFPermissionOperation(OperationType.GRANT,
+                "trino:12", principal, tableRes, EnumSet.of(LFPermission.DESCRIBE), false);
+        LFPermissionOperation t22 = new LFPermissionOperation(OperationType.GRANT,
+                "lakeformation:22", principal, tableRes, EnumSet.of(LFPermission.DELETE, LFPermission.ALTER), false);
+        LFPermissionOperation t27 = new LFPermissionOperation(OperationType.GRANT,
+                "hive:27", principal, tableRes, EnumSet.of(LFPermission.INSERT), false);
+        // The single TWC op (id 41) must lose.
+        LFResource twcRes = new LFResource("cat", "db", "sessions", java.util.Set.of("name"), null);
+        LFPermissionOperation twc41 = new LFPermissionOperation(OperationType.GRANT,
+                "amazon-emr-spark:41", principal, twcRes, EnumSet.of(LFPermission.SELECT), false);
+
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(t12, t22, t27, twc41));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Arrays.asList("trino:12", "lakeformation:22", "hive:27"),
+                        Collections.emptyList(), 3, 3, 0));
+
+        svc.executeSyncCycle();
+
+        // computeDiff consolidates all atoms for one (principal, resource) into a single grant op,
+        // so assert on the merged permission set rather than counting ops. All THREE table grants'
+        // permissions must survive; the TWC's SELECT must NOT appear as a table-level grant.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor.capture(), eq(deadLetterLogger));
+        List<LFPermissionOperation> applied = captor.getValue();
+        Set<LFPermission> tablePerms = applied.stream()
+                .filter(op -> op.getResource().getColumnNames() == null)
+                .flatMap(op -> op.getPermissions().stream())
+                .collect(Collectors.toSet());
+        assertEquals(EnumSet.of(LFPermission.DESCRIBE, LFPermission.DELETE,
+                        LFPermission.ALTER, LFPermission.INSERT), tablePerms,
+                "All three TABLE grants' permissions must survive the conflict resolution");
+        boolean anyTwcApplied = applied.stream().anyMatch(op ->
+                op.getResource().getColumnNames() != null && !op.getResource().getColumnNames().isEmpty());
+        assertFalse(anyTwcApplied, "The losing TWC op must not be applied");
+
+        // Exactly the TWC op is gapped.
+        verify(deadLetterLogger, times(1)).logGapOperation(
+                argThat(op -> "amazon-emr-spark:41".equals(op.getSourcePolicyId())),
+                contains("CONFLICTING_LF_RESOURCE_TYPE"));
+    }
+
+    /**
+     * Rule B with a non-SELECT table permission present alongside a table SELECT: the TWC is still
+     * subsumed by the table SELECT (silently dropped), and the table INSERT is retained.
+     */
+    @Test
+    void tableTwcConflict_tableSelectPlusInsertSubsumesTwc() {
+        BaseRangerService mockRangerService = mock(BaseRangerService.class);
+        when(mockRangerService.getServiceType()).thenReturn("lakeformation");
+        when(mockRangerService.getServiceInstanceName()).thenReturn("lakeformation-instance");
+        when(mockRangerService.getLastKnownGoodPolicies()).thenReturn(Collections.emptyList());
+        when(mockRangerService.getLatestPolicies()).thenReturn(createServicePolicies(1L, 1));
+
+        SyncService svc = new SyncService(
+                Collections.singletonList(mockRangerService),
+                rangerToCedarConverter, cedarToLFConverter,
+                lakeFormationClient, gapReporter, deadLetterLogger,
+                null, null);
+        svc.start(syncConfig);
+
+        CedarPolicySet mockPs = mock(CedarPolicySet.class);
+        when(mockPs.getPermitCount()).thenReturn(3);
+        when(mockPs.getForbidCount()).thenReturn(0);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPs);
+
+        String principal = "arn:aws:iam::123:role/analyst";
+        LFResource tableRes = new LFResource("cat", "db", "orders", null, null);
+        // TWC has the LOWEST id (5) — but a table SELECT exists, so subsumption (Rule B) applies
+        // regardless of ids: the TWC is dropped, both table perms kept. Tie-break is NOT consulted.
+        LFResource twcRes = new LFResource("cat", "db", "orders", java.util.Set.of("amount"), null);
+        LFPermissionOperation twc5 = new LFPermissionOperation(OperationType.GRANT,
+                "amazon-emr-spark:5", principal, twcRes, EnumSet.of(LFPermission.SELECT), false);
+        LFPermissionOperation tableSelect = new LFPermissionOperation(OperationType.GRANT,
+                "lakeformation:30", principal, tableRes, EnumSet.of(LFPermission.SELECT), false);
+        LFPermissionOperation tableInsert = new LFPermissionOperation(OperationType.GRANT,
+                "hive:40", principal, tableRes, EnumSet.of(LFPermission.INSERT), false);
+
+        when(cedarToLFConverter.convert(mockPs)).thenReturn(Arrays.asList(twc5, tableSelect, tableInsert));
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Arrays.asList("lakeformation:30", "hive:40"),
+                        Collections.emptyList(), 2, 2, 0));
+
+        svc.executeSyncCycle();
+
+        // The two table grants consolidate into one op carrying {SELECT, INSERT}; the TWC is
+        // subsumed and never applied, even though it had the lowest id.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LFPermissionOperation>> captor = ArgumentCaptor.forClass(List.class);
+        verify(lakeFormationClient).applyBatch(captor.capture(), eq(deadLetterLogger));
+        List<LFPermissionOperation> applied = captor.getValue();
+        Set<LFPermission> tablePerms = applied.stream()
+                .filter(op -> op.getResource().getColumnNames() == null)
+                .flatMap(op -> op.getPermissions().stream())
+                .collect(Collectors.toSet());
+        assertEquals(EnumSet.of(LFPermission.SELECT, LFPermission.INSERT), tablePerms,
+                "Both TABLE grants' permissions kept");
+        boolean anyTwcApplied = applied.stream().anyMatch(op ->
+                op.getResource().getColumnNames() != null && !op.getResource().getColumnNames().isEmpty());
+        assertFalse(anyTwcApplied, "TWC subsumed by table SELECT even though TWC has the lower id");
         verify(deadLetterLogger, never()).logGapOperation(any(), anyString());
     }
 

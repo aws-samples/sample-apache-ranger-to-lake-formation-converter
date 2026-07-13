@@ -20,11 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsRequest;
 import software.amazon.awssdk.services.lakeformation.model.BatchGrantPermissionsResponse;
-import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsFailureEntry;
-import software.amazon.awssdk.services.lakeformation.model.BatchPermissionsRequestEntry;
 import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsRequest;
-import software.amazon.awssdk.services.lakeformation.model.BatchRevokePermissionsResponse;
-import software.amazon.awssdk.services.lakeformation.model.ErrorDetail;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -44,25 +40,20 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Regression test for Bug 2: "Permissions modification is invalid" on REVOKE retried forever.
+ * Regression test for Bug 2 ("Permissions modification is invalid" on REVOKE retried forever),
+ * now guarded at its root cause by the TABLE/TWC subsumption rule.
  *
- * Scenario:
- *   Cycle 1 — Ranger policy produces both TABLE-level and COLUMN-level SELECT grants.
- *             resolveTableColumnConflicts (inside applyBatch) merges them, but the
- *             checkpoint (previousOperations) stores the raw cedarToLFConverter output:
- *             [tableGrant, colGrant].
+ * <p>When a Ranger policy produces both a TABLE-level SELECT and a same-table COLUMN-level SELECT,
+ * {@code SyncService.detectAndGapTableTwcConflicts} recognizes that the table SELECT subsumes the
+ * column grant and drops the redundant TWC <em>before</em> the diff/checkpoint. So the checkpoint
+ * only ever holds the TABLE op, the phantom column REVOKE that Bug 2 hinged on is never generated,
+ * and steady state issues no further API calls.
  *
- *   Cycle 2 — COLUMN resource gone from current ops. diff generates REVOKE for colGrant.
- *             LF rejects with "Permissions modification is invalid" because the actual
- *             stored grant is table-level (not column-scoped).
- *
- *   Before fix: this REVOKE failure added the shared sourcePolicyId to failedPolicies,
- *               which also evicted tableGrant from the next previousOperations snapshot.
- *               Cycle 3 saw tableGrant as "new" and re-issued the grant — indefinitely.
- *
- *   After fix:  "Permissions modification is invalid" is treated as a no-op revoke.
- *               failedPolicies stays empty. previousOperations advances to [tableGrant].
- *               Cycle 3 produces no diff → no API calls.
+ * <p>Scenario:
+ *   Cycle 1 — policy emits TABLE SELECT + COLUMN SELECT; only the TABLE grant is applied and
+ *             checkpointed (the column grant is subsumed).
+ *   Cycle 2 — COLUMN gone from the source; since it was never checkpointed there is no REVOKE.
+ *   Cycle 3 — no delta → no API calls.
  */
 @ExtendWith(MockitoExtension.class)
 class ColumnRevokeIdempotencyTest {
@@ -100,7 +91,7 @@ class ColumnRevokeIdempotencyTest {
     }
 
     @Test
-    void columnRevokeAfterTableMerge_treatedAsNoOp_checkpointAdvances() {
+    void tableSelectSubsumesColumnGrant_noPhantomRevoke_checkpointHoldsTableOnly() {
         LFResource tableResource = new LFResource(CATALOG_ID, "db1", "tbl1", null, null);
         LFResource colResource = new LFResource(
                 CATALOG_ID, "db1", "tbl1",
@@ -118,49 +109,37 @@ class ColumnRevokeIdempotencyTest {
                 .thenReturn(Arrays.asList(tableGrant, colGrant))  // cycle 1
                 .thenReturn(Collections.singletonList(tableGrant)); // cycle 2 and 3
 
-        // --- Cycle 1: SyncService applies resolveTableColumnConflicts to currentOperations
-        //     Grant batch succeeds, checkpoint = [tableGrant, colGrant] ---
         when(awsSdkClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class)))
                 .thenReturn(BatchGrantPermissionsResponse.builder()
                         .failures(Collections.emptyList()).build());
 
+        // --- Cycle 1: the table SELECT subsumes the column SELECT before diffing, so only the
+        //     TABLE grant is applied and checkpointed — the redundant TWC never lands. ---
         syncService.onPoliciesUpdated(makeServicePolicies(1L));
 
         verify(awsSdkClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
         verify(awsSdkClient, never()).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
 
         List<LFPermissionOperation> afterCycle1 = syncService.getPreviousOperations();
-        assertEquals(2, afterCycle1.size(),
-                "Checkpoint after cycle 1 must hold both TABLE and COLUMN ops");
+        assertEquals(1, afterCycle1.size(),
+                "Checkpoint after cycle 1 holds only the TABLE op (column grant subsumed)");
+        assertNull(afterCycle1.get(0).getResource().getColumnNames(),
+                "Checkpointed op must be the TABLE-level grant (no column restriction)");
 
-        // --- Cycle 2: COLUMN gone, diff emits REVOKE for colGrant.
-        //     LF rejects with "Permissions modification is invalid". ---
-        BatchPermissionsFailureEntry invalidRevokeFailure = BatchPermissionsFailureEntry.builder()
-                .requestEntry(BatchPermissionsRequestEntry.builder().id("revoke-0").build())
-                .error(ErrorDetail.builder()
-                        .errorMessage("Permissions modification is invalid")
-                        .build())
-                .build();
-        when(awsSdkClient.batchRevokePermissions(any(BatchRevokePermissionsRequest.class)))
-                .thenReturn(BatchRevokePermissionsResponse.builder()
-                        .failures(Collections.singletonList(invalidRevokeFailure)).build());
-
+        // --- Cycle 2: COLUMN gone from the source. Because it was never checkpointed, there is no
+        //     phantom REVOKE — the Bug-2 trigger is eliminated at the root. No new API calls. ---
         syncService.onPoliciesUpdated(makeServicePolicies(2L));
 
-        verify(awsSdkClient, times(1)).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
+        verify(awsSdkClient, never()).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
         verify(awsSdkClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
 
-        // With the fix: failedPolicies is empty → previousOperations = [tableGrant].
         List<LFPermissionOperation> afterCycle2 = syncService.getPreviousOperations();
-        assertEquals(1, afterCycle2.size(),
-                "Checkpoint after cycle 2 must contain only the TABLE op.");
-        assertNull(afterCycle2.get(0).getResource().getColumnNames(),
-                "Surviving op must be the TABLE-level grant (no column restriction)");
+        assertEquals(1, afterCycle2.size(), "Checkpoint still holds only the TABLE op");
 
-        // --- Cycle 3: no delta → no API calls. ---
+        // --- Cycle 3: no delta → still no API calls. ---
         syncService.onPoliciesUpdated(makeServicePolicies(3L));
 
-        verify(awsSdkClient, times(1)).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
+        verify(awsSdkClient, never()).batchRevokePermissions(any(BatchRevokePermissionsRequest.class));
         verify(awsSdkClient, times(1)).batchGrantPermissions(any(BatchGrantPermissionsRequest.class));
     }
 

@@ -309,6 +309,103 @@ class ExpectedPermissionsComputerTest {
     }
 
     /**
+     * Rule B (subsumption): a table-level SELECT covers all columns, so a column-restricted TWC
+     * SELECT is redundant and dropped — regardless of policy ids. Here the TWC has the LOWEST id,
+     * yet it must still lose to the table SELECT (proving subsumption, not the id tie-break, drives
+     * this). Mirrors SyncServiceTest.tableTwcConflict_tableSelectPlusInsertSubsumesTwc.
+     */
+    @Test
+    void tableSelectSubsumesTwc_regardlessOfPolicyId() {
+        // Policy 5: genuine column SELECT on mydb.orders (LOWEST id).
+        JsonNode twcPolicy = buildPolicyWithId(5, true, "lakeformation", 0,
+                singleItemArray(buildItem("alice", "select", false)),
+                buildColumnResources("mydb", "orders", "amount"));
+        // Policy 30: table SELECT; Policy 40: table INSERT.
+        JsonNode tableSelect = buildPolicyWithId(30, true, "lakeformation", 0,
+                singleItemArray(buildItem("alice", "select", false)),
+                buildTableResources("mydb", "orders"));
+        JsonNode tableInsert = buildPolicyWithId(40, true, "lakeformation", 0,
+                singleItemArray(buildItem("alice", "insert", false)),
+                buildTableResources("mydb", "orders"));
+
+        Set<SimulatorPermission> result = computer.compute(List.of(twcPolicy, tableSelect, tableInsert));
+
+        // No genuine column-restricted TWC survives; effective set is the table union {SELECT,INSERT}
+        // (SELECT reported as TABLE_WITH_COLUMNS by the display normalization, INSERT as TABLE).
+        Set<String> perms = result.stream()
+                .filter(p -> p.resourceId().equals("mydb.orders"))
+                .map(SimulatorPermission::permission)
+                .collect(Collectors.toSet());
+        assertEquals(Set.of("SELECT", "INSERT"), perms,
+                "Table SELECT+INSERT retained; TWC subsumed even though TWC had the lowest id");
+        long selectCount = result.stream().filter(p -> p.permission().equals("SELECT")).count();
+        assertEquals(1, selectCount, "Exactly one SELECT — the column grant was subsumed, not added");
+    }
+
+    /**
+     * Rule A (genuine conflict, no table SELECT): a column SELECT (lowest id) vs a table INSERT.
+     * With no table-level SELECT to subsume it, this is irreconcilable and the lowest-id TYPE wins
+     * → the TWC wins, the table INSERT is removed. Mirrors
+     * SyncServiceTest.tableTwcConflict_twcWinsWhenItHasLowerId.
+     */
+    @Test
+    void twcWinsGenuineConflictWhenLowerId_noTableSelect() {
+        JsonNode twcPolicy = buildPolicyWithId(50, true, "lakeformation", 0,
+                singleItemArray(buildItem("alice", "select", false)),
+                buildColumnResources("mydb", "events", "ts"));
+        JsonNode tablePolicy = buildPolicyWithId(300, true, "lakeformation", 0,
+                singleItemArray(buildItem("alice", "insert", false)),
+                buildTableResources("mydb", "events"));
+
+        Set<SimulatorPermission> result = computer.compute(List.of(twcPolicy, tablePolicy));
+
+        Set<String> twcPerms = result.stream()
+                .filter(p -> p.resourceType().equals("TABLE_WITH_COLUMNS"))
+                .map(SimulatorPermission::permission).collect(Collectors.toSet());
+        Set<String> tablePerms = result.stream()
+                .filter(p -> p.resourceType().equals("TABLE"))
+                .map(SimulatorPermission::permission).collect(Collectors.toSet());
+        assertEquals(Set.of("SELECT"), twcPerms, "TWC (lowest id) wins the conflict");
+        assertTrue(tablePerms.isEmpty(), "Losing table INSERT must be removed (no table SELECT to merge)");
+    }
+
+    /**
+     * Multi-policy genuine conflict (the multi-service shape that exposed the sync bug): three
+     * table grants from different policies + one TWC, none of the table grants being SELECT.
+     * Lowest id is a table op → TABLE type wins → all three table grants' permissions survive and
+     * only the TWC is dropped. Mirrors
+     * SyncServiceTest.tableTwcConflict_multipleTablePolicies_allTableGrantsSurvive.
+     */
+    @Test
+    void multipleTablePolicies_allTableGrantsSurvive_twcDropped() {
+        JsonNode t12 = buildPolicyWithId(12, true, "trino", 0,
+                singleItemArray(buildItem("alice", "use", false)),          // → DESCRIBE
+                buildTableResources("mydb", "sessions"));
+        JsonNode t22 = buildPolicyWithId(22, true, "lakeformation", 0,
+                singleItemArray(buildMultiAccessItem("alice", List.of("delete", "alter"), false)),
+                buildTableResources("mydb", "sessions"));
+        JsonNode t27 = buildPolicyWithId(27, true, "hive", 0,
+                singleItemArray(buildItem("alice", "write", false)),        // → INSERT
+                buildTableResources("mydb", "sessions"));
+        JsonNode twc41 = buildPolicyWithId(41, true, "amazon-emr-spark", 0,
+                singleItemArray(buildItem("alice", "select", false)),
+                buildColumnResources("mydb", "sessions", "name"));
+
+        ExpectedPermissionsComputer c = new ExpectedPermissionsComputer(
+                PRINCIPAL_MAP, (db, pattern) -> List.of(pattern),
+                Set.of("lakeformation", "hive", "trino", "amazon-emr-spark"));
+        Set<SimulatorPermission> result = c.compute(List.of(t12, t22, t27, twc41));
+
+        Set<String> perms = result.stream()
+                .filter(p -> p.resourceId().equals("mydb.sessions"))
+                .map(SimulatorPermission::permission).collect(Collectors.toSet());
+        assertEquals(Set.of("DESCRIBE", "DELETE", "ALTER", "INSERT"), perms,
+                "All three TABLE grants survive; TWC SELECT dropped (no table SELECT to subsume it)");
+        boolean anyTwc = result.stream().anyMatch(p -> p.resourceType().equals("TABLE_WITH_COLUMNS"));
+        assertFalse(anyTwc, "The losing TWC must not appear");
+    }
+
+    /**
      * A column resource of {@code ["*"]} on a CONCRETE table means "all columns" = the whole table.
      * Production ({@code RangerToCedarConverter.promoteResourceLevel}) promotes this from column to
      * TABLE level, so non-SELECT actions (alter/write/...) produce full TABLE-level grants — NOT a

@@ -253,8 +253,21 @@ public class LakeFormationClient {
      * TABLE_WITH_COLUMNS grant when the same principal already holds (or is being
      * granted) a plain TABLE grant on the same (principal, catalogId, db, table).
      *
-     * <p>For within-batch conflicts: merges column-level permissions into the
-     * TABLE-level entry and removes the TABLE_WITH_COLUMNS entry.
+     * <p>A TABLE_WITH_COLUMNS grant is always SELECT-only. When a plain TABLE grant for the same
+     * (principal, catalogId, db, table) exists in the same batch:
+     * <ul>
+     *   <li><b>Table already has SELECT</b> — the table-level SELECT covers every column, so the
+     *       column grant is redundant. Drop the TWC entry; the TABLE entry is unchanged. This is a
+     *       safe subsumption, not a privilege change.</li>
+     *   <li><b>Table has no SELECT</b> (e.g. INSERT only) — merging the column SELECT into the
+     *       TABLE entry would grant SELECT on <em>all</em> columns, a privilege escalation beyond
+     *       what the column policy intended. This is a genuine irreconcilable conflict: drop the
+     *       TWC entry and leave the TABLE entry as-is (LF cannot hold both types anyway). The
+     *       upstream {@code SyncService.detectAndGapTableTwcConflicts} normally resolves and
+     *       dead-letters such conflicts before they reach here; this is a defensive backstop that
+     *       must not silently escalate.</li>
+     * </ul>
+     * Either way the TWC entry is removed so it never coexists with the TABLE entry in the batch.
      *
      * <p>Cross-cycle conflicts (TABLE grant already exists in LF from a prior
      * cycle) are handled in {@link #processBatchFailures} via promotion fallback.
@@ -286,17 +299,19 @@ public class LakeFormationClient {
                         + r.getCatalogId() + "|" + r.getDatabaseName() + "|" + r.getTableName();
                 Integer tableIdx = tableGrantIndex.get(key);
                 if (tableIdx != null) {
-                    // Merge column-level permissions into the existing TABLE entry
                     LFPermissionOperation tableOp = working.get(tableIdx);
-                    EnumSet<LFPermission> merged = EnumSet.copyOf(tableOp.getPermissions());
-                    merged.addAll(op.getPermissions());
-                    working.set(tableIdx, new LFPermissionOperation(
-                            tableOp.getOperationType(), tableOp.getSourcePolicyId(),
-                            tableOp.getPrincipalArn(), tableOp.getResource(),
-                            merged, tableOp.isGrantable() || op.isGrantable()));
+                    if (tableOp.getPermissions().contains(LFPermission.SELECT)) {
+                        // Table-level SELECT subsumes the column SELECT — drop the TWC, keep TABLE as-is.
+                        LOG.debug("TABLE SELECT subsumes column grant: principal={}, db={}, table={}, dropped cols={}",
+                                op.getPrincipalArn(), r.getDatabaseName(), r.getTableName(), r.getColumnNames());
+                    } else {
+                        // No table SELECT — merging would escalate to all-column SELECT. Drop the
+                        // TWC without merging (genuine conflict; upstream should have gapped it).
+                        LOG.warn("TABLE/TWC conflict with no table-level SELECT: principal={}, db={}, table={}, "
+                                + "dropping column grant {} without merging to avoid over-granting SELECT",
+                                op.getPrincipalArn(), r.getDatabaseName(), r.getTableName(), op.getPermissions());
+                    }
                     removeIndices.add(i);
-                    LOG.debug("Resolved TABLE/TABLE_WITH_COLUMNS conflict: principal={}, db={}, table={}, merged perms={}",
-                            op.getPrincipalArn(), r.getDatabaseName(), r.getTableName(), op.getPermissions());
                 }
             }
         }
