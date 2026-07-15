@@ -144,7 +144,7 @@
         <dependency>
             <groupId>com.cedarpolicy</groupId>
             <artifactId>cedar-java</artifactId>
-            <version>4.2.3</version>
+            <version>4.9.0</version>
             <classifier>uber</classifier>
         </dependency>
 
