@@ -373,6 +373,10 @@ public class ConversionServerMain {
                     lakeFormationClient, gapReporter, deadLetterLogger, checkpointStore);
         }
 
+        // Wire the CloudWatch metrics emitter so the sync service can publish the
+        // MissingResourceGrants gauge (grants targeting deleted Glue resources).
+        syncService.setMetricsEmitter(metricsEmitter);
+
         // Optionally wire reverse-sync if enabled
         ReverseSyncService reverseSyncService = null;
         if (reverseSyncConfig != null && reverseSyncConfig.isEnabled()) {

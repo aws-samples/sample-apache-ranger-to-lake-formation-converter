@@ -97,6 +97,15 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     private final S3AccessGrantsClient s3AccessGrantsClient;  // nullable
     private final CedarToS3AccessGrantsConverter s3AgConverter; // null when client is null
     private volatile List<S3AccessGrantOperation> previousS3AgOperations = Collections.emptyList();
+    // Optional CloudWatch metrics emitter; null in SyncServiceMain (no CloudWatch). Used to publish
+    // the MissingResourceGrants gauge — the count of Ranger-policy grants that currently target a
+    // Glue resource that no longer exists — so operators can clean up stale Ranger policies.
+    private volatile com.amazonaws.policyconverters.reporting.MetricsEmitter metricsEmitter;
+
+    /** Wire the CloudWatch metrics emitter. Optional — no-op metrics when left null. */
+    public void setMetricsEmitter(com.amazonaws.policyconverters.reporting.MetricsEmitter metricsEmitter) {
+        this.metricsEmitter = metricsEmitter;
+    }
 
     /**
      * Tracks which services have completed at least one successful policy fetch.
@@ -423,16 +432,7 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
                     batchResult.getRolledBackOperations(),
                     batchResult.getFailedPolicyIds());
 
-            Set<String> failedIds = new HashSet<>(batchResult.getFailedPolicyIds());
-            if (!failedIds.isEmpty()) {
-                LOG.warn("SyncService: {} failed policy IDs excluded from snapshot — will retry next cycle: {}",
-                        failedIds.size(), failedIds);
-            }
-            previousOperations = failedIds.isEmpty()
-                    ? currentOperations
-                    : currentOperations.stream()
-                            .filter(op -> !failedIds.contains(op.getSourcePolicyId()))
-                            .collect(Collectors.toList());
+            previousOperations = advanceCheckpointOperations(currentOperations, batchResult);
         }
 
         lastCedarPolicyText = cedarPolicySet.toCedarString();
@@ -591,21 +591,7 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
 
             BatchResult batchResult = lakeFormationClient.applyBatch(deltaOperations, deadLetterLogger);
 
-            LOG.info("SyncService batch result: applied={}, rolledBack={}, failedPolicies={}",
-                    batchResult.getAppliedOperations(),
-                    batchResult.getRolledBackOperations(),
-                    batchResult.getFailedPolicyIds());
-
-            Set<String> failedIds = new HashSet<>(batchResult.getFailedPolicyIds());
-            if (!failedIds.isEmpty()) {
-                LOG.warn("SyncService: {} failed policy IDs excluded from snapshot — will retry next cycle: {}",
-                        failedIds.size(), failedIds);
-            }
-            previousOperations = failedIds.isEmpty()
-                    ? currentOperations
-                    : currentOperations.stream()
-                            .filter(op -> !failedIds.contains(op.getSourcePolicyId()))
-                            .collect(Collectors.toList());
+            previousOperations = advanceCheckpointOperations(currentOperations, batchResult);
         }
         lastCedarPolicyText = cedarPolicySet.toCedarString();
 
@@ -851,6 +837,54 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             // Leave previousOperations unchanged on failure
             return WildcardRefreshResult.failure(duration, e);
         }
+    }
+
+    /**
+     * Compute the next checkpoint snapshot after applying a batch, and publish operational signals.
+     * <p>
+     * Two classes of policy are kept OUT of the snapshot so the next cycle retries them:
+     * <ul>
+     *   <li><b>failed</b> policies — real LF errors; logged at WARN and dead-lettered by the client.</li>
+     *   <li><b>missing-resource</b> policies — GRANTs against a Glue table/database that no longer
+     *       exists. Lake Formation already removed the permissions when the resource was deleted, so
+     *       there is nothing to grant. These are benign and expected: not dead-lettered, logged at
+     *       INFO only, and counted via the {@code MissingResourceGrants} metric so operators can
+     *       clean up stale Ranger policies. They are retried each cycle and self-heal if the
+     *       resource is recreated.</li>
+     * </ul>
+     */
+    private List<LFPermissionOperation> advanceCheckpointOperations(
+            List<LFPermissionOperation> currentOperations, BatchResult batchResult) {
+        LOG.info("SyncService batch result: applied={}, rolledBack={}, failedPolicies={}, missingResourcePolicies={}",
+                batchResult.getAppliedOperations(), batchResult.getRolledBackOperations(),
+                batchResult.getFailedPolicyIds(), batchResult.getMissingResourcePolicyIds());
+
+        Set<String> failedIds = new HashSet<>(batchResult.getFailedPolicyIds());
+        if (!failedIds.isEmpty()) {
+            LOG.warn("SyncService: {} failed policy IDs excluded from snapshot — will retry next cycle: {}",
+                    failedIds.size(), failedIds);
+        }
+
+        List<String> missingIds = batchResult.getMissingResourcePolicyIds();
+        if (!missingIds.isEmpty()) {
+            LOG.info("SyncService: {} policy grant(s) target a Glue resource that no longer exists — "
+                    + "kept out of checkpoint and retried (self-heals if recreated). "
+                    + "Consider cleaning up these Ranger policies: {}", missingIds.size(), missingIds);
+        }
+        // Publish the gauge every cycle (including 0) so the metric reflects current state, not a
+        // monotonic counter. This is the operator's signal to prune stale Ranger policies.
+        if (metricsEmitter != null) {
+            metricsEmitter.recordMissingResourceGrants(missingIds.size());
+        }
+
+        // Exclude BOTH failed and missing-resource policies from the checkpoint so both are retried.
+        Set<String> excluded = new HashSet<>(failedIds);
+        excluded.addAll(missingIds);
+        return excluded.isEmpty()
+                ? currentOperations
+                : currentOperations.stream()
+                        .filter(op -> !excluded.contains(op.getSourcePolicyId()))
+                        .collect(Collectors.toList());
     }
 
     /**

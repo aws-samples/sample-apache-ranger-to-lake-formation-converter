@@ -12,12 +12,28 @@ public class BatchResult {
 
     private final List<String> succeededPolicyIds;
     private final List<String> failedPolicyIds;
+    // Source policy IDs whose GRANT failed because the target Glue resource no longer exists
+    // (deleted table/database). NOT failures in the retry/dead-letter sense — LF already removed
+    // the permissions on deletion. Kept out of the checkpoint so they retry (self-healing if the
+    // resource is recreated) but never dead-lettered. Surfaced via the MissingResourceGrants metric.
+    private final List<String> missingResourcePolicyIds;
     private final int totalOperations;
     private final int appliedOperations;
     private final int rolledBackOperations;
 
+    /** Backward-compatible overload: no missing-resource policies. */
     public BatchResult(List<String> succeededPolicyIds,
                        List<String> failedPolicyIds,
+                       int totalOperations,
+                       int appliedOperations,
+                       int rolledBackOperations) {
+        this(succeededPolicyIds, failedPolicyIds, Collections.emptyList(),
+                totalOperations, appliedOperations, rolledBackOperations);
+    }
+
+    public BatchResult(List<String> succeededPolicyIds,
+                       List<String> failedPolicyIds,
+                       List<String> missingResourcePolicyIds,
                        int totalOperations,
                        int appliedOperations,
                        int rolledBackOperations) {
@@ -26,6 +42,9 @@ public class BatchResult {
                 : Collections.<String>emptyList();
         this.failedPolicyIds = failedPolicyIds != null
                 ? Collections.unmodifiableList(new ArrayList<>(failedPolicyIds))
+                : Collections.<String>emptyList();
+        this.missingResourcePolicyIds = missingResourcePolicyIds != null
+                ? Collections.unmodifiableList(new ArrayList<>(missingResourcePolicyIds))
                 : Collections.<String>emptyList();
         this.totalOperations = totalOperations;
         this.appliedOperations = appliedOperations;
@@ -38,6 +57,15 @@ public class BatchResult {
 
     public List<String> getFailedPolicyIds() {
         return failedPolicyIds;
+    }
+
+    /**
+     * Source policy IDs whose GRANT failed because the target Glue resource does not exist.
+     * Distinct from {@link #getFailedPolicyIds()} — expected/benign (retried, not dead-lettered),
+     * counted for the MissingResourceGrants metric.
+     */
+    public List<String> getMissingResourcePolicyIds() {
+        return missingResourcePolicyIds;
     }
 
     public int getTotalOperations() {
@@ -61,6 +89,7 @@ public class BatchResult {
         return "BatchResult{" +
                 "succeededPolicies=" + succeededPolicyIds.size() +
                 ", failedPolicies=" + failedPolicyIds.size() +
+                ", missingResourcePolicies=" + missingResourcePolicyIds.size() +
                 ", totalOperations=" + totalOperations +
                 ", appliedOperations=" + appliedOperations +
                 ", rolledBackOperations=" + rolledBackOperations +

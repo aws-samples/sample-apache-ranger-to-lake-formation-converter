@@ -68,6 +68,7 @@ The following Ranger features have no direct equivalent in Lake Formation. When 
 | LF tag-policy resources in reverse sync | Silently skipped | `LFPermissionFetcher` drops `CatalogResource` and `LFTagPolicyResource` entries returned by `ListPermissions` with only a log warning — no gap entry is recorded. Out-of-band LF-Tag grants will not be detected or corrected by reverse sync. |
 | `WILDCARD_PATTERN` gap not emitted at runtime | Known gap | The `WILDCARD_PATTERN` gap type is defined and documented but is never triggered at runtime. Wildcard expansion failures (when no AWS credentials are available) produce only a log warning; no gap entry is recorded. |
 | IDC mapper does not support roles | Limitation | When using the Identity Center principal mapper, Ranger role principals always produce an empty mapping and are silently skipped with an `UnmappedPrincipal` metric. Use the static mapper if you need role-to-IAM-ARN mappings. |
+| Ranger policy for a deleted Glue resource | Handled — see [Deleted Glue Resources](#deleted-glue-resources) | Lake Formation auto-removes permissions when a table/database is deleted. A Ranger policy still referencing it produces a grant that fails with "Table/Database not found"; the sync service skips it (no dead-letter), retries each cycle (self-heals if the resource is recreated), and publishes the `MissingResourceGrants` gauge so you can prune stale policies. |
 
 ## Features not yet implemented
 
@@ -185,6 +186,34 @@ The presence of a `columns` field identifies a Pattern A loss (TWC suppressed). 
 - **Avoid authoring conflicting policies.** If a principal needs both column-restricted SELECT and write permissions on the same table, consider: (a) granting full TABLE SELECT instead of column-restricted access, (b) splitting the principal into two roles, or (c) accepting that write permissions will be lost.
 - **Review the dead-letter log** after initial sync to identify any conflicts in your Ranger policy set. Address them by consolidating or restructuring the affected policies.
 - **Lower policy IDs win.** If you must have conflicting policies and need a specific one to take effect, ensure it has a lower numeric ID in Ranger Admin.
+
+## Deleted Glue Resources
+
+When a Glue table or database is deleted from the Data Catalog, **Lake Formation automatically
+removes all permissions on that resource** — the sync service does not need to (and cannot) revoke
+them. However, the Ranger policy that referenced the resource typically remains (Ranger does not
+track Glue resource lifecycle). On the next sync cycle the service therefore attempts to re-grant
+the permission and Lake Formation rejects it with `InvalidInputException: "Table not found."` (or
+`"Database not found."`).
+
+The sync service treats this as an **expected, benign condition** rather than an error:
+
+- **Not dead-lettered, not error-logged.** A single INFO line is emitted per affected policy per
+  cycle. This is distinct from a genuine grant failure (access denied, throttling, etc.), which is
+  still error-logged and dead-lettered.
+- **Retried each cycle.** The grant is kept out of the checkpoint so it is re-attempted on every
+  cycle. If the table/database is later **recreated** in Glue, the grant succeeds automatically on
+  the next cycle — no manual intervention and no Ranger policy change required. This is why the
+  service intentionally does *not* give up permanently.
+- **Surfaced via a metric.** Each cycle publishes the `MissingResourceGrants` CloudWatch gauge —
+  the current count of distinct Ranger policies whose grant targets a resource that no longer
+  exists (published as `0` when there are none, so it reflects current state, not a running total).
+
+**Operational guidance:** a sustained non-zero `MissingResourceGrants` value means one or more
+Ranger policies reference Glue resources that have been deleted. If the resource is not going to be
+recreated, **clean up the corresponding Ranger policy** to stop the per-cycle retry. The metric is
+the intended signal for this cleanup. Alarm on a sustained non-zero value if you want proactive
+notification of stale policies.
 
 # Design
 

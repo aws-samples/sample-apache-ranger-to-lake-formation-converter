@@ -260,6 +260,23 @@ public class MetricsEmitter {
     }
 
     /**
+     * Records the current number of Ranger-policy grants that target a Glue resource which no
+     * longer exists (deleted table/database). Lake Formation auto-removes permissions when a
+     * resource is deleted, so such a grant fails every cycle with "Table/Database not found"; the
+     * sync service skips it (no dead-letter) and retries, self-healing if the resource is recreated.
+     * This is a per-cycle GAUGE (current count, published even when 0), not a monotonic counter —
+     * a sustained non-zero value is the operator's signal to clean up stale Ranger policies.
+     *
+     * @param count number of distinct policies whose grant currently targets a missing resource
+     */
+    public void recordMissingResourceGrants(int count) {
+        Dimension serviceDimension = serviceDimension();
+        List<MetricDatum> metrics = List.of(
+                datum("MissingResourceGrants", count, StandardUnit.COUNT, serviceDimension));
+        publish(metrics);
+    }
+
+    /**
      * Records a metric when a Ranger principal cannot be mapped to an AWS principal ARN.
      * Publishes UnmappedPrincipal count with a PrincipalType dimension
      * so alarms can be configured in CloudWatch.

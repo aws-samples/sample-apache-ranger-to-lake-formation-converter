@@ -196,29 +196,32 @@ public class LakeFormationClient {
 
         List<String> succeededPolicies = new ArrayList<>();
         List<String> failedPolicies = new ArrayList<>();
+        // Source policy IDs whose GRANT failed because the Glue resource no longer exists.
+        // Neither applied nor hard-failed: kept out of the checkpoint (retried later, self-healing
+        // if the resource is recreated) and surfaced via the MissingResourceGrants metric.
+        List<String> missingResourcePolicies = new ArrayList<>();
         int appliedOps = 0;
-        int failedOps = 0;
 
         // Revokes run first so TABLE_WITH_COLUMNS conflicts are cleared before TABLE grants land.
         // SyncService applies resolveTableColumnConflicts to currentOperations before diffing,
         // which produces explicit TABLE_WITH_COLUMNS REVOKEs alongside TABLE GRANTs when needed.
         for (int i = 0; i < revokes.size(); i += MAX_BATCH_SIZE) {
             List<LFPermissionOperation> chunk = revokes.subList(i, Math.min(i + MAX_BATCH_SIZE, revokes.size()));
-            int[] result = executeBatchRevoke(chunk, deadLetterLogger, succeededPolicies, failedPolicies);
+            int[] result = executeBatchRevoke(chunk, deadLetterLogger, succeededPolicies, failedPolicies,
+                    missingResourcePolicies);
             appliedOps += result[0];
-            failedOps += result[1];
         }
 
         // Process grants in chunks of MAX_BATCH_SIZE
         for (int i = 0; i < grants.size(); i += MAX_BATCH_SIZE) {
             List<LFPermissionOperation> chunk = grants.subList(i, Math.min(i + MAX_BATCH_SIZE, grants.size()));
-            int[] result = executeBatchGrant(chunk, deadLetterLogger, succeededPolicies, failedPolicies);
+            int[] result = executeBatchGrant(chunk, deadLetterLogger, succeededPolicies, failedPolicies,
+                    missingResourcePolicies);
             appliedOps += result[0];
-            failedOps += result[1];
         }
 
         BatchResult batchResult = new BatchResult(
-                succeededPolicies, failedPolicies, operations.size(), appliedOps, 0);
+                succeededPolicies, failedPolicies, missingResourcePolicies, operations.size(), appliedOps, 0);
         LOG.info("Batch application complete: {}", batchResult);
         return batchResult;
     }
@@ -429,8 +432,10 @@ public class LakeFormationClient {
      * Returns [appliedCount, failedCount].
      */
     private int[] executeBatchGrant(List<LFPermissionOperation> ops, DeadLetterLogger deadLetterLogger,
-                                    List<String> succeededPolicies, List<String> failedPolicies) {
-        return executeBatchGrant(ops, deadLetterLogger, succeededPolicies, failedPolicies, false);
+                                    List<String> succeededPolicies, List<String> failedPolicies,
+                                    List<String> missingResourcePolicies) {
+        return executeBatchGrant(ops, deadLetterLogger, succeededPolicies, failedPolicies,
+                missingResourcePolicies, false);
     }
 
     /**
@@ -446,7 +451,7 @@ public class LakeFormationClient {
      */
     private int[] executeBatchGrant(List<LFPermissionOperation> ops, DeadLetterLogger deadLetterLogger,
                                     List<String> succeededPolicies, List<String> failedPolicies,
-                                    boolean isRetry) {
+                                    List<String> missingResourcePolicies, boolean isRetry) {
         List<BatchPermissionsRequestEntry> entries = new ArrayList<>();
         Map<String, LFPermissionOperation> entryIdToOp = new LinkedHashMap<>();
 
@@ -560,12 +565,13 @@ public class LakeFormationClient {
                                 (a, b) -> a, LinkedHashMap::new));
 
         int[] result = processBatchFailures(accountableFailures, accountableOps,
-                "GRANT", deadLetterLogger, succeededPolicies, failedPolicies);
+                "GRANT", deadLetterLogger, succeededPolicies, failedPolicies, missingResourcePolicies);
 
         if (!retryGrants.isEmpty()) {
             int[] retryResult = executeBatchGrant(retryGrants, deadLetterLogger,
-                    succeededPolicies, failedPolicies, true);
+                    succeededPolicies, failedPolicies, missingResourcePolicies, true);
             result[0] += retryResult[0];
+            result[2] += retryResult[2];
         }
 
         return result;
@@ -576,7 +582,8 @@ public class LakeFormationClient {
      * Returns [appliedCount, failedCount].
      */
     private int[] executeBatchRevoke(List<LFPermissionOperation> ops, DeadLetterLogger deadLetterLogger,
-                                     List<String> succeededPolicies, List<String> failedPolicies) {
+                                     List<String> succeededPolicies, List<String> failedPolicies,
+                                     List<String> missingResourcePolicies) {
         List<BatchPermissionsRequestEntry> entries = new ArrayList<>();
         Map<String, LFPermissionOperation> entryIdToOp = new LinkedHashMap<>();
 
@@ -595,19 +602,42 @@ public class LakeFormationClient {
         BatchRevokePermissionsResponse response = lfClient.batchRevokePermissions(request);
 
         return processBatchFailures(response.failures(), entryIdToOp,
-                "REVOKE", deadLetterLogger, succeededPolicies, failedPolicies);
+                "REVOKE", deadLetterLogger, succeededPolicies, failedPolicies, missingResourcePolicies);
     }
 
     /**
-     * Process batch response failures. Returns [appliedCount, failedCount].
+     * True if a batch failure error message indicates the target Glue resource does not exist.
+     * Lake Formation returns {@code InvalidInputException: "Table not found."} (or
+     * {@code "Database not found."}) for a grant/revoke against a resource that was deleted from
+     * the Glue Data Catalog. When a table is deleted, LF automatically removes its permissions, so
+     * a Ranger policy that still references the deleted table produces a GRANT that fails this way
+     * every cycle. These are transient-by-nature (the resource may be recreated) and MUST NOT be
+     * dead-lettered or error-logged per cycle — they are counted and retried instead. See
+     * {@code missingResourcePolicies} handling below and the MissingResourceGrants metric.
+     */
+    static boolean isMissingResourceError(String errorMsg) {
+        if (errorMsg == null) return false;
+        String m = errorMsg.toLowerCase(java.util.Locale.ROOT);
+        return m.contains("not found") && (m.contains("table") || m.contains("database"));
+    }
+
+    /**
+     * Process batch response failures. Returns [appliedCount, failedCount, missingResourceCount].
      * Entries not in the failures list are considered successful.
+     *
+     * @param missingResourcePolicies out-param collecting source policy IDs whose GRANT failed
+     *        because the Glue resource no longer exists (deleted table/database). These are neither
+     *        applied nor hard-failed: they are kept out of the checkpoint so they are retried on a
+     *        later cycle (self-healing if the resource is recreated), but are NOT dead-lettered.
      */
     private int[] processBatchFailures(List<BatchPermissionsFailureEntry> failures,
                                        Map<String, LFPermissionOperation> entryIdToOp,
                                        String operationType, DeadLetterLogger deadLetterLogger,
-                                       List<String> succeededPolicies, List<String> failedPolicies) {
+                                       List<String> succeededPolicies, List<String> failedPolicies,
+                                       List<String> missingResourcePolicies) {
         // Collect failed entry IDs
         Set<String> failedEntryIds = new java.util.HashSet<>();
+        Set<String> missingEntryIds = new java.util.HashSet<>();
         if (failures != null) {
             for (BatchPermissionsFailureEntry failure : failures) {
                 String entryId = failure.requestEntry().id();
@@ -619,11 +649,32 @@ public class LakeFormationClient {
                 // - "Permissions modification is invalid": column spec doesn't match the actual
                 //   grant (e.g. revoking column-scoped SELECT when LF holds an all-columns grant
                 //   after resolveTableColumnConflicts merged them into a TABLE-level entry)
+                // - "Table/Database not found": the resource was deleted from Glue, so LF already
+                //   removed its permissions — the revoke's desired end state (no permission) already
+                //   holds. Treat as a no-op success rather than a hard failure.
                 if ("REVOKE".equals(operationType) && errorMsg != null
                         && (errorMsg.contains("No permissions revoked")
-                                || errorMsg.contains("Permissions modification is invalid"))) {
+                                || errorMsg.contains("Permissions modification is invalid")
+                                || isMissingResourceError(errorMsg))) {
                     LFPermissionOperation op = entryIdToOp.get(entryId);
                     LOG.info("Revoke treated as no-op for policyId={}: {}",
+                            op != null ? op.getSourcePolicyId() : entryId, errorMsg);
+                    continue;
+                }
+
+                // A GRANT against a Glue resource that no longer exists (deleted table/database).
+                // Lake Formation already removed the permissions when the resource was deleted, so
+                // there is nothing to grant. Count it (for the MissingResourceGrants gauge) and keep
+                // it out of the checkpoint so it retries later — but do NOT dead-letter or error-log
+                // it every cycle. The metric is the operator's signal to clean up stale Ranger policies.
+                if ("GRANT".equals(operationType) && isMissingResourceError(errorMsg)) {
+                    LFPermissionOperation op = entryIdToOp.get(entryId);
+                    missingEntryIds.add(entryId);
+                    if (op != null && op.getSourcePolicyId() != null) {
+                        missingResourcePolicies.add(op.getSourcePolicyId());
+                    }
+                    LOG.info("Grant skipped — Glue resource does not exist (will retry if recreated): "
+                            + "policyId={}, error={}",
                             op != null ? op.getSourcePolicyId() : entryId, errorMsg);
                     continue;
                 }
@@ -641,12 +692,18 @@ public class LakeFormationClient {
         }
 
         int failedCount = failedEntryIds.size();
-        int appliedCount = entryIdToOp.size() - failedCount;
+        int missingCount = missingEntryIds.size();
+        int appliedCount = entryIdToOp.size() - failedCount - missingCount;
 
-        // Track succeeded/failed policy IDs
+        // Track succeeded/failed policy IDs. Missing-resource entries are neither: they are
+        // excluded from succeededPolicies so SyncService keeps them out of the checkpoint and
+        // retries them, but not added to failedPolicies so they never reach the hard-failure path.
         for (Map.Entry<String, LFPermissionOperation> entry : entryIdToOp.entrySet()) {
             String policyId = entry.getValue().getSourcePolicyId() != null
                     ? entry.getValue().getSourcePolicyId() : "__unknown__";
+            if (missingEntryIds.contains(entry.getKey())) {
+                continue;
+            }
             if (failedEntryIds.contains(entry.getKey())) {
                 if (!failedPolicies.contains(policyId)) {
                     failedPolicies.add(policyId);
@@ -658,7 +715,7 @@ public class LakeFormationClient {
             }
         }
 
-        return new int[]{appliedCount, failedCount};
+        return new int[]{appliedCount, failedCount, missingCount};
     }
 
     /**

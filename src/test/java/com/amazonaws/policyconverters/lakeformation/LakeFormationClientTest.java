@@ -327,6 +327,72 @@ class LakeFormationClientTest {
     }
 
     @Test
+    void applyBatch_missingResourceGrant_notFailedNotDeadLettered_butRetriable() {
+        // A GRANT that fails with "Table not found" means the Glue table was deleted (LF already
+        // removed its permissions). It must be classified as missing-resource: NOT a hard failure,
+        // NOT dead-lettered, but reported so SyncService keeps it out of the checkpoint and retries.
+        BatchPermissionsFailureEntry failure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("grant-1").build())
+                .error(ErrorDetail.builder().errorMessage("Table not found.").build())
+                .build();
+        when(awsClient.batchGrantPermissions(any(BatchGrantPermissionsRequest.class)))
+                .thenReturn(BatchGrantPermissionsResponse.builder().failures(List.of(failure)).build());
+
+        StringWriter sw = new StringWriter();
+        DeadLetterLogger dll = new DeadLetterLogger(new BufferedWriter(sw));
+
+        List<LFPermissionOperation> ops = Arrays.asList(
+                makeOp("p1", LFPermissionOperation.OperationType.GRANT, "t1"),
+                makeOp("p2", LFPermissionOperation.OperationType.GRANT, "t2"),
+                makeOp("p3", LFPermissionOperation.OperationType.GRANT, "t3")
+        );
+
+        BatchResult result = client.applyBatch(ops, dll);
+
+        assertFalse(result.hasFailures(), "missing-resource is not a hard failure");
+        assertEquals(0, result.getFailedPolicyIds().size());
+        assertEquals(1, result.getMissingResourcePolicyIds().size());
+        assertEquals("p2", result.getMissingResourcePolicyIds().get(0));
+        assertEquals(2, result.getAppliedOperations(), "the other two grants applied");
+        assertEquals("", sw.toString(), "missing-resource grant must NOT be dead-lettered");
+    }
+
+    @Test
+    void applyBatch_missingResourceRevoke_treatedAsNoOpSuccess() {
+        // Revoking on a deleted table returns "Table not found." — LF already removed the permission
+        // when the table was deleted, so the revoke's desired end state already holds. It must be a
+        // no-op success (not a failure, not dead-lettered), so the checkpoint advances.
+        BatchPermissionsFailureEntry failure = BatchPermissionsFailureEntry.builder()
+                .requestEntry(BatchPermissionsRequestEntry.builder().id("revoke-0").build())
+                .error(ErrorDetail.builder().errorMessage("Table not found.").build())
+                .build();
+        when(awsClient.batchRevokePermissions(any(BatchRevokePermissionsRequest.class)))
+                .thenReturn(BatchRevokePermissionsResponse.builder().failures(List.of(failure)).build());
+
+        StringWriter sw = new StringWriter();
+        DeadLetterLogger dll = new DeadLetterLogger(new BufferedWriter(sw));
+
+        List<LFPermissionOperation> ops = List.of(
+                makeOp("p1", LFPermissionOperation.OperationType.REVOKE, "t1"));
+
+        BatchResult result = client.applyBatch(ops, dll);
+
+        assertFalse(result.hasFailures(), "missing-resource revoke is a no-op success, not a failure");
+        assertEquals(0, result.getFailedPolicyIds().size());
+        assertEquals("", sw.toString(), "missing-resource revoke must NOT be dead-lettered");
+    }
+
+    @Test
+    void isMissingResourceError_classifiesTableAndDatabaseNotFound() {
+        assertTrue(LakeFormationClient.isMissingResourceError("Table not found."));
+        assertTrue(LakeFormationClient.isMissingResourceError("Database not found."));
+        assertTrue(LakeFormationClient.isMissingResourceError("TABLE NOT FOUND")); // case-insensitive
+        assertFalse(LakeFormationClient.isMissingResourceError("Access denied"));
+        assertFalse(LakeFormationClient.isMissingResourceError("Insufficient permissions"));
+        assertFalse(LakeFormationClient.isMissingResourceError(null));
+    }
+
+    @Test
     void applyBatch_writesToDeadLetterLog() {
         // Simulate failure for first entry
         BatchPermissionsFailureEntry failure = BatchPermissionsFailureEntry.builder()

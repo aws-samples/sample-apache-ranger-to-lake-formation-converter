@@ -167,6 +167,41 @@ class SyncServiceTest {
         assertEquals(1, syncService.getPreviousOperations().size());
     }
 
+    @Test
+    void missingResourceGrant_keptOutOfCheckpointAndMetricEmitted() {
+        // A grant whose Glue table was deleted comes back from applyBatch as a missing-resource
+        // policy (not a failure). It must be excluded from the checkpoint (so it retries next cycle
+        // and self-heals if recreated), and the MissingResourceGrants gauge must be published.
+        com.amazonaws.policyconverters.reporting.MetricsEmitter metricsEmitter =
+                mock(com.amazonaws.policyconverters.reporting.MetricsEmitter.class);
+        syncService.setMetricsEmitter(metricsEmitter);
+        syncService.start(syncConfig);
+
+        CedarPolicySet mockPolicySet = mock(CedarPolicySet.class);
+        when(rangerToCedarConverter.convert(anyList())).thenReturn(mockPolicySet);
+        when(mockPolicySet.getPermitCount()).thenReturn(1);
+        when(mockPolicySet.getForbidCount()).thenReturn(0);
+
+        List<LFPermissionOperation> ops = Collections.singletonList(
+                makeGrantOp("gone-99", "arn:aws:iam::123:user/alice", "db1", "deleted_table"));
+        when(cedarToLFConverter.convert(mockPolicySet)).thenReturn(ops);
+        // applyBatch reports the policy as missing-resource: not applied, not failed.
+        when(lakeFormationClient.applyBatch(anyList(), any()))
+                .thenReturn(new BatchResult(Collections.<String>emptyList(),
+                        Collections.<String>emptyList(), Collections.singletonList("gone-99"),
+                        1, 0, 0));
+
+        syncService.onPoliciesUpdated(createServicePolicies(1L, 1));
+
+        // Missing-resource policy must NOT be checkpointed → retried next cycle.
+        assertEquals(0, syncService.getPreviousOperations().size(),
+                "missing-resource grant must be excluded from the checkpoint so it retries");
+        // The gauge must be published with the current count.
+        verify(metricsEmitter).recordMissingResourceGrants(1);
+        // It is benign — must not be dead-lettered by the sync layer.
+        verifyNoInteractions(deadLetterLogger);
+    }
+
     // ---------------------------------------------------------------
     // Diff mechanism: grants + revocations (Req 11.2)
     // ---------------------------------------------------------------
