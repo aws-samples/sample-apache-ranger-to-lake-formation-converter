@@ -229,6 +229,37 @@ class ExpectedPermissionsComputerTest {
     }
 
     /**
+     * Regression (simulator finding 2026-07-14): when two policies grant the same
+     * (principal, resource, permission) but with different delegateAdmin, LF stores a SINGLE grant
+     * whose grant-option is the OR. The oracle must coalesce to one entry (grantable=true) rather
+     * than emitting both a grantable=false and a grantable=true entry — otherwise the diff against
+     * LF's single grantable=true entry reports a permanent false under-grant of the grantable=false
+     * copy.
+     */
+    @Test
+    void overlappingGrantsWithDifferentDelegateAdmin_coalesceToSingleGrantableEntry() {
+        // Policy 10: analyst SELECT on mydb.events, NOT grantable.
+        JsonNode nonGrantable = buildPolicyWithId(10L, true, "lakeformation", 0,
+                singleItemArray(buildItem("alice", "select", false)),
+                buildTableResources("mydb", "events"));
+        // Policy 20: analyst SELECT on the SAME table, delegateAdmin=true (grantable).
+        JsonNode grantable = buildPolicyWithId(20L, true, "lakeformation", 0,
+                singleItemArray(buildItem("alice", "select", true)),
+                buildTableResources("mydb", "events"));
+
+        Set<SimulatorPermission> result = computer.compute(List.of(nonGrantable, grantable));
+
+        assertEquals(1, result.size(),
+                "The two SELECT grants must coalesce into a single entry (LF holds one grant)");
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("mydb.events", perm.resourceId());
+        assertEquals("SELECT", perm.permission());
+        assertEquals("TABLE_WITH_COLUMNS", perm.resourceType());
+        assertTrue(perm.grantable(),
+                "grantable must be the OR — true, because policy 20 granted WITH GRANT OPTION");
+    }
+
+    /**
      * Regression: a bare-table SELECT must NOT be treated as a real column-restricted
      * TABLE_WITH_COLUMNS grant for the purpose of TABLE/TWC conflict resolution.
      * <p>

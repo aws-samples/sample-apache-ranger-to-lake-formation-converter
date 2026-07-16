@@ -151,7 +151,36 @@ public class ExpectedPermissionsComputer {
         // normalizes to TABLE_WITH_COLUMNS. Mirror that here so the expected set matches LF actual
         // output. This is intentionally done AFTER Pass 3 so bare-table SELECT does not masquerade as
         // a real column grant during conflict detection.
-        return normalizeBareTableSelectToTwc(permits);
+        Set<SimulatorPermission> normalized = normalizeBareTableSelectToTwc(permits);
+
+        // Coalesce grantable duplicates: when two policies grant the same
+        // (principal, resourceType, resourceId, permission) but with different delegateAdmin,
+        // LF stores a SINGLE grant whose grant-option is the OR of the two. The oracle would
+        // otherwise emit both a grantable=false and a grantable=true entry, and the diff against
+        // LF's single (grantable=true) entry would report a permanent false under-grant. Merge
+        // them here, keeping grantable=true if ANY contributing policy is grantable.
+        return coalesceGrantable(normalized);
+    }
+
+    /**
+     * Merge entries that are identical except for {@code grantable}, keeping a single entry whose
+     * grantable flag is the OR across the merged entries. Mirrors Lake Formation, which holds one
+     * grant per (principal, resource, permission) and turns on the grant option if any source
+     * policy granted it with {@code delegateAdmin=true}.
+     */
+    private static Set<SimulatorPermission> coalesceGrantable(Set<SimulatorPermission> permits) {
+        // key (principal, resourceType, resourceId, permission) → whether any variant is grantable
+        Map<List<String>, Boolean> grantableByKey = new HashMap<>();
+        for (SimulatorPermission p : permits) {
+            List<String> key = List.of(p.principalArn(), p.resourceType(), p.resourceId(), p.permission());
+            grantableByKey.merge(key, p.grantable(), Boolean::logicalOr);
+        }
+        Set<SimulatorPermission> result = new HashSet<>(grantableByKey.size() * 2);
+        for (Map.Entry<List<String>, Boolean> e : grantableByKey.entrySet()) {
+            List<String> k = e.getKey();
+            result.add(new SimulatorPermission(k.get(0), k.get(1), k.get(2), k.get(3), e.getValue()));
+        }
+        return result;
     }
 
     /**
