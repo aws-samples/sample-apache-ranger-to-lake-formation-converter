@@ -121,7 +121,25 @@ If any required property is missing, the build fails immediately with a descript
 | `lf.max.retries` | `5` | Config YAML | Max Lake Formation API retries |
 | `lf.retry.backoff.ms` | `2000` | Config YAML | Backoff between retries in milliseconds |
 | `server.log.level` | `INFO` | Config YAML | Server log level (DEBUG, INFO, WARN, ERROR) |
+| `LOG_DIR` / `-Dlog.dir` | `logs` | Env var or `-D` | Directory for the rotated log file (`/app/logs` in the container image) |
 | `server.shutdown.timeout` | `30` | Config YAML | Graceful shutdown timeout in seconds |
+
+### Logging and log rotation
+
+The service logs in structured JSON to three places:
+
+- **stdout / stderr** — for container platforms (Apollo/ECS) that capture console output. stderr
+  carries `ERROR` only; stdout carries everything.
+- **A rotated file** at `${LOG_DIR}/ranger-lf-sync.log` — bounded on disk so it can never fill the
+  volume. It rolls at **100 MB** or daily (whichever first), keeps **7 days** of gzipped archives,
+  caps the archive set at **1 GB**, and prunes older archives past the cap (also on startup).
+
+Set `LOG_DIR` (env) or `-Dlog.dir=/path` to relocate the file; it defaults to `logs/` under the
+working directory (`/app/logs` in the image).
+
+> **Do not** redirect stdout to a file (`java -jar ... > app.log`) for long-running deployments — a
+> shell redirect is not rotated and grows without bound. Consume the rotated `ranger-lf-sync.log`
+> (or rely on your platform's stdout capture) instead.
 
 ### Principal Mapping Format
 
