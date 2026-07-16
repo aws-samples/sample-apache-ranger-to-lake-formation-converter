@@ -69,10 +69,16 @@ public class SimulatorMain {
         Files.createDirectories(logPath.getParent());
         MutationLog mutationLog = new MutationLog(logPath);
 
-        // Single source of truth: config-provided map or Glue discovery
-        Map<String, List<String>> databaseTables = config.getDatabases() != null
+        // Single source of truth: config-provided map or Glue discovery. Deep-mutable copy so the
+        // Glue-table-deletion workload can remove tables from it at runtime and have both the oracle
+        // (existence checker + wildcard expander) and the deletion picker observe the change.
+        Map<String, List<String>> sourceTables = config.getDatabases() != null
                 ? config.getDatabases()
                 : new GlueCatalogDiscovery(glueClient).discover();
+        Map<String, List<String>> databaseTables = new java.util.concurrent.ConcurrentHashMap<>();
+        for (Map.Entry<String, List<String>> e : sourceTables.entrySet()) {
+            databaseTables.put(e.getKey(), java.util.Collections.synchronizedList(new ArrayList<>(e.getValue())));
+        }
         if (databaseTables.isEmpty()) {
             LOG.warn("No databases found — check Glue catalog access and region ({})", config.getAwsRegion());
         }
@@ -143,10 +149,29 @@ public class SimulatorMain {
             new GeneratorEntry("emrspark-col",    emrSparkPolicyGenerator::generateColumnPolicy,         2),
             new GeneratorEntry("emrspark-deny",   emrSparkPolicyGenerator::generateDenyTablePolicy,      2)
         );
+        // When Glue-table-deletion simulation is enabled, share the live catalog with the
+        // orchestrator (so it can pick tables to delete and shrink the pool) and wire the driver's
+        // Glue-delete callback. Otherwise the orchestrator never emits DeleteGlueTable ops.
+        boolean simulateGlueDeletion = config.isSimulateGlueTableDeletion();
         WorkloadOrchestrator orchestrator = new WorkloadOrchestrator(
-                new ArrayList<>(), generators, rng);
+                new ArrayList<>(), generators, rng,
+                simulateGlueDeletion ? databaseTables : null);
 
         MutationDriver mutationDriver = new MutationDriver(rangerClient, mutationLog);
+        if (simulateGlueDeletion) {
+            LOG.info("Glue-table-deletion simulation ENABLED");
+            mutationDriver.setGlueTableDeleter((db, table) -> {
+                try {
+                    glueClient.deleteTable(software.amazon.awssdk.services.glue.model.DeleteTableRequest.builder()
+                            .databaseName(db).name(table).build());
+                } catch (software.amazon.awssdk.services.glue.model.EntityNotFoundException e) {
+                    // Already gone — treat as success (idempotent).
+                    LOG.info("Glue table {}.{} already absent on delete", db, table);
+                } catch (Exception e) {
+                    throw new java.io.IOException("Failed to delete Glue table " + db + "." + table, e);
+                }
+            });
+        }
 
         SyncServiceStatusClient statusClient = new SyncServiceStatusClient(
                 config.getStatusHost(), config.getStatusPort());
@@ -182,13 +207,21 @@ public class SimulatorMain {
         }
         managedServiceNames = Set.copyOf(managedServiceNames);
 
-        // Use discovered/configured resource map for wildcard expansion in the independent validator
+        // Use discovered/configured resource map for wildcard expansion in the independent validator.
+        // When Glue-table-deletion simulation is on, also give the oracle an existence checker so a
+        // CONCRETE table policy stops expecting grants once its table is deleted from the shared
+        // catalog — mirroring Lake Formation's auto-removal of permissions on resource deletion.
+        // Both closures read the live, mutable databaseTables map, so deletions are reflected
+        // immediately. When disabled, the checker is null (every table assumed to exist).
+        ExpectedPermissionsComputer.TableExistenceChecker existenceChecker = simulateGlueDeletion
+                ? (db, table) -> databaseTables.getOrDefault(db, List.of()).contains(table)
+                : null;
         ExpectedPermissionsComputer expectedComputer = new ExpectedPermissionsComputer(
                 principalMap, (db, pattern) -> {
                     List<String> tables = databaseTables.getOrDefault(db, List.of());
                     String regex = pattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
                     return tables.stream().filter(t -> t.matches(regex)).toList();
-                }, managedServiceNames);
+                }, managedServiceNames, existenceChecker);
 
         Phase1DriftValidator phase1 = new Phase1DriftValidator();
         Set<String> managedArns = new HashSet<>(principalMap.values());

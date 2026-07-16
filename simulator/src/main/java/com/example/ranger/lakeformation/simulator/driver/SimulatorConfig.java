@@ -62,6 +62,12 @@ public class SimulatorConfig {
      * to be configured with amazon-emr-spark in its rangerServices list). Default: false.
      */
     private final boolean validateEmrSpark;
+    /**
+     * When true, the workload occasionally deletes a Glue table out from under live Ranger policies
+     * to exercise the deleted-GDC-resource path (LF auto-removes grants; sync must skip the
+     * impossible re-grant benignly). Requires Glue write permissions. Default: false.
+     */
+    private final boolean simulateGlueTableDeletion;
 
     /**
      * Optional explicit S3 Access Grants instance ARN. If null, SimulatorMain will attempt
@@ -95,7 +101,8 @@ public class SimulatorConfig {
             @JsonProperty("awsProfile")              String  awsProfile,
             @JsonProperty("s3agInstanceArn")         String  s3agInstanceArn,
             @JsonProperty("hiveServiceName")         String  hiveServiceName,
-            @JsonProperty("roundReportPath")         String  roundReportPath) {
+            @JsonProperty("roundReportPath")         String  roundReportPath,
+            @JsonProperty("simulateGlueTableDeletion") Boolean simulateGlueTableDeletion) {
         this.cycleIntervalSeconds = cycleIntervalSeconds != null ? cycleIntervalSeconds : DEFAULT_CYCLE_INTERVAL_SECONDS;
         this.awsRegion = awsRegion != null ? awsRegion : DEFAULT_AWS_REGION;
         this.rangerAdminUrl = rangerAdminUrl;
@@ -123,6 +130,7 @@ public class SimulatorConfig {
         this.validateEmrSpark = Boolean.TRUE.equals(validateEmrSpark);
         this.awsProfile = (awsProfile != null && !awsProfile.isBlank()) ? awsProfile : null;
         this.s3agInstanceArn = (s3agInstanceArn != null && !s3agInstanceArn.isBlank()) ? s3agInstanceArn : null;
+        this.simulateGlueTableDeletion = Boolean.TRUE.equals(simulateGlueTableDeletion);
     }
 
     public int getCycleIntervalSeconds() { return cycleIntervalSeconds; }
@@ -154,6 +162,8 @@ public class SimulatorConfig {
     public String getAwsProfile()             { return awsProfile; }
     /** Returns true if EMR Spark policies should be included in Phase2 LF validation. */
     public boolean isValidateEmrSpark()       { return validateEmrSpark; }
+    /** Returns true if the workload should occasionally delete Glue tables mid-run. */
+    public boolean isSimulateGlueTableDeletion() { return simulateGlueTableDeletion; }
     /**
      * Returns the explicitly configured S3 Access Grants instance ARN, or null if auto-detection
      * should be attempted. Returns empty string if S3AG validation is explicitly disabled.

@@ -36,15 +36,36 @@ public class WorkloadOrchestrator {
     private final List<GeneratorEntry> generators;
     private final int totalWeight;
     private final Random random;
+    // Shared, live view of the Glue catalog (db → tables), or null to disable Glue-table deletion.
+    // When present, the orchestrator occasionally emits a DeleteGlueTable op; the driver performs
+    // the actual Glue delete and removes the table from THIS map, so the oracle (which reads the
+    // same map) stops expecting grants for it. Generators keep their own frozen copies and may
+    // still author policies for a deleted table — which is realistic and exercises the
+    // grant-on-missing-resource path in the sync service.
+    private final Map<String, List<String>> liveCatalog;
+    // Tables already chosen for deletion this run (db.table), so we never pick one twice.
+    private final Set<String> deletedTables = new HashSet<>();
+    // Probability (out of 100) that a mutation slot becomes a Glue-table deletion, carved from the
+    // no-op range. Deliberately rare — each deletion permanently shrinks the finite table pool.
+    private static final int GLUE_DELETE_ROLL = 90; // exactly this roll value → delete (~1%)
+    // Never delete a table if it would leave the database with fewer than this many tables.
+    private static final int MIN_TABLES_PER_DB = 2;
 
     public WorkloadOrchestrator(List<String> existingPolicyIds,
                                 List<GeneratorEntry> generators, Random random) {
+        this(existingPolicyIds, generators, random, null);
+    }
+
+    public WorkloadOrchestrator(List<String> existingPolicyIds,
+                                List<GeneratorEntry> generators, Random random,
+                                Map<String, List<String>> liveCatalog) {
         this.existingPolicyIds   = new ArrayList<>(existingPolicyIds);
         this.policyIdToGenerator = new HashMap<>();
         this.policyIdToResource  = new HashMap<>();
         this.generators          = List.copyOf(generators);
         this.totalWeight         = generators.stream().mapToInt(GeneratorEntry::weight).sum();
         this.random              = random;
+        this.liveCatalog         = liveCatalog;
     }
 
     public List<MutationOperation> generateBatch() {
@@ -97,6 +118,39 @@ public class WorkloadOrchestrator {
             policyIdToGenerator.remove(id);
             policyIdToResource.remove(id);
             return new MutationOperation.DeletePolicy(Instant.now(), id);
+        }
+        // Rare: delete a Glue table out from under live Ranger policies (carved from the no-op range).
+        if (liveCatalog != null && roll == GLUE_DELETE_ROLL) {
+            MutationOperation glueDelete = pickGlueTableDeletion();
+            if (glueDelete != null) return glueDelete;
+        }
+        return null;
+    }
+
+    /**
+     * Choose a table to delete from the Glue catalog, or null if none is safe to delete this cycle.
+     * Guards: never empties a database below {@link #MIN_TABLES_PER_DB}, never re-picks a table
+     * already deleted this run. Removes the chosen table from the shared {@code liveCatalog} up
+     * front so the oracle stops expecting its grants immediately (the driver performs the actual
+     * Glue delete); if the delete op is later dropped this is still safe — the oracle simply won't
+     * expect a table the sync can no longer grant.
+     */
+    private MutationOperation pickGlueTableDeletion() {
+        List<String> candidateDbs = new ArrayList<>(liveCatalog.keySet());
+        Collections.shuffle(candidateDbs, random);
+        for (String db : candidateDbs) {
+            List<String> tables = liveCatalog.get(db);
+            if (tables == null || tables.size() <= MIN_TABLES_PER_DB) continue;
+            List<String> pickable = new ArrayList<>();
+            for (String t : tables) {
+                if (!deletedTables.contains(db + "." + t)) pickable.add(t);
+            }
+            if (pickable.size() <= MIN_TABLES_PER_DB) continue;
+            String table = pickable.get(random.nextInt(pickable.size()));
+            deletedTables.add(db + "." + table);
+            // Remove from the shared live catalog so the oracle no longer expects grants for it.
+            tables.remove(table);
+            return new MutationOperation.DeleteGlueTable(Instant.now(), db, table);
         }
         return null;
     }

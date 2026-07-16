@@ -237,6 +237,40 @@ class ExpectedPermissionsComputerTest {
      * copy.
      */
     @Test
+    void deletedConcreteTable_producesNoExpectedGrants() {
+        // With a TableExistenceChecker that reports the table is gone, a concrete-table policy must
+        // expect ZERO grants — mirroring Lake Formation auto-removing permissions on table deletion.
+        ExpectedPermissionsComputer.TableExistenceChecker checker =
+                (db, table) -> !("mydb".equals(db) && "events".equals(table)); // events is deleted
+        ExpectedPermissionsComputer computerWithChecker = new ExpectedPermissionsComputer(
+                PRINCIPAL_MAP, (db, pattern) -> List.of(pattern), null, checker);
+
+        JsonNode items = singleItemArray(buildItem("alice", "select", false));
+        JsonNode policy = buildPolicy(true, "hive", 0, items, buildTableResources("mydb", "events"));
+
+        Set<SimulatorPermission> result = computerWithChecker.compute(List.of(policy));
+
+        assertTrue(result.isEmpty(),
+                "A policy for a deleted table must expect no grants (LF auto-removed them)");
+    }
+
+    @Test
+    void existingConcreteTable_stillProducesGrantsWithChecker() {
+        // Sanity: the checker only suppresses deleted tables; a live table still yields its grant.
+        ExpectedPermissionsComputer.TableExistenceChecker checker = (db, table) -> true;
+        ExpectedPermissionsComputer computerWithChecker = new ExpectedPermissionsComputer(
+                PRINCIPAL_MAP, (db, pattern) -> List.of(pattern), null, checker);
+
+        JsonNode items = singleItemArray(buildItem("alice", "select", false));
+        JsonNode policy = buildPolicy(true, "hive", 0, items, buildTableResources("mydb", "orders"));
+
+        Set<SimulatorPermission> result = computerWithChecker.compute(List.of(policy));
+
+        assertEquals(1, result.size(), "A live table must still produce its expected grant");
+        assertEquals("mydb.orders", result.iterator().next().resourceId());
+    }
+
+    @Test
     void overlappingGrantsWithDifferentDelegateAdmin_coalesceToSingleGrantableEntry() {
         // Policy 10: analyst SELECT on mydb.events, NOT grantable.
         JsonNode nonGrantable = buildPolicyWithId(10L, true, "lakeformation", 0,

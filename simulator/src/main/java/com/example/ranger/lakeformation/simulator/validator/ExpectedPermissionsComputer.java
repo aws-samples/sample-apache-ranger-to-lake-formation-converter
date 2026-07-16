@@ -20,16 +20,37 @@ public class ExpectedPermissionsComputer {
     private final TableExpander tableExpander;
     // When non-null, only policies whose service name is in this set are processed.
     private final Set<String> managedServiceNames;
+    // When non-null, a CONCRETE (non-wildcard) table resource only produces expected permissions
+    // if this predicate reports the table still exists in the Glue catalog. Lake Formation
+    // auto-removes all permissions when a table is deleted, so a Ranger policy that still
+    // references a deleted table must expect ZERO grants — otherwise the oracle would report a
+    // false under-grant every cycle. Wildcard tables already reflect deletions via the
+    // TableExpander (which reads the same live catalog). Null → assume every table exists
+    // (backward-compatible; used by all unit tests and offline runs).
+    private final TableExistenceChecker tableExistenceChecker;
+
+    /** Predicate: does {@code table} currently exist in {@code database} in the Glue catalog? */
+    @FunctionalInterface
+    public interface TableExistenceChecker {
+        boolean exists(String database, String table);
+    }
 
     public ExpectedPermissionsComputer(Map<String, String> principalMap, TableExpander tableExpander) {
-        this(principalMap, tableExpander, null);
+        this(principalMap, tableExpander, null, null);
     }
 
     public ExpectedPermissionsComputer(Map<String, String> principalMap, TableExpander tableExpander,
                                        Set<String> managedServiceNames) {
+        this(principalMap, tableExpander, managedServiceNames, null);
+    }
+
+    public ExpectedPermissionsComputer(Map<String, String> principalMap, TableExpander tableExpander,
+                                       Set<String> managedServiceNames,
+                                       TableExistenceChecker tableExistenceChecker) {
         this.principalMap = Map.copyOf(principalMap);
         this.tableExpander = tableExpander;
         this.managedServiceNames = managedServiceNames != null ? Set.copyOf(managedServiceNames) : null;
+        this.tableExistenceChecker = tableExistenceChecker;
     }
 
     /**
@@ -368,7 +389,13 @@ public class ExpectedPermissionsComputer {
 
     private List<String> resolveTablePattern(String db, String pattern) {
         if (pattern.contains("*") || pattern.contains("?")) {
+            // Wildcard: the expander reads the live catalog, so deleted tables are already excluded.
             return tableExpander.expand(db, pattern);
+        }
+        // Concrete table: exclude it if the catalog says it no longer exists. LF auto-removes
+        // permissions on deletion, so the expected set must drop the deleted table too.
+        if (tableExistenceChecker != null && !tableExistenceChecker.exists(db, pattern)) {
+            return List.of();
         }
         return List.of(pattern);
     }

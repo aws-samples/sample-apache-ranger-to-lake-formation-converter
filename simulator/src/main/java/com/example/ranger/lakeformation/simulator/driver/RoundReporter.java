@@ -170,6 +170,9 @@ public class RoundReporter {
             return "Policy Id " + driver.resolveRangerId(e.policyId()) + ": Enable";
         } else if (op instanceof MutationOperation.DeletePolicy del) {
             return "Policy Id " + driver.resolveRangerId(del.policyId()) + ": Delete";
+        } else if (op instanceof MutationOperation.DeleteGlueTable dgt) {
+            return "Glue table deleted: " + dgt.database() + "." + dgt.table()
+                    + " (LF auto-removes its grants; Ranger policies remain)";
         }
         return "Unknown mutation: " + op;
     }

@@ -35,6 +35,15 @@ public class MutationDriver {
     // missing/misconfigured service cannot masquerade as "all permissions correct".
     private final Map<String, Integer> consecutiveFailuresByService = new HashMap<>();
     private final int failureThreshold;
+    // Optional callback that deletes a table from the Glue Data Catalog, used by DeleteGlueTable
+    // operations. Null when the workload never generates table deletions (the default).
+    private GlueTableDeleter glueTableDeleter;
+
+    /** Deletes {@code table} from {@code database} in the Glue catalog. */
+    @FunctionalInterface
+    public interface GlueTableDeleter {
+        void delete(String database, String table) throws IOException;
+    }
 
     public MutationDriver(RangerPolicyClient rangerClient, MutationLog mutationLog) {
         this(rangerClient, mutationLog, DEFAULT_FAILURE_THRESHOLD);
@@ -44,6 +53,11 @@ public class MutationDriver {
         this.rangerClient = rangerClient;
         this.mutationLog = mutationLog;
         this.failureThreshold = failureThreshold;
+    }
+
+    /** Wire the Glue table-deletion callback. Required only if the workload emits DeleteGlueTable ops. */
+    public void setGlueTableDeleter(GlueTableDeleter glueTableDeleter) {
+        this.glueTableDeleter = glueTableDeleter;
     }
 
     /**
@@ -162,6 +176,15 @@ public class MutationDriver {
             } else {
                 rangerClient.deletePolicy(rangerNumericId);
                 internalToRangerIdMap.remove(del.policyId());
+            }
+        } else if (op instanceof MutationOperation.DeleteGlueTable dgt) {
+            if (glueTableDeleter == null) {
+                LOG.warn("DeleteGlueTable requested but no GlueTableDeleter wired; skipping {}.{}",
+                        dgt.database(), dgt.table());
+            } else {
+                glueTableDeleter.delete(dgt.database(), dgt.table());
+                LOG.info("Deleted Glue table {}.{} (Ranger policies referencing it remain)",
+                        dgt.database(), dgt.table());
             }
         }
     }

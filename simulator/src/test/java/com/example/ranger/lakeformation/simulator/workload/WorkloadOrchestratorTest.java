@@ -24,6 +24,49 @@ class WorkloadOrchestratorTest {
     }
 
     @Test
+    void glueTableDeletion_emittedOnlyWhenCatalogProvided_andRespectsFloor() {
+        // Mutable catalog: 2 dbs × 4 tables. The orchestrator may delete tables but must never take
+        // a database below MIN_TABLES_PER_DB (2), and never emit a DeleteGlueTable when no catalog.
+        Map<String, List<String>> catalog = new HashMap<>();
+        catalog.put("db1", new ArrayList<>(List.of("t1", "t2", "t3", "t4")));
+        catalog.put("db2", new ArrayList<>(List.of("u1", "u2", "u3", "u4")));
+
+        WorkloadOrchestrator withCatalog = new WorkloadOrchestrator(
+                new ArrayList<>(List.of("seed-1", "seed-2")), makeGenerators(), new Random(3L), catalog);
+
+        Set<String> deleted = new LinkedHashSet<>();
+        for (int cycle = 0; cycle < 3000; cycle++) {
+            for (MutationOperation op : withCatalog.generateBatch()) {
+                if (op instanceof MutationOperation.DeleteGlueTable d) {
+                    deleted.add(d.database() + "." + d.table());
+                }
+            }
+        }
+
+        assertFalse(deleted.isEmpty(), "Glue table deletions should be emitted when a catalog is provided");
+        // Floor honored: each db retains at least 2 tables (started with 4).
+        assertTrue(catalog.get("db1").size() >= 2, "db1 must not drop below the 2-table floor");
+        assertTrue(catalog.get("db2").size() >= 2, "db2 must not drop below the 2-table floor");
+        // Deleted tables were actually removed from the shared catalog.
+        for (String dt : deleted) {
+            String[] parts = dt.split("\\.");
+            assertFalse(catalog.get(parts[0]).contains(parts[1]),
+                    "deleted table " + dt + " must be removed from the shared catalog");
+        }
+    }
+
+    @Test
+    void noGlueTableDeletion_whenNoCatalogProvided() {
+        WorkloadOrchestrator noCatalog = orchestrator(new ArrayList<>(List.of("seed-1", "seed-2")), 3L);
+        for (int cycle = 0; cycle < 500; cycle++) {
+            for (MutationOperation op : noCatalog.generateBatch()) {
+                assertFalse(op instanceof MutationOperation.DeleteGlueTable,
+                        "DeleteGlueTable must never be emitted without a live catalog");
+            }
+        }
+    }
+
+    @Test
     void generateBatchReturnsBetweenZeroAndTenOperations() {
         WorkloadOrchestrator orch = orchestrator(new ArrayList<>(List.of("p1", "p2")), FIXED_SEED);
         List<MutationOperation> batch = orch.generateBatch();

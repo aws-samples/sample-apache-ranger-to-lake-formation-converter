@@ -390,6 +390,7 @@ tagSync:
 | `s3Prefixes` | S3 prefix list used by `DataLocationPolicyGenerator` and `EmrfsPolicyGenerator` | `["s3://my-bucket/data/", "s3://my-bucket/logs/"]` |
 | `roleArn` | IAM role ARN to assume for all AWS API calls (LF, Glue, S3 Control). If absent, uses the default credential chain. | `null` |
 | `validateEmrSpark` | When `true`, includes EMR Spark LF grants in Phase2 correctness checks. Requires the sync service to have `amazon-emr-spark` in its `rangerServices` list. | `false` |
+| `simulateGlueTableDeletion` | When `true`, the workload occasionally deletes a Glue table out from under live Ranger policies to exercise the deleted-GDC-resource path (LF auto-removes the grants; the sync service must skip the now-impossible re-grant benignly). **Requires Glue write permissions** (`glue:DeleteTable`) and permanently shrinks the table pool — re-run `setup-glue-tables.sh` afterward to restore deleted tables. Never empties a database below 2 tables. | `false` |
 
 ---
 
@@ -708,11 +709,13 @@ With the default 3-database, 5-tables-each setup:
 
 The following scenarios are not currently exercised by the simulator. Each represents a real code path in the sync service that could harbor bugs.
 
-### 1. GDC table or database deletion with live Ranger policies
+### 1. GDC table or database deletion with live Ranger policies ✅
 
-**Scenario:** A Ranger policy grants `analyst` SELECT on `analytics.events`. The Glue table `events` is then deleted from the Data Catalog. The sync service should detect that the resource no longer exists and revoke the dangling LF grant.
+**Scenario:** A Ranger policy grants `analyst` SELECT on `analytics.events`. The Glue table `events` is then deleted from the Data Catalog while the Ranger policy remains.
 
-**Risk:** A dangling LF grant on a non-existent resource is a security over-permission. The sync service likely does not handle this case.
+**Actual behavior (verified):** Lake Formation **automatically removes** all permissions on a table/database when it is deleted — there is no dangling grant to revoke. The Ranger policy, however, remains, so the sync service re-attempts the grant each cycle and Lake Formation rejects it with `InvalidInputException: "Table not found."`. The sync service treats this as a benign, expected condition: it skips the grant (no dead-letter), retries each cycle (self-healing if the table is recreated), and publishes the `MissingResourceGrants` CloudWatch gauge so operators can prune stale Ranger policies. See the main README's *Deleted Glue Resources* section.
+
+**Covered by:** the `simulateGlueTableDeletion` config flag (default off). When enabled, the workload occasionally emits a `DeleteGlueTable` mutation that deletes a table from Glue and removes it from the simulator's shared catalog, so the oracle stops expecting its grants. The Phase 2 validator confirms LF converges (the deleted table's grants disappear) and that no persistent violation results from the sync's benign re-grant failures.
 
 ---
 
@@ -820,7 +823,7 @@ The following scenarios are not currently exercised by the simulator. Each repre
 | Disabled policy produces no LF grant | ✅ |
 | Re-enabled policy restores LF grant | ✅ |
 | Deleted policy revokes LF grant | ✅ |
-| GDC table/database deletion with live Ranger policy | ❌ |
+| GDC table/database deletion with live Ranger policy | ✅ (`simulateGlueTableDeletion`, default off) |
 | Wildcard table policies (`*`) | ✅ (`hive-wildcard`, ~3%) |
 | Database-level policies | ✅ (`hive-db`, ~4%) |
 | Column-level policies | ✅ (`hive-col`, ~4%) |
