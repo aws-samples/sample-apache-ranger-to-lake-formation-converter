@@ -139,6 +139,13 @@ public class SimulatorMain {
             new GeneratorEntry("hive-deny",       hivePolicyGenerator::generateDenyTablePolicy,         3),
             new GeneratorEntry("hive-group",      hivePolicyGenerator::generateGroupTablePolicy,        1),
             new GeneratorEntry("hive-role",       hivePolicyGenerator::generateRoleTablePolicy,         1),
+            // "all" access type — only the hive servicedef accepts it (lakeformation rejects it).
+            // Hive "all" → LF ALL (stored as the single "ALL" token). Exercises the ALL path end-to-end.
+            new GeneratorEntry("hive-all",        hivePolicyGenerator::generateAllAccessTablePolicy,    3),
+            // isExcludes=true — "all tables EXCEPT this"; sync gaps the whole policy (no LF model).
+            new GeneratorEntry("hive-excludes",   hivePolicyGenerator::generateExcludesTablePolicy,     2),
+            // denyExceptions — deny a set, then re-allow a subset; the excepted access is granted.
+            new GeneratorEntry("hive-deny-exc",   hivePolicyGenerator::generateDenyExceptionTablePolicy, 2),
             // Other services
             new GeneratorEntry("trino",           trinoServiceGenerator::generate,                     12),
             new GeneratorEntry("datalocation",    dataLocationGenerator::generate,                      8),

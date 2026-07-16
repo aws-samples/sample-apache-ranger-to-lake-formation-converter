@@ -237,6 +237,74 @@ class ExpectedPermissionsComputerTest {
      * copy.
      */
     @Test
+    void hiveAllAccessType_expectsSingleAllPermission() {
+        // Hive "all" maps to LF ALL, which ListPermissions returns as the single token "ALL"
+        // (not expanded). The oracle must expect exactly {(TABLE, "ALL")} — not 6 individual perms.
+        JsonNode items = singleItemArray(buildItem("alice", "all", false));
+        JsonNode policy = buildPolicy(true, "hive", 0, items, buildTableResources("mydb", "events"));
+
+        Set<SimulatorPermission> result = computer.compute(List.of(policy));
+
+        assertEquals(1, result.size(), "Hive 'all' must produce a single ALL permission");
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("TABLE", perm.resourceType());
+        assertEquals("mydb.events", perm.resourceId());
+        assertEquals("ALL", perm.permission());
+    }
+
+    @Test
+    void hiveAllAccessType_atDatabaseLevel_expectsAll() {
+        // Database-level "all" must also survive the DATABASE valid-action filter as ALL.
+        JsonNode items = singleItemArray(buildItem("alice", "all", false));
+        JsonNode policy = buildPolicy(true, "hive", 0, items, buildDatabaseResources("mydb"));
+
+        Set<SimulatorPermission> result = computer.compute(List.of(policy));
+
+        assertEquals(1, result.size());
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("DATABASE", perm.resourceType());
+        assertEquals("ALL", perm.permission());
+    }
+
+    @Test
+    void denyException_reAllowsExceptedAccessOverDeny() {
+        // Deny SELECT+INSERT, then except SELECT. The sync converts the exception to a @denyException
+        // permit that overrides the matching deny → SELECT is granted; INSERT stays suppressed.
+        String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[],"
+                + "\"denyPolicyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true},{\"type\":\"write\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyExceptions\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],\"delegateAdmin\":false}]}";
+        Set<SimulatorPermission> result = compute(json);
+
+        assertEquals(1, result.size(), "only the excepted SELECT should be granted");
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("SELECT", perm.permission());
+        assertEquals("db1.t1", perm.resourceId());
+        // bare-table SELECT is stored/returned by LF as TABLE_WITH_COLUMNS
+        assertEquals("TABLE_WITH_COLUMNS", perm.resourceType());
+    }
+
+    @Test
+    void isExcludesTrueResource_producesNoPermissions() {
+        // "all tables EXCEPT this" — LF has no exclusion model, so the sync gaps the whole policy
+        // (EXCLUDES_PATTERN → empty). The oracle must skip it too, or it expects phantom grants.
+        String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":true}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],\"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertTrue(result.isEmpty(),
+                "A policy with isExcludes=true on any resource must produce no grants");
+    }
+
+    @Test
     void deletedConcreteTable_producesNoExpectedGrants() {
         // With a TableExistenceChecker that reports the table is gone, a concrete-table policy must
         // expect ZERO grants — mirroring Lake Formation auto-removing permissions on table deletion.
@@ -664,11 +732,10 @@ class ExpectedPermissionsComputerTest {
     }
 
     @Test
-    void hiveAll_producesNoPermissions() {
-        // "all" in the "hive" service map is absent (HiveServiceAdapter maps it to "SUPER" → no LF permission).
-        // Note: the simulator's generateAllAccessTablePolicy() uses rangerServiceName ("lakeformation"), not "hive",
-        // so that generator takes the lakeformation map where "all" expands to 6 permissions. This test covers
-        // the "hive"-named service path, which is reachable if an operator configures a custom hive service name.
+    void hiveAll_producesSingleAllPermission() {
+        // HiveServiceAdapter maps Hive "all" → LF ALL, which ListPermissions returns as the single
+        // token "ALL" (verified against live Lake Formation — NOT expanded, NOT "SUPER"). The oracle
+        // must expect exactly one (TABLE, "ALL") entry so it matches actual LF state.
         String json = "{\"service\":\"hive\",\"isEnabled\":true,\"policyType\":0,"
                 + "\"resources\":{\"database\":{\"values\":[\"db1\"],\"isExcludes\":false},"
                 + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
@@ -677,8 +744,11 @@ class ExpectedPermissionsComputerTest {
                 + "  \"delegateAdmin\":false}],"
                 + "\"denyPolicyItems\":[]}";
         Set<SimulatorPermission> result = compute(json);
-        assertTrue(result.isEmpty(),
-                "hive 'all' maps to SUPER (not an LF permission) — must produce zero grants");
+        assertEquals(1, result.size(), "hive 'all' → single LF ALL permission");
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("TABLE", perm.resourceType());
+        assertEquals("db1.t1", perm.resourceId());
+        assertEquals("ALL", perm.permission());
     }
 
     @Test

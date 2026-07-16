@@ -71,11 +71,17 @@ public class ExpectedPermissionsComputer {
      * @return flat set of expected SimulatorPermissions
      */
     public Set<SimulatorPermission> compute(List<JsonNode> policies) {
-        // Pass 1: collect all deny keys across all services
+        // Pass 1: collect all deny keys across all services, plus deny-EXCEPTION keys. A
+        // denyExceptions item is converted by the sync to a @denyException permit that overrides a
+        // matching forbid (CedarToLFConverter: a forbidden permit survives if its key is in the
+        // deny-exception set). So a deny-exception (principal, resource, permission) must NOT be
+        // subtracted by a matching deny below.
         Set<DenyKey> globalDenySet = new HashSet<>();
+        Set<DenyKey> globalDenyExceptionSet = new HashSet<>();
         for (JsonNode policy : policies) {
             if (!shouldProcess(policy)) continue;
             collectDenies(policy, globalDenySet);
+            collectDenyExceptions(policy, globalDenyExceptionSet);
         }
 
         // Pass 2: collect all permit entries, tagging each with its source policy id
@@ -101,6 +107,9 @@ public class ExpectedPermissionsComputer {
             String principal = p.principalArn();
             String perm = p.permission();
             String rid = p.resourceId();
+            // A matching deny-exception restores the permit (deny-exception wins over deny),
+            // mirroring CedarToLFConverter's denyExceptionSet check.
+            if (globalDenyExceptionSet.contains(new DenyKey(principal, rid, perm))) return false;
             for (DenyKey dk : globalDenySet) {
                 if (!dk.principalArn().equals(principal)) continue;
                 if (!dk.permission().equals(perm)) continue;
@@ -231,6 +240,13 @@ public class ExpectedPermissionsComputer {
         if (policy.path("policyType").asInt(0) == 1) return false;
         JsonNode resources = policy.path("resources");
         if (resources.isMissingNode() || resources.isEmpty()) return false;
+        // isExcludes=true means "all resources EXCEPT these" — LF has no such model, so the sync
+        // service gaps the ENTIRE policy (RangerToCedarConverter: EXCLUDES_PATTERN → empty). Any
+        // resource element carrying isExcludes=true drops the whole policy; the oracle must too or
+        // it produces phantom grants the sync never issues.
+        for (JsonNode res : resources) {
+            if (res.path("isExcludes").asBoolean(false)) return false;
+        }
         return true;
     }
 
@@ -239,6 +255,12 @@ public class ExpectedPermissionsComputer {
         Map<String, Set<String>> accessMap = accessMapForService(serviceName);
         JsonNode resources = policy.path("resources");
         for (JsonNode item : policy.path("policyItems")) {
+            processItemInto(item, resources, result, accessMap);
+        }
+        // denyExceptions items also produce permits: the sync converts each to a @denyException
+        // permit statement (RangerToCedarConverter), which grants like a normal allow item AND
+        // overrides a matching deny (handled via globalDenyExceptionSet in compute()).
+        for (JsonNode item : policy.path("denyExceptions")) {
             processItemInto(item, resources, result, accessMap);
         }
     }
@@ -427,10 +449,11 @@ public class ExpectedPermissionsComputer {
     // TABLE_VALID_ACTIONS / DATABASE_VALID_ACTIONS. CREATE_TABLE/CREATE_DATABASE are database-only;
     // SELECT/INSERT/DELETE are table-only. The sync service drops out-of-level permissions, so the
     // oracle must too or it produces phantom under-grants (e.g. table-level "create" → CREATE_TABLE).
+    // "ALL" is valid at both table and database level (Hive/Trino "all" → LF ALL, stored as-is).
     private static final Set<String> TABLE_VALID_ACTIONS =
-            Set.of("SELECT", "INSERT", "DELETE", "DESCRIBE", "ALTER", "DROP");
+            Set.of("SELECT", "INSERT", "DELETE", "DESCRIBE", "ALTER", "DROP", "ALL");
     private static final Set<String> DATABASE_VALID_ACTIONS =
-            Set.of("CREATE_TABLE", "CREATE_DATABASE", "ALTER", "DROP", "DESCRIBE");
+            Set.of("CREATE_TABLE", "CREATE_DATABASE", "ALTER", "DROP", "DESCRIBE", "ALL");
 
     private static Set<String> validActionsFor(String resourceType) {
         if ("DATABASE".equals(resourceType)) return DATABASE_VALID_ACTIONS;
@@ -454,11 +477,25 @@ public class ExpectedPermissionsComputer {
     private record DenyKey(String principalArn, String resourceId, String permission) {}
 
     private void collectDenies(JsonNode policy, Set<DenyKey> denySet) {
+        collectKeysFrom(policy, "denyPolicyItems", denySet);
+    }
+
+    /**
+     * Collect deny-EXCEPTION keys — the (principal, resource, permission) triples that a
+     * denyExceptions item re-allows even when a matching deny exists. Structurally identical to
+     * {@link #collectDenies}, but reads the {@code denyExceptions} array.
+     */
+    private void collectDenyExceptions(JsonNode policy, Set<DenyKey> exceptionSet) {
+        collectKeysFrom(policy, "denyExceptions", exceptionSet);
+    }
+
+    /** Build (principal, resourceId, permission) keys from the named policy-item array. */
+    private void collectKeysFrom(JsonNode policy, String itemArrayField, Set<DenyKey> out) {
         String serviceName = policy.path("service").asText(null);
         Map<String, Set<String>> accessMap = accessMapForService(serviceName);
         JsonNode resources = policy.path("resources");
 
-        for (JsonNode item : policy.path("denyPolicyItems")) {
+        for (JsonNode item : policy.path(itemArrayField)) {
             Set<String> lfPermissions = new HashSet<>();
             for (JsonNode acc : item.path("accesses")) {
                 if (!acc.path("isAllowed").asBoolean(true)) continue;
@@ -472,7 +509,7 @@ public class ExpectedPermissionsComputer {
             for (String principalArn : resolvePrincipals(item)) {
                 for (ResourceSpec spec : specs) {
                     for (String permission : lfPermissions) {
-                        denySet.add(new DenyKey(principalArn, spec.resourceId(), permission));
+                        out.add(new DenyKey(principalArn, spec.resourceId(), permission));
                     }
                 }
             }
@@ -517,7 +554,10 @@ public class ExpectedPermissionsComputer {
         hiveMap.put("alter",  Set.of("ALTER"));
         hiveMap.put("read",   Set.of("SELECT"));
         hiveMap.put("write",  Set.of("INSERT"));
-        // "all" intentionally absent: HiveServiceAdapter maps it to "SUPER" which is not an LF permission → zero grants
+        // "all" → LF "ALL": HiveServiceAdapter maps Hive "all" to the LF ALL permission, which
+        // ListPermissions returns as the single token "ALL" (verified: LF does not expand it into
+        // individual permissions). The oracle must expect exactly {"ALL"} to match.
+        hiveMap.put("all",    Set.of("ALL"));
         // "describe" intentionally absent: not a registered access type in the Hive Ranger service definition
         // "insert" intentionally absent: Hive uses "write" for insert semantics; "insert" is not a Hive access type
 

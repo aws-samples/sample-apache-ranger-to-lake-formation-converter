@@ -204,8 +204,9 @@ public class HivePolicyGenerator {
     }
 
     /**
-     * Gap 5: Generate a table-level policy using "all" access type.
-     * "all" expands to SELECT, INSERT, DELETE, ALTER, DROP, DESCRIBE in LF.
+     * Generate a table-level policy using the "all" access type. Only the hive servicedef accepts
+     * "all"; HiveServiceAdapter maps it to the LF ALL permission, which ListPermissions returns as
+     * the single token "ALL" (not expanded into individual permissions).
      */
     public Map<String, Object> generateAllAccessTablePolicy(String policyId) {
         String db = randomFrom(databases);
@@ -214,6 +215,35 @@ public class HivePolicyGenerator {
         String user = randomFrom(principalNames);
 
         return buildPolicy(policyId, db, table, null, List.of(user), List.of("all"), false);
+    }
+
+    /**
+     * Generate a table-level policy whose {@code table} resource uses {@code isExcludes=true}
+     * ("all tables EXCEPT this one"). Lake Formation has no "all except" model, so the sync service
+     * gaps the ENTIRE policy (EXCLUDES_PATTERN) and produces zero LF grants. Exercises the oracle's
+     * matching skip so no phantom grant is expected.
+     */
+    public Map<String, Object> generateExcludesTablePolicy(String policyId) {
+        String db = randomFrom(databases);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
+        String user = randomFrom(principalNames);
+        List<String> accesses = randomSubset(TABLE_ACCESS_TYPES, 1 + random.nextInt(3));
+
+        Map<String, Object> resources = new LinkedHashMap<>();
+        resources.put("database", Map.of("values", List.of(db), "isExcludes", false));
+        // The exclusion is on the table resource — "grant on every table in db EXCEPT this one".
+        resources.put("table", Map.of("values", List.of(table), "isExcludes", true));
+
+        return Map.of(
+                "name", "sim-policy-" + policyId,
+                "service", hiveServiceName,
+                "isEnabled", true,
+                "policyType", 0,
+                "resources", resources,
+                "policyItems", List.of(buildItem(List.of(user), accesses, false)),
+                "denyPolicyItems", List.of()
+        );
     }
 
     /**
@@ -227,6 +257,37 @@ public class HivePolicyGenerator {
         List<String> accesses = randomSubset(TABLE_ACCESS_TYPES, 1 + random.nextInt(3));
 
         return buildPolicy(policyId, db, table, null, List.of(UNMAPPED_PRINCIPAL), accesses, false);
+    }
+
+    /**
+     * Generate a table policy that denies a user a set of accesses, then re-allows a subset via
+     * {@code denyExceptions}. Net LF effect: the deny-exception accesses ARE granted (the sync
+     * converts them to @denyException permits that override the matching deny), while the
+     * deny-only accesses are suppressed. Exercises the deny-exception override path.
+     */
+    public Map<String, Object> generateDenyExceptionTablePolicy(String policyId) {
+        String db = randomFrom(databases);
+        List<String> tables = databaseTables.getOrDefault(db, List.of());
+        String table = tables.isEmpty() ? "*" : randomFrom(tables);
+        String user = randomFrom(principalNames);
+        // Deny two accesses, then except one of them (which is therefore granted).
+        List<String> denied = randomSubset(TABLE_ACCESS_TYPES, 2);
+        List<String> excepted = List.of(denied.get(0));
+
+        Map<String, Object> resources = new LinkedHashMap<>();
+        resources.put("database", Map.of("values", List.of(db), "isExcludes", false));
+        resources.put("table", Map.of("values", List.of(table), "isExcludes", false));
+
+        return Map.of(
+                "name", "sim-policy-" + policyId,
+                "service", hiveServiceName,
+                "isEnabled", true,
+                "policyType", 0,
+                "resources", resources,
+                "policyItems", List.of(),
+                "denyPolicyItems", List.of(buildItem(List.of(user), denied, false)),
+                "denyExceptions", List.of(buildItem(List.of(user), excepted, false))
+        );
     }
 
     /** The unmapped principal name used by {@link #generateUnmappedPrincipalPolicy}. */
