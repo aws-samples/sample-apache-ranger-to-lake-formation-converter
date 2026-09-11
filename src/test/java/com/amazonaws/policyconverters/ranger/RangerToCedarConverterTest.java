@@ -635,6 +635,72 @@ class RangerToCedarConverterTest {
                 .count(), "each convert() call reports afresh");
     }
 
+    @Test
+    void nullAccessTypeReportsGapWithoutThrowing() {
+        // A malformed policy item with a null access type must not crash the whole assessment
+        // run (dedupKey computation used to call accessType.trim() unconditionally). It should
+        // still surface exactly one gap, matching pre-fix behavior of reporting null access types.
+        //
+        // RangerPolicyItemAccess.setType(null) defensively normalizes to "" internally, so the
+        // public setter can never produce a true null. A real null reaches this code path when
+        // policies are deserialized from JSON with an explicit "type": null (e.g. via Gson, which
+        // populates fields by reflection and bypasses the setter) — reproduced here the same way.
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(6000L);
+        policy.setName("test-hive-null-access-type");
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", resource("mydb"));
+        resources.put("table", resource("mytable"));
+        policy.setResources(resources);
+
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of("alice"));
+        RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+        access.setIsAllowed(true);
+        setAccessTypeFieldToNull(access);
+        item.setAccesses(List.of(access));
+        policy.setPolicyItems(List.of(item));
+
+        assertDoesNotThrow(() -> hiveConverter.convert(List.of(policy)),
+                "null access type must not throw an exception during conversion");
+
+        assertEquals(1, gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
+                .count(), "null access type should still produce exactly one gap");
+    }
+
+    /**
+     * Bypass {@code RangerPolicyItemAccess.setType(String)}, which silently converts a null
+     * argument to {@code ""}, to construct a genuinely null {@code type} field the way a
+     * reflection-based JSON deserializer (e.g. Gson) would from a malformed policy export.
+     */
+    private void setAccessTypeFieldToNull(RangerPolicyItemAccess access) {
+        try {
+            java.lang.reflect.Field typeField = RangerPolicyItemAccess.class.getDeclaredField("type");
+            typeField.setAccessible(true);
+            typeField.set(access, null);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void unsupportedAccessTypeSharedBetweenAllowAndDenyItemsReportsOnce() {
+        // The dedup set is scoped per policy (not per policy-item type): an allow item and a
+        // deny item in the same policy that share an unmappable access type must collapse to
+        // one gap, locking in the cross-item-type dedup that motivated the per-policy scoping.
+        RangerPolicy policy = buildHiveTablePolicyWithPrincipals(List.of("alice"), List.of("refresh"));
+        policy.setDenyPolicyItems(policy.getPolicyItems());
+
+        hiveConverter.convert(List.of(policy));
+
+        assertEquals(1, gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
+                .count(), "allow and deny items sharing an unmappable access type must dedup to one gap");
+    }
+
     private RangerPolicy buildHiveTablePolicyWithPrincipals(List<String> principals, List<String> accessTypes) {
         return buildHiveTablePolicyWithPrincipals(5000L, principals, accessTypes);
     }

@@ -409,8 +409,11 @@ public class RangerToCedarConverter {
                     Set<String> rawMapped = adapter.mapAccessTypeToCedarActions(accessType);
                     if (rawMapped.isEmpty()) {
                         // Normalize the key so 'REFRESH' and 'refresh' in different policy items
-                        // of the same policy collapse to one finding.
-                        if (reportedUnmappedAccessTypes.add(accessType.trim().toLowerCase())) {
+                        // of the same policy collapse to one finding. A null accessType (malformed
+                        // policy item) must still be reported, so it gets its own sentinel key
+                        // rather than throwing on the null.trim() call below.
+                        String dedupKey = accessType == null ? "<null>" : accessType.trim().toLowerCase();
+                        if (reportedUnmappedAccessTypes.add(dedupKey)) {
                             gapReporter.recordGap(new GapEntry(
                                     policyId, null, GapType.UNSUPPORTED_ACTION,
                                     null,
