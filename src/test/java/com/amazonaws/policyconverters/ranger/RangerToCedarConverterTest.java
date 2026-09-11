@@ -641,10 +641,15 @@ class RangerToCedarConverterTest {
         // run (dedupKey computation used to call accessType.trim() unconditionally). It should
         // still surface exactly one gap, matching pre-fix behavior of reporting null access types.
         //
-        // RangerPolicyItemAccess.setType(null) defensively normalizes to "" internally, so the
-        // public setter can never produce a true null. A real null reaches this code path when
-        // policies are deserialized from JSON with an explicit "type": null (e.g. via Gson, which
-        // populates fields by reflection and bypasses the setter) — reproduced here the same way.
+        // Reaching a true null takes reflection, because RangerPolicyItemAccess.setType(null)
+        // normalizes to "" internally. Note that our own Jackson 2 deserialization does NOT
+        // produce a null here: RangerPolicyItemAccess carries @JsonAutoDetect(fieldVisibility=ANY),
+        // but that annotation is org.codehaus.jackson (Jackson 1), which Jackson 2 ignores — so
+        // Jackson 2 goes through the public setter and an explicit "type": null becomes "".
+        // Verified empirically. The guard under test is therefore defence-in-depth for callers
+        // that populate the field directly (Ranger's own Jackson 1 based REST client does honour
+        // that annotation), which is why this test sets the private field rather than using the
+        // setter — the setter cannot reach the branch being guarded.
         RangerPolicy policy = new RangerPolicy();
         policy.setId(6000L);
         policy.setName("test-hive-null-access-type");
