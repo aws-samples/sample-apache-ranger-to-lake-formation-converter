@@ -64,4 +64,32 @@ class GapEntryTest {
         assertTrue(str.contains("42"));
         assertTrue(str.contains("DENY_POLICY"));
     }
+
+    @Test
+    void knownUnmappableActionGapTypeRoundTripsThroughJson() throws Exception {
+        GapEntry entry = new GapEntry(
+                "42", "hive-analyst", GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION,
+                null, "details", "recommendation", "hive", "index");
+
+        // `mapper` is the existing field at GapEntryTest.java:10 — do not redeclare it.
+        String json = mapper.writeValueAsString(entry);
+        GapEntry parsed = mapper.readValue(json, GapEntry.class);
+
+        assertEquals(entry, parsed);
+        assertEquals("hive", parsed.getServiceType());
+        assertEquals("index", parsed.getAccessType());
+    }
+
+    @Test
+    void legacySixArgConstructorLeavesActionFieldsNullAndOutOfJson() throws Exception {
+        GapEntry entry = new GapEntry(
+                "42", "mask-ssn", GapEntry.GapType.DATA_MASKING, "db/tbl", "d", "r");
+
+        assertNull(entry.getServiceType());
+        assertNull(entry.getAccessType());
+
+        String json = mapper.writeValueAsString(entry);
+        assertFalse(json.contains("serviceType"), "NON_NULL must keep the field out of unrelated gaps");
+        assertFalse(json.contains("accessType"));
+    }
 }

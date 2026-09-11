@@ -29,6 +29,7 @@ public class GapEntry {
         WILDCARD_PATTERN("WILDCARD_PATTERN"),
         UNSUPPORTED_SERVICE_TYPE("UNSUPPORTED_SERVICE_TYPE"),
         UNSUPPORTED_ACTION("UNSUPPORTED_ACTION"),
+        KNOWN_UNMAPPABLE_ACTION("KNOWN_UNMAPPABLE_ACTION"),
         UNMAPPED_RESOURCE("UNMAPPED_RESOURCE"),
         SCHEMA_VALIDATION_FAILURE("SCHEMA_VALIDATION_FAILURE"),
         UNREGISTERED_S3_LOCATION("UNREGISTERED_S3_LOCATION"),
@@ -63,6 +64,20 @@ public class GapEntry {
     private final String resourcePath;
     private final String details;
     private final String recommendation;
+    /** Ranger service type; populated only for action-related gap types, else null. */
+    private final String serviceType;
+    /** Ranger access type; populated only for action-related gap types, else null. */
+    private final String accessType;
+
+    public GapEntry(
+            String policyId,
+            String policyName,
+            GapType gapType,
+            String resourcePath,
+            String details,
+            String recommendation) {
+        this(policyId, policyName, gapType, resourcePath, details, recommendation, null, null);
+    }
 
     @JsonCreator
     public GapEntry(
@@ -71,13 +86,17 @@ public class GapEntry {
             @JsonProperty("gapType") GapType gapType,
             @JsonProperty("resourcePath") String resourcePath,
             @JsonProperty("details") String details,
-            @JsonProperty("recommendation") String recommendation) {
+            @JsonProperty("recommendation") String recommendation,
+            @JsonProperty("serviceType") String serviceType,
+            @JsonProperty("accessType") String accessType) {
         this.policyId = policyId;
         this.policyName = policyName;
         this.gapType = gapType;
         this.resourcePath = resourcePath;
         this.details = details;
         this.recommendation = recommendation;
+        this.serviceType = serviceType;
+        this.accessType = accessType;
     }
 
     public String getPolicyId() {
@@ -104,6 +123,14 @@ public class GapEntry {
         return recommendation;
     }
 
+    public String getServiceType() {
+        return serviceType;
+    }
+
+    public String getAccessType() {
+        return accessType;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -114,12 +141,15 @@ public class GapEntry {
                 && gapType == gapEntry.gapType
                 && Objects.equals(resourcePath, gapEntry.resourcePath)
                 && Objects.equals(details, gapEntry.details)
-                && Objects.equals(recommendation, gapEntry.recommendation);
+                && Objects.equals(recommendation, gapEntry.recommendation)
+                && Objects.equals(serviceType, gapEntry.serviceType)
+                && Objects.equals(accessType, gapEntry.accessType);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(policyId, policyName, gapType, resourcePath, details, recommendation);
+        return Objects.hash(policyId, policyName, gapType, resourcePath, details, recommendation,
+                serviceType, accessType);
     }
 
     @Override
@@ -131,6 +161,8 @@ public class GapEntry {
                 ", resourcePath='" + resourcePath + '\'' +
                 ", details='" + details + '\'' +
                 ", recommendation='" + recommendation + '\'' +
+                ", serviceType='" + serviceType + '\'' +
+                ", accessType='" + accessType + '\'' +
                 '}';
     }
 }
