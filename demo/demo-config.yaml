@@ -1,0 +1,45 @@
+# Demo configuration for the offline assessment walkthrough.
+#
+#   java -jar target/assessment-jar-with-dependencies.jar \
+#       file demo/Demo_Ranger_Policies.json --config demo/demo-config.yaml --console-only
+#
+# Two things this file provides that the CLI flags cannot:
+#
+#   1. principalMapping — without it, every projected grant is printed as
+#      "ranger-user:alice_analyst" behind a "no principal mapping configured" warning.
+#      With it, grants read as the real IAM ARNs an operator would see in Lake Formation.
+#
+#   2. gdcCatalogName   — tells the Trino adapter which Trino catalog is backed by the
+#      Glue Data Catalog. Policies on any other catalog (postgresql_crm, mysql_legacy)
+#      are correctly filtered out instead of producing bogus LF grants.
+#
+# Note there is deliberately NO awsConfig section: the demo runs fully offline, so
+# wildcard patterns stay unexpanded and are reported as WILDCARD_PATTERN. Add
+# --aws-region / --aws-profile on the command line to show live Glue expansion.
+
+rangerServices:
+  - serviceType: hive
+    serviceInstanceName: acme_hive
+  - serviceType: trino
+    serviceInstanceName: acme_trino
+    gdcCatalogName: awsdatacatalog
+  - serviceType: amazon-emr-emrfs
+    serviceInstanceName: acme_emrfs
+
+principalMapping:
+  type: STATIC
+  userMappings:
+    alice_analyst: "arn:aws:iam::111122223333:role/AcmeAnalyst"
+    bob_engineer: "arn:aws:iam::111122223333:role/AcmeDataEngineer"
+    carol_dpo: "arn:aws:iam::111122223333:role/AcmeDataProtectionOfficer"
+    dave_contractor: "arn:aws:iam::111122223333:role/AcmeContractor"
+    erin_steward: "arn:aws:iam::111122223333:role/AcmeDataSteward"
+  groupMappings:
+    data_analysts: "arn:aws:iam::111122223333:role/AcmeDataAnalysts"
+    data_engineers: "arn:aws:iam::111122223333:role/AcmeDataEngineers"
+    finance_readers: "arn:aws:iam::111122223333:role/AcmeFinanceReaders"
+    hr_admins: "arn:aws:iam::111122223333:role/AcmeHrAdmins"
+    marketing_bi: "arn:aws:iam::111122223333:role/AcmeMarketingBI"
+    external_partners: "arn:aws:iam::111122223333:role/AcmeExternalPartners"
+  roleMappings:
+    lf_data_steward: "arn:aws:iam::111122223333:role/AcmeLakeFormationSteward"
