@@ -16,3 +16,9 @@ checkpoint/
 lf-operations*.json
 gaps.json
 assessment-report-*.json
+ignore/
+
+*.json
+
+# Demo assessment outputs
+demo/out/
