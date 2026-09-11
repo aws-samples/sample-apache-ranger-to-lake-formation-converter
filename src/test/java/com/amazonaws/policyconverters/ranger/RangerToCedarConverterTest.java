@@ -565,6 +565,133 @@ class RangerToCedarConverterTest {
         return r;
     }
 
+    // --- Unsupported access type dedup tests ---
+
+    @Test
+    void unsupportedAccessTypeIsReportedOncePerPolicyNotPerPrincipal() {
+        // Multiple principals on one policy: the access type is unmappable regardless of
+        // principal, so the operator must see one finding, not one per principal.
+        RangerPolicy policy = buildHiveTablePolicyWithPrincipals(
+                List.of("alice", "bob", "carol"), List.of("select", "refresh"));
+
+        hiveConverter.convert(List.of(policy));
+
+        long refreshGaps = gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
+                .filter(g -> g.getDetails().contains("'refresh'"))
+                .count();
+        assertEquals(1, refreshGaps, "one entry per (policy, accessType)");
+    }
+
+    @Test
+    void unsupportedAccessTypeIsReportedOncePerPolicyNotPerResource() {
+        // Several tables in one policy — same reasoning.
+        RangerPolicy policy = buildHiveMultiTablePolicy(
+                List.of("orders", "events", "users"), List.of("refresh"));
+
+        hiveConverter.convert(List.of(policy));
+
+        assertEquals(1, gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
+                .count());
+    }
+
+    @Test
+    void twoDistinctUnsupportedAccessTypesEachReportOnce() {
+        RangerPolicy policy = buildHiveTablePolicyWithPrincipals(
+                List.of("alice", "bob"), List.of("refresh", "repladmin"));
+
+        hiveConverter.convert(List.of(policy));
+
+        assertEquals(2, gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
+                .count());
+    }
+
+    @Test
+    void separatePoliciesWithTheSameUnsupportedActionEachReportOnce() {
+        // Dedup is per policy, not global — two policies must yield two findings.
+        hiveConverter.convert(List.of(
+                buildHiveTablePolicyWithPrincipals(1L, List.of("alice"), List.of("refresh")),
+                buildHiveTablePolicyWithPrincipals(2L, List.of("alice"), List.of("refresh"))));
+
+        assertEquals(2, gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
+                .count());
+    }
+
+    @Test
+    void repeatedConvertCallsReportTheGapEachTime() {
+        // Critical lifecycle guard: the sync server holds one long-lived converter and calls
+        // convert() every cycle. Dedup state must NOT persist across calls, or the gap report
+        // silently empties out after the first cycle.
+        RangerPolicy policy = buildHiveTablePolicyWithPrincipals(List.of("alice"), List.of("refresh"));
+
+        hiveConverter.convert(List.of(policy));
+        hiveConverter.convert(List.of(policy));
+
+        assertEquals(2, gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
+                .count(), "each convert() call reports afresh");
+    }
+
+    private RangerPolicy buildHiveTablePolicyWithPrincipals(List<String> principals, List<String> accessTypes) {
+        return buildHiveTablePolicyWithPrincipals(5000L, principals, accessTypes);
+    }
+
+    private RangerPolicy buildHiveTablePolicyWithPrincipals(long id, List<String> principals,
+                                                             List<String> accessTypes) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(id);
+        policy.setName("test-hive-multi-principal-policy");
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", resource("mydb"));
+        resources.put("table", resource("mytable"));
+        policy.setResources(resources);
+
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(principals);
+        List<RangerPolicyItemAccess> accesses = new ArrayList<>();
+        for (String accessType : accessTypes) {
+            RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+            access.setType(accessType);
+            access.setIsAllowed(true);
+            accesses.add(access);
+        }
+        item.setAccesses(accesses);
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
+    private RangerPolicy buildHiveMultiTablePolicy(List<String> tables, List<String> accessTypes) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(5001L);
+        policy.setName("test-hive-multi-table-policy");
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", resource("mydb"));
+        RangerPolicyResource tableRes = new RangerPolicyResource();
+        tableRes.setValues(tables);
+        resources.put("table", tableRes);
+        policy.setResources(resources);
+
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of("alice"));
+        List<RangerPolicyItemAccess> accesses = new ArrayList<>();
+        for (String accessType : accessTypes) {
+            RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+            access.setType(accessType);
+            access.setIsAllowed(true);
+            accesses.add(access);
+        }
+        item.setAccesses(accesses);
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
     // ---- EMR Spark catalog policies ----
 
     @Test
