@@ -3,6 +3,7 @@ package com.amazonaws.policyconverters.cedar;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
 import org.apache.ranger.plugin.model.RangerPolicy;
 
+import java.util.Collections;
 import java.util.Optional;
 import java.util.Set;
 
@@ -34,6 +35,38 @@ public interface SourcePolicyAdapter {
      */
     default Set<String> mapAccessTypeToCedarActions(String sourceAccessType, String resourceLevel) {
         return mapAccessTypeToCedarActions(sourceAccessType);
+    }
+
+    /**
+     * Access types this adapter recognises but deliberately does not map, because the
+     * capability has no Lake Formation equivalent — e.g. Hive {@code index}/{@code lock},
+     * Presto/Trino {@code grant}/{@code revoke}.
+     *
+     * <p><strong>This is not the same as an access type the adapter has never heard of.</strong>
+     * An unrecognised type means the adapter itself has a coverage gap (a new Ranger release,
+     * a custom access type) and must stay loud as an actionable {@code UNSUPPORTED_ACTION}.
+     * A type listed here means "we know exactly what this is and it can never map", and is
+     * reported as an informational {@code KNOWN_UNMAPPABLE_ACTION} that does not affect a
+     * policy's convertibility classification.
+     *
+     * <p>Values must be lower-case; matching is done against a normalized input.
+     * Defaults to empty — adapters with no such types need not override.
+     */
+    default Set<String> getKnownUnmappableAccessTypes() {
+        return Collections.emptySet();
+    }
+
+    /**
+     * Whether {@code sourceAccessType} is one this adapter deliberately does not map.
+     * Normalizes the input, because callers pass the raw value straight from the Ranger
+     * policy JSON. Adapters override {@link #getKnownUnmappableAccessTypes()}, not this.
+     */
+    default boolean isKnownUnmappableAccessType(String sourceAccessType) {
+        if (sourceAccessType == null) {
+            return false;
+        }
+        return getKnownUnmappableAccessTypes()
+                .contains(sourceAccessType.trim().toLowerCase());
     }
 
     /**

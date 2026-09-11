@@ -212,6 +212,13 @@ class PrestoServiceAdapterTest {
         verify(emitter).recordUnmappedAccessType("bogus_type");
     }
 
+    @Test
+    void grantAndRevokeAreDeclaredKnownUnmappable() {
+        assertTrue(adapter.isKnownUnmappableAccessType("grant"));
+        assertTrue(adapter.isKnownUnmappableAccessType("revoke"));
+        assertFalse(adapter.isKnownUnmappableAccessType("select"));
+    }
+
     private static RangerPolicy prestoPolicy(String catalog, String schema, String table) {
         RangerPolicy policy = new RangerPolicy();
         policy.setService("presto");

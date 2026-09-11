@@ -234,6 +234,13 @@ class TrinoServiceAdapterTest {
         verify(emitter).recordUnmappedAccessType("bogus_type");
     }
 
+    @Test
+    void grantAndRevokeAreDeclaredKnownUnmappable() {
+        assertTrue(adapter.isKnownUnmappableAccessType("grant"));
+        assertTrue(adapter.isKnownUnmappableAccessType("revoke"));
+        assertFalse(adapter.isKnownUnmappableAccessType("select"));
+    }
+
     /** Build a Trino policy with catalog/schema[/table] resources. */
     private static RangerPolicy trinoPolicy(String catalog, String schema, String table, String column) {
         RangerPolicy policy = new RangerPolicy();

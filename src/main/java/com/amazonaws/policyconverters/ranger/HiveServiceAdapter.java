@@ -74,6 +74,11 @@ public class HiveServiceAdapter implements SourcePolicyAdapter {
     }
 
     @Override
+    public Set<String> getKnownUnmappableAccessTypes() {
+        return UNMAPPED_ACCESS_TYPES;
+    }
+
+    @Override
     public Set<String> mapAccessTypeToCedarActions(String sourceAccessType) {
         if (sourceAccessType == null || sourceAccessType.trim().isEmpty()) {
             LOG.error("Null or empty access type provided");
