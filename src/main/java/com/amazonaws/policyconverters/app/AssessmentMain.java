@@ -36,6 +36,7 @@ import java.util.List;
  *     --skip-validation         Skip Cedar schema validation (use for large policy sets)
  *
  *   file &lt;export-file.json&gt; [options]
+ *     --config &lt;file&gt;           server-config.yaml supplying principalMapping and gdcCatalogName
  *     --output-dir &lt;dir&gt;        Directory for JSON report (default: current dir)
  *     --aws-region &lt;region&gt;     Enable Glue wildcard expansion
  *     --console-only            Print report to console, skip JSON file
@@ -60,6 +61,7 @@ public class AssessmentMain {
             "    --skip-validation                  Skip Cedar schema validation (use for large policy sets)",
             "",
             "  file <export-file.json> [options]",
+            "    --config <file>                    server-config.yaml supplying principalMapping and gdcCatalogName",
             "    --output-dir <dir>                 Directory for JSON report (default: current dir)",
             "    --aws-region <region>              Enable Glue wildcard expansion",
             "    --aws-profile <profile>            AWS credentials profile for Glue/STS calls",
@@ -215,6 +217,20 @@ public class AssessmentMain {
                     System.err.println("--services is not supported in file mode; " +
                             "all services in the export are assessed automatically");
                     return 1;
+                case "--config": {
+                    String configPath = nextArg(flagArgs, i++, flag);
+                    if (!Files.isReadable(Paths.get(configPath))) {
+                        System.err.println("Cannot read config file: " + configPath);
+                        return 1;
+                    }
+                    try {
+                        applyConfigFile(configPath, configBuilder);
+                    } catch (IOException e) {
+                        System.err.println("Failed to load config file: " + e.getMessage());
+                        return 1;
+                    }
+                    break;
+                }
                 case "--output-dir":
                     configBuilder.outputDir(Paths.get(nextArg(flagArgs, i++, flag)));
                     break;
@@ -262,7 +278,14 @@ public class AssessmentMain {
 
     private static void applyConfigFile(String configFilePath, AssessmentConfig.Builder builder)
             throws IOException {
-        ServerConfigLoader loader = new ServerConfigLoader();
+        // Environment overrides are deliberately disabled here. The sync server wants them, but
+        // an assessment must be reproducible: with System::getenv, an ambient AWS_REGION would
+        // synthesize an awsConfig the YAML never declared, which silently switches the run from
+        // the offline PassthroughCatalogResolver to a Glue-backed one. Every Glue call then fails
+        // for want of credentials, wildcard resources expand to nothing, and the affected
+        // policies are misreported as UNMAPPED_RESOURCE instead of WILDCARD_PATTERN. AWS access
+        // is opted into explicitly, via --aws-region/--aws-profile or an awsConfig block.
+        ServerConfigLoader loader = new ServerConfigLoader(name -> null);
         ServerConfigLoader.CompositeConfig compositeConfig = loader.load(configFilePath);
         SyncConfig syncConfig = compositeConfig.getSyncConfig();
 
@@ -280,7 +303,12 @@ public class AssessmentMain {
             builder.principalMapping(syncConfig.getPrincipalMapping());
         }
 
-        if (syncConfig.getAwsConfig() != null) {
+        // ConfigLoader always materializes an AwsConfig, even when the YAML declares none, so a
+        // null check is not enough — an all-null AwsConfig would still switch the assessment onto
+        // a Glue-backed CatalogResolver whose every call fails. Require a region.
+        if (syncConfig.getAwsConfig() != null
+                && syncConfig.getAwsConfig().getRegion() != null
+                && !syncConfig.getAwsConfig().getRegion().isBlank()) {
             builder.awsConfig(syncConfig.getAwsConfig());
         }
     }

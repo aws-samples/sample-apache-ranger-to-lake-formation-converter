@@ -74,7 +74,8 @@ public class AssessmentRunner {
                         .map(aws -> new AwsContext(aws.getRegion(), aws.getCatalogId(), aws.getCatalogId()))
                         .orElse(new AwsContext("us-east-1", "000000000000", "000000000000"));
                 BaseRangerService service = ConversionServerMain.createRangerService(
-                        new RangerServiceConfig(batch.getServiceType(), batch.getServiceName(), null, null));
+                        new RangerServiceConfig(batch.getServiceType(), batch.getServiceName(), null,
+                                resolveGdcCatalogName(config, batch)));
                 adapterRegistry.put(batch.getServiceName(), service.createAdapter(awsContext));
             }
         }
@@ -210,6 +211,27 @@ public class AssessmentRunner {
     protected S3AccessGrantsClient createS3AccessGrantsClient(
             com.amazonaws.policyconverters.config.S3AccessGrantsConfig s3Config) {
         return new S3AccessGrantsClient(s3Config, null /* no dead-letter in assessment */);
+    }
+
+    /**
+     * Finds the {@code gdcCatalogName} configured for the batch's service, preferring an exact
+     * service-instance-name match and falling back to any configured service of the same type.
+     * Returns {@code null} when nothing is configured, which disables catalog filtering.
+     */
+    private static String resolveGdcCatalogName(AssessmentConfig config, ServicePolicyBatch batch) {
+        String byName = null;
+        String byType = null;
+        for (RangerServiceConfig svc : config.getServices()) {
+            if (svc.getGdcCatalogName() == null) {
+                continue;
+            }
+            if (batch.getServiceName().equals(svc.getServiceInstanceName())) {
+                byName = svc.getGdcCatalogName();
+            } else if (byType == null && batch.getServiceType().equals(svc.getServiceType())) {
+                byType = svc.getGdcCatalogName();
+            }
+        }
+        return byName != null ? byName : byType;
     }
 
     private CatalogResolver buildCatalogResolver(AssessmentConfig config) {

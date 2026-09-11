@@ -145,6 +145,11 @@ public class TrinoServiceAdapter implements SourcePolicyAdapter {
 
     @Override
     public boolean shouldProcessPolicy(RangerPolicy policy) {
+        // No GDC catalog configured (e.g. assessment runs without a config file) —
+        // catalog filtering is disabled and every policy is processed.
+        if (gdcCatalogName == null || gdcCatalogName.isBlank()) {
+            return true;
+        }
         Map<String, RangerPolicyResource> resources = policy.getResources();
         if (resources == null || resources.isEmpty()) {
             return true;
