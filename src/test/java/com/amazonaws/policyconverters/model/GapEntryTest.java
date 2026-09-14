@@ -69,7 +69,7 @@ class GapEntryTest {
     void knownUnmappableActionGapTypeRoundTripsThroughJson() throws Exception {
         GapEntry entry = new GapEntry(
                 "42", "hive-analyst", GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION,
-                null, "details", "recommendation", "hive", "index");
+                null, "details", "recommendation", "hive", java.util.List.of("index"));
 
         // `mapper` is the existing field at GapEntryTest.java:10 — do not redeclare it.
         String json = mapper.writeValueAsString(entry);
@@ -77,7 +77,21 @@ class GapEntryTest {
 
         assertEquals(entry, parsed);
         assertEquals("hive", parsed.getServiceType());
-        assertEquals("index", parsed.getAccessType());
+        assertEquals(java.util.List.of("index"), parsed.getAccessTypes());
+    }
+
+    @Test
+    void accessTypesWithMultipleValuesRoundTripsThroughJsonInOrder() throws Exception {
+        GapEntry entry = new GapEntry(
+                "42", "hive-analyst", GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION,
+                null, "details", "recommendation", "hive",
+                java.util.List.of("index", "lock", "refresh"));
+
+        String json = mapper.writeValueAsString(entry);
+        GapEntry parsed = mapper.readValue(json, GapEntry.class);
+
+        assertEquals(entry, parsed);
+        assertEquals(java.util.List.of("index", "lock", "refresh"), parsed.getAccessTypes());
     }
 
     @Test
@@ -86,10 +100,10 @@ class GapEntryTest {
                 "42", "mask-ssn", GapEntry.GapType.DATA_MASKING, "db/tbl", "d", "r");
 
         assertNull(entry.getServiceType());
-        assertNull(entry.getAccessType());
+        assertNull(entry.getAccessTypes());
 
         String json = mapper.writeValueAsString(entry);
         assertFalse(json.contains("serviceType"), "NON_NULL must keep the field out of unrelated gaps");
-        assertFalse(json.contains("accessType"));
+        assertFalse(json.contains("accessTypes"));
     }
 }

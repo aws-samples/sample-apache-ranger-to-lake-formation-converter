@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonValue;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -66,8 +68,8 @@ public class GapEntry {
     private final String recommendation;
     /** Ranger service type; populated only for action-related gap types, else null. */
     private final String serviceType;
-    /** Ranger access type; populated only for action-related gap types, else null. */
-    private final String accessType;
+    /** Ranger access type(s); populated only for action-related gap types, else null. */
+    private final List<String> accessTypes;
 
     public GapEntry(
             String policyId,
@@ -88,7 +90,7 @@ public class GapEntry {
             @JsonProperty("details") String details,
             @JsonProperty("recommendation") String recommendation,
             @JsonProperty("serviceType") String serviceType,
-            @JsonProperty("accessType") String accessType) {
+            @JsonProperty("accessTypes") List<String> accessTypes) {
         this.policyId = policyId;
         this.policyName = policyName;
         this.gapType = gapType;
@@ -96,7 +98,9 @@ public class GapEntry {
         this.details = details;
         this.recommendation = recommendation;
         this.serviceType = serviceType;
-        this.accessType = accessType;
+        // null stays null (so @JsonInclude(NON_NULL) omits the field for the fifteen gap
+        // types that don't use it); a non-null list is copied and made unmodifiable.
+        this.accessTypes = accessTypes == null ? null : Collections.unmodifiableList(accessTypes);
     }
 
     public String getPolicyId() {
@@ -127,8 +131,8 @@ public class GapEntry {
         return serviceType;
     }
 
-    public String getAccessType() {
-        return accessType;
+    public List<String> getAccessTypes() {
+        return accessTypes;
     }
 
     @Override
@@ -143,13 +147,13 @@ public class GapEntry {
                 && Objects.equals(details, gapEntry.details)
                 && Objects.equals(recommendation, gapEntry.recommendation)
                 && Objects.equals(serviceType, gapEntry.serviceType)
-                && Objects.equals(accessType, gapEntry.accessType);
+                && Objects.equals(accessTypes, gapEntry.accessTypes);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(policyId, policyName, gapType, resourcePath, details, recommendation,
-                serviceType, accessType);
+                serviceType, accessTypes);
     }
 
     @Override
@@ -162,7 +166,7 @@ public class GapEntry {
                 ", details='" + details + '\'' +
                 ", recommendation='" + recommendation + '\'' +
                 ", serviceType='" + serviceType + '\'' +
-                ", accessType='" + accessType + '\'' +
+                ", accessTypes=" + accessTypes +
                 '}';
     }
 }
