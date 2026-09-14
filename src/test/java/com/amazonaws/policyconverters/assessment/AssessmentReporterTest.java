@@ -153,6 +153,19 @@ class AssessmentReporterTest {
     }
 
     @Test
+    void rollupCountIsPluralizedCorrectly() {
+        // Real demo output read "1 policy items", which is just wrong. The count is per policy
+        // because emission is deduplicated per (policy, accessType).
+        String output = capture(resultWithKnownUnmappable(List.of(
+                new KnownUnmappableActionSummary("trino", "grant", 1, List.of("2008")),
+                new KnownUnmappableActionSummary("hive", "index", 4, List.of("1")))));
+
+        assertTrue(output.contains("1 policy\n") || output.contains("1 policy" + System.lineSeparator()),
+                "singular count must read \"1 policy\", not \"1 policy items\": " + output);
+        assertTrue(output.contains("4 policies"), "plural count must read \"policies\"");
+    }
+
+    @Test
     void knownUnmappableActionsAreNotListedInThePerPolicyBreakdown() {
         // The whole point: one policy per line for 1204 policies is what we are removing.
         AssessmentResult result = resultWithKnownUnmappable(List.of(

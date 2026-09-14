@@ -202,9 +202,12 @@ public class AssessmentReporter {
                     // Plain %7d, not %,7d — nothing else in this file's console output uses
                     // grouped thousands separators, and a locale-dependent separator would
                     // make output assertions locale-dependent too.
-                    out.printf("  %-24s — %7d policy items%n",
+                    // The count is per policy: emission is deduplicated per (policy, accessType),
+                    // so this is "how many policies used it", not a raw occurrence tally.
+                    out.printf("  %-24s — %7d %s%n",
                             row.getServiceType() + ": " + row.getAccessType(),
-                            row.getOccurrenceCount());
+                            row.getOccurrenceCount(),
+                            row.getOccurrenceCount() == 1 ? "policy" : "policies");
                 }
             }
 
