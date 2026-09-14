@@ -188,6 +188,31 @@ public class TrinoServiceAdapter implements SourcePolicyAdapter {
         return false;
     }
 
+    /**
+     * Trino resource keys that name a real Ranger resource type but have no shape in the Glue
+     * Data Catalog / Lake Formation model at all — not a database, table, column, or data
+     * location. Without this check these policies fall through {@code determineResourceLevel}'s
+     * default to "database" and (if any of their access types happen to be database-valid, e.g.
+     * "alter") would silently project a grant onto a nonexistent or wrong database.
+     */
+    private static final Set<String> TRINO_ONLY_RESOURCE_TYPES =
+            Set.of("procedure", "function", "trinouser", "sessionproperty", "systemproperty");
+
+    @Override
+    public Optional<String> detectUnmappableResourceType(RangerPolicy policy) {
+        Map<String, RangerPolicyResource> resources = policy.getResources();
+        if (resources == null || resources.isEmpty()) {
+            return Optional.empty();
+        }
+        for (String key : TRINO_ONLY_RESOURCE_TYPES) {
+            RangerPolicyResource res = resources.get(key);
+            if (res != null && res.getValues() != null && !res.getValues().isEmpty()) {
+                return Optional.of(key);
+            }
+        }
+        return Optional.empty();
+    }
+
     @Override
     public CedarEntityRef buildEntityRef(RangerPolicy policy, String resourceLevel) {
         Map<String, RangerPolicyResource> resources = policy.getResources();

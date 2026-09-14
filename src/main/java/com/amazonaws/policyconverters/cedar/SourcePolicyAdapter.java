@@ -96,4 +96,23 @@ public interface SourcePolicyAdapter {
     default boolean shouldProcessPolicy(RangerPolicy policy) {
         return true;
     }
+
+    /**
+     * Detect a service-specific resource key that this adapter recognises by name but that has
+     * no Lake Formation equivalent at all — e.g. Trino/Presto {@code procedure}, {@code function},
+     * {@code trinouser}, {@code sessionproperty}, {@code systemproperty}. Unlike an unmappable
+     * access type, these can't even be assigned a resource level (there is no LF resource shaped
+     * like a "procedure"), so they must be caught before {@code determineResourceLevel} falls
+     * through to "database" and silently produces a wrong-scoped grant.
+     *
+     * <p>Returns the offending resource key so the caller can build an actionable gap message.
+     * Kept off the shared resource-level-detection path in
+     * {@code RangerToCedarConverter#determineResourceLevel} deliberately: those keys are specific
+     * to one or two service types and don't belong in code shared by every adapter.
+     *
+     * <p>Defaults to empty — adapters with no such resource keys need not override.
+     */
+    default Optional<String> detectUnmappableResourceType(RangerPolicy policy) {
+        return Optional.empty();
+    }
 }

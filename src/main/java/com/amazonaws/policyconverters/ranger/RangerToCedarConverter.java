@@ -234,6 +234,24 @@ public class RangerToCedarConverter {
             }
         }
 
+        // Service-specific resource keys that name a real Ranger resource type but have no shape
+        // in the Glue/LF model at all (e.g. Trino/Presto "procedure", "sessionproperty") must be
+        // caught here — before determineResourceLevel falls through to its "database" default —
+        // or a database-valid access type (e.g. "alter") on such a policy would silently project
+        // a grant onto the wrong resource.
+        Optional<String> unmappableResourceType = adapter.detectUnmappableResourceType(policy);
+        if (unmappableResourceType.isPresent()) {
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.UNMAPPED_RESOURCE,
+                    buildResourcePath(policy),
+                    "Resource type '" + unmappableResourceType.get() + "' has no Lake Formation "
+                            + "equivalent for service type '" + adapter.getServiceType() + "'.",
+                    "This resource type has no Lake Formation equivalent; the policy will produce "
+                            + "no grants."
+            ));
+            return Collections.emptyList();
+        }
+
         String resourceLevel = determineResourceLevel(resources);
         resourceLevel = promoteResourceLevel(resourceLevel, resources);
 

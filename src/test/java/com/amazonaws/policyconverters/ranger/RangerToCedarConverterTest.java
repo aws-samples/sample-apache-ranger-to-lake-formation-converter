@@ -947,6 +947,23 @@ class RangerToCedarConverterTest {
                 new PassthroughCatalogResolver(), gapReporter, new CedarSchemaProvider());
     }
 
+    /**
+     * Trino converter with no GDC catalog configured — matches the real assessment CLI invoked
+     * without {@code --config}, where catalog filtering is disabled and every policy is
+     * processed. The real customer policies reproduced below (1465, 1466, ...) have
+     * {@code catalog=["*"]}, which would fail a configured-catalog exact match and be silently
+     * dropped by {@code shouldProcessPolicy} before ever reaching resource-level detection —
+     * that is a pre-existing, separate behavior from the bug under test here.
+     */
+    private RangerToCedarConverter makeTrinoConverterNoFilter(GapReporter gapReporter) {
+        AwsContext ctx = new AwsContext("us-east-1", "123456789012", "123456789012");
+        TrinoServiceAdapter adapter = new TrinoServiceAdapter(ctx, null);
+        Map<String, SourcePolicyAdapter> registry = new HashMap<>();
+        registry.put("trino", adapter);
+        return new RangerToCedarConverter(registry, new PassthroughPrincipalMapper(),
+                new PassthroughCatalogResolver(), gapReporter, new CedarSchemaProvider());
+    }
+
     private RangerPolicy buildTrinoUrlPolicy(String url, String accessType) {
         RangerPolicy policy = new RangerPolicy();
         policy.setId(9002L);
@@ -963,6 +980,79 @@ class RangerToCedarConverterTest {
         policy.setResources(resources);
         policy.setPolicyItems(List.of(buildItem("alice", accessType)));
         return policy;
+    }
+
+    // ---- Trino/Presto-only resource types with no LF equivalent ----
+
+    @Test
+    void trinoSessionPropertyPolicy_recordsGapAndProducesNoGrant() {
+        // Reproduces real policy id 1465: resources {catalog, sessionproperty}, access "alter".
+        // "alter" IS a valid database-level Cedar action and there is no "schema"/"database" key,
+        // so before this fix the question was whether determineResourceLevel's fallthrough to
+        // "database" could ever resolve a spurious grant. Empirically it can't today — with no
+        // "database" or "schema" resource key, getDatabaseValues() returns nothing, so
+        // expandResources produces zero combinations and the existing "no resources resolved"
+        // gap already fires. This test locks in that no-grant outcome AND verifies the resource
+        // type is now caught earlier and explicitly, naming "sessionproperty" in the gap.
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(1465L);
+        policy.setName("policy-1465");
+        policy.setService("trino");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource catalogRes = new RangerPolicyResource();
+        catalogRes.setValues(List.of("*"));
+        resources.put("catalog", catalogRes);
+        RangerPolicyResource sessionPropRes = new RangerPolicyResource();
+        sessionPropRes.setValues(List.of("*"));
+        resources.put("sessionproperty", sessionPropRes);
+        policy.setResources(resources);
+        policy.setPolicyItems(List.of(buildItem("alice", "alter")));
+
+        GapReporter freshGapReporter = new GapReporter();
+        RangerToCedarConverter freshConverter = makeTrinoConverterNoFilter(freshGapReporter);
+        CedarPolicySet result = freshConverter.convert(List.of(policy));
+
+        assertEquals(0, result.getPermitCount(),
+                "Policy 1465 must not project any grant — no database/schema resource is present");
+        assertFalse(result.toCedarString().contains("ALTER"),
+                "Policy 1465 must not project a spurious ALTER grant on any database");
+        assertTrue(freshGapReporter.getReport().getEntries().stream().anyMatch(g ->
+                        "1465".equals(g.getPolicyId()) && g.getGapType() == GapType.UNMAPPED_RESOURCE
+                                && g.getDetails() != null && g.getDetails().contains("sessionproperty")),
+                "Policy 1465 must record an UNMAPPED_RESOURCE gap naming 'sessionproperty'");
+    }
+
+    @Test
+    void trinoProcedurePolicy_recordsGapAndProducesNoGrant() {
+        // Reproduces real policy id 1466: resources {catalog, procedure, schema=*}.
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(1466L);
+        policy.setName("policy-1466");
+        policy.setService("trino");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource catalogRes = new RangerPolicyResource();
+        catalogRes.setValues(List.of("*"));
+        resources.put("catalog", catalogRes);
+        RangerPolicyResource procRes = new RangerPolicyResource();
+        procRes.setValues(List.of("*"));
+        resources.put("procedure", procRes);
+        RangerPolicyResource schemaRes = new RangerPolicyResource();
+        schemaRes.setValues(List.of("*"));
+        resources.put("schema", schemaRes);
+        policy.setResources(resources);
+        policy.setPolicyItems(List.of(buildItem("alice", "execute")));
+
+        GapReporter freshGapReporter = new GapReporter();
+        RangerToCedarConverter freshConverter = makeTrinoConverterNoFilter(freshGapReporter);
+        CedarPolicySet result = freshConverter.convert(List.of(policy));
+
+        assertEquals(0, result.getPermitCount(), "Procedure policy must not project any grant");
+        assertTrue(freshGapReporter.getReport().getEntries().stream().anyMatch(g ->
+                        "1466".equals(g.getPolicyId()) && g.getGapType() == GapType.UNMAPPED_RESOURCE
+                                && g.getDetails() != null && g.getDetails().contains("procedure")),
+                "Procedure policy must record an UNMAPPED_RESOURCE gap naming 'procedure'");
     }
 
     /**
