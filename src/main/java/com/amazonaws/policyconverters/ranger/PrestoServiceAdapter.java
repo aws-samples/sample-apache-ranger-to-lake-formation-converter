@@ -46,6 +46,11 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
         m.put("alter", Collections.singleton("ALTER"));
         m.put("use", Collections.singleton("DESCRIBE"));
         m.put("show", Collections.singleton("DESCRIBE"));
+        // "read"/"write" only appear on url (external_location) policies in real Presto exports,
+        // mirroring HiveServiceAdapter's mapping so mapAccessTypeToCedarActions(type, "url") below
+        // recognises them as known access types and collapses them to DATA_LOCATION_ACCESS.
+        m.put("read", Collections.singleton("SELECT"));
+        m.put("write", Collections.singleton("INSERT"));
         ACTION_MAPPING = Collections.unmodifiableMap(m);
     }
 
@@ -129,6 +134,13 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
 
     @Override
     public Set<String> mapAccessTypeToCedarActions(String sourceAccessType, String resourceLevel) {
+        if ("url".equals(resourceLevel)) {
+            // Mirrors HiveServiceAdapter: Lake Formation accepts only DATA_LOCATION_ACCESS on a
+            // data location, so any recognised access type (Presto url policies use "read" and
+            // "write") collapses to that single action rather than SELECT/INSERT.
+            Set<String> raw = mapAccessTypeToCedarActions(sourceAccessType);
+            return raw.isEmpty() ? Collections.emptySet() : Collections.singleton("DATA_LOCATION_ACCESS");
+        }
         Set<String> actions = mapAccessTypeToCedarActions(sourceAccessType);
         if ("column".equals(resourceLevel)) {
             return actions.stream()
@@ -200,6 +212,13 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
                 String col = getFirstResourceValue(resources, "column");
                 return new CedarEntityRef("DataCatalog::Column", buildColumnArn(schema, table, col));
             }
+            case "url": {
+                // Guards CREATE TABLE ... WITH (external_location = ...) in Presto — the same
+                // semantics as Lake Formation's DataLocation, mirroring HiveServiceAdapter.
+                String url = getFirstResourceValue(resources, "url");
+                return new CedarEntityRef("DataCatalog::DataLocation",
+                        url != null ? url.replaceFirst("^s3://", "arn:aws:s3:::") : "");
+            }
             default:
                 throw new IllegalArgumentException("Unknown resource level: " + resourceLevel);
         }
@@ -249,11 +268,11 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
      *
      * <p>For Presto, the "schema" resource level maps to "database" in Glue ARNs.
      *
-     * @param resourceLevel one of "schema", "table", "column"
-     * @param database      database/schema name (required for all levels)
+     * @param resourceLevel one of "schema", "table", "column", "url"
+     * @param database      database/schema name (required for schema/table/column levels)
      * @param table         table name (required for table/column levels, null otherwise)
      * @param column        column name (required for column level, null otherwise)
-     * @param dataLocation  unused for Presto (no datalocation resource)
+     * @param dataLocation  S3 location (required for url level, null otherwise)
      * @return the constructed CedarEntityRef
      */
     public CedarEntityRef buildEntityRefFromValues(String resourceLevel,
@@ -271,6 +290,9 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
                 return new CedarEntityRef("DataCatalog::Table", buildTableArn(database, table));
             case "column":
                 return new CedarEntityRef("DataCatalog::Column", buildColumnArn(database, table, column));
+            case "url":
+                return new CedarEntityRef("DataCatalog::DataLocation",
+                        dataLocation != null ? dataLocation.replaceFirst("^s3://", "arn:aws:s3:::") : "");
             default:
                 throw new IllegalArgumentException("Unknown resource level: " + resourceLevel);
         }

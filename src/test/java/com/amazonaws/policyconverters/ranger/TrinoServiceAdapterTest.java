@@ -173,8 +173,33 @@ class TrinoServiceAdapterTest {
 
     @Test
     void buildEntityRef_unknownLevel_throwsIllegalArgument() {
+        // "datalocation" is Hive/EMR-only — Trino has no such resource key, so this level
+        // remains genuinely unsupported even after "url" was added below.
         assertThrows(IllegalArgumentException.class, () ->
-                adapter.buildEntityRefFromValues("url", "db", null, null, null));
+                adapter.buildEntityRefFromValues("datalocation", "db", null, null, null));
+    }
+
+    @Test
+    void buildEntityRef_url_producesDataLocationArn() {
+        CedarEntityRef ref = adapter.buildEntityRefFromValues(
+                "url", null, null, null, "s3://my-bucket/data/");
+        assertEquals("DataCatalog::DataLocation", ref.getEntityType());
+        assertEquals("arn:aws:s3:::my-bucket/data/", ref.getEntityId());
+    }
+
+    @Test
+    void mapAccessTypeToCedarActions_urlLevel_readMapsToDataLocationAccess() {
+        assertEquals(Set.of("DATA_LOCATION_ACCESS"), adapter.mapAccessTypeToCedarActions("read", "url"));
+    }
+
+    @Test
+    void mapAccessTypeToCedarActions_urlLevel_writeMapsToDataLocationAccess() {
+        assertEquals(Set.of("DATA_LOCATION_ACCESS"), adapter.mapAccessTypeToCedarActions("write", "url"));
+    }
+
+    @Test
+    void mapAccessTypeToCedarActions_urlLevel_unmappedGrantStaysEmpty() {
+        assertTrue(adapter.mapAccessTypeToCedarActions("grant", "url").isEmpty());
     }
 
     // ---- ARN construction from a policy ----

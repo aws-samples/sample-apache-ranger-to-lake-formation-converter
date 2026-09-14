@@ -899,6 +899,72 @@ class RangerToCedarConverterTest {
                 "Unsupported resource level must be recorded as an UNMAPPED_RESOURCE gap");
     }
 
+    // ---- Trino url resource support (mirrors Hive DataLocation handling) ----
+
+    @Test
+    void trinoUrlPolicy_producesDataLocationStatement() {
+        RangerPolicy policy = buildTrinoUrlPolicy("s3://my-bucket/data/", "read");
+
+        CedarPolicySet result = trinoConverter.convert(List.of(policy));
+
+        String cedar = result.toCedarString();
+        assertTrue(cedar.contains("DataCatalog::DataLocation::"),
+                "Trino url policy must reference DataCatalog::DataLocation entity");
+        assertTrue(cedar.contains("arn:aws:s3:::my-bucket/data/"),
+                "Must contain S3 ARN with s3:// stripped");
+        assertTrue(cedar.contains("\"DATA_LOCATION_ACCESS\""),
+                "Trino url policy must use DATA_LOCATION_ACCESS action");
+    }
+
+    @Test
+    void trinoWildcardUrlPolicy_recordsGapAndProducesNoGrant() {
+        // The 22 real-world url policies in the customer's Trino export all have value "*" —
+        // a bare wildcard with no S3 prefix can't resolve to a concrete data location. Must
+        // produce a gap and zero grants, never a crash and never a spurious DataLocation grant.
+        GapReporter freshGapReporter = new GapReporter();
+        RangerToCedarConverter freshConverter = makeTrinoConverter(freshGapReporter);
+
+        RangerPolicy policy = buildTrinoUrlPolicy("*", "read");
+        CedarPolicySet result = freshConverter.convert(List.of(policy));
+
+        assertFalse(result.toCedarString().contains("DataCatalog::DataLocation"),
+                "Bare wildcard url must not produce any DataLocation Cedar statement");
+        // The gap must be one of the two types the converter uses for "resource cannot be
+        // mapped" — WILDCARD_PATTERN (bare wildcard with no scheme, same as Hive/EMR today) or
+        // UNMAPPED_RESOURCE — not silently dropped.
+        assertTrue(freshGapReporter.getReport().getEntries().stream()
+                        .anyMatch(g -> g.getGapType() == GapType.WILDCARD_PATTERN
+                                || g.getGapType() == GapType.UNMAPPED_RESOURCE),
+                "Unresolvable wildcard url must record a WILDCARD_PATTERN or UNMAPPED_RESOURCE gap");
+    }
+
+    private RangerToCedarConverter makeTrinoConverter(GapReporter gapReporter) {
+        AwsContext ctx = new AwsContext("us-east-1", "123456789012", "123456789012");
+        TrinoServiceAdapter adapter = new TrinoServiceAdapter(ctx, "hive");
+        Map<String, SourcePolicyAdapter> registry = new HashMap<>();
+        registry.put("trino", adapter);
+        return new RangerToCedarConverter(registry, new PassthroughPrincipalMapper(),
+                new PassthroughCatalogResolver(), gapReporter, new CedarSchemaProvider());
+    }
+
+    private RangerPolicy buildTrinoUrlPolicy(String url, String accessType) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(9002L);
+        policy.setName("trino-url-policy");
+        policy.setService("trino");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource catalogRes = new RangerPolicyResource();
+        catalogRes.setValues(List.of("hive"));
+        resources.put("catalog", catalogRes);
+        RangerPolicyResource urlRes = new RangerPolicyResource();
+        urlRes.setValues(List.of(url));
+        resources.put("url", urlRes);
+        policy.setResources(resources);
+        policy.setPolicyItems(List.of(buildItem("alice", accessType)));
+        return policy;
+    }
+
     /**
      * Single-principal table-level Hive policy, modelled on
      * {@link #buildHiveTablePolicyWithPrincipals(List, List)}.
