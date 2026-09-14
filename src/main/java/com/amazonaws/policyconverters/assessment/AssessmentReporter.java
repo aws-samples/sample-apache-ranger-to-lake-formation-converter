@@ -211,12 +211,15 @@ public class AssessmentReporter {
                 }
             }
 
-            // Per-policy breakdown grouped by policy. Known-unmappable entries are excluded:
-            // they are collapsed (policyId == null) and already shown in their own rollup
-            // section above, so they must not create an "<unknown>" pseudo-policy here.
+            // Per-policy breakdown grouped by policy. Collapsed known-unmappable rollup entries
+            // (policyId == null) are excluded — they are already shown in their own rollup
+            // section above and must not create an "<unknown>" pseudo-policy here. Policy-scoped
+            // known-unmappable entries (the per-policy conflated gap) are let through so the
+            // console view matches the gaps file.
             Map<String, List<GapEntry>> byPolicy = new LinkedHashMap<>();
             for (GapEntry entry : result.getGapReport().getEntries()) {
-                if (entry.getGapType() == GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION) {
+                if (entry.getGapType() == GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION
+                        && entry.getPolicyId() == null) {
                     continue;
                 }
                 String key = entry.getPolicyId() != null ? entry.getPolicyId() : "<unknown>";

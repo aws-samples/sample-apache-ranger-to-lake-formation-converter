@@ -300,6 +300,28 @@ class AssessmentRunnerTest {
         assertEquals(1, result.getPartiallyConvertible());
     }
 
+    @Test
+    void partiallyConvertiblePolicyGapsIncludeTheConflatedKnownUnmappableEntry() {
+        // select converts (produces ops); totally_made_up is actionable (demotes to
+        // PARTIALLY_CONVERTIBLE); index is known-unmappable (non-demoting) but must still
+        // appear in the gaps array alongside the actionable gap.
+        AssessmentResult result = runAssessment(
+                hivePolicy(4L, "mixed-with-known-unmappable",
+                        List.of("select", "index", "totally_made_up")));
+
+        assertEquals(1, result.getPartiallyConvertible());
+
+        PolicyGapSummary summary = result.getPolicyGapSummaries().stream()
+                .filter(s -> "4".equals(s.getPolicyId()))
+                .findFirst().orElseThrow();
+        assertEquals(PolicyGapSummary.Convertibility.PARTIALLY_CONVERTIBLE, summary.getConvertibility());
+        assertTrue(summary.getGaps().stream().anyMatch(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION),
+                "the actionable gap must be present");
+        assertTrue(summary.getGaps().stream().anyMatch(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION),
+                "the conflated known-unmappable gap must now be present in a partially convertible "
+                        + "policy's gaps array, not just backfilled on NOT_CONVERTIBLE policies");
+    }
+
     // ---- helpers for known-unmappable-action gap tests ----
 
     private AssessmentResult runAssessment(RangerPolicy... policies) {

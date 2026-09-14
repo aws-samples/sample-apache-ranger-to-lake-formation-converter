@@ -221,13 +221,22 @@ public class AssessmentRunner {
             if (entry.getGapType() != GapType.KNOWN_UNMAPPABLE_ACTION) {
                 continue;
             }
-            String key = entry.getServiceType() + " " + entry.getAccessType();
-            keyParts.putIfAbsent(key, new String[]{entry.getServiceType(), entry.getAccessType()});
-            counts.computeIfAbsent(key, k -> new int[1])[0]++;
-            List<String> sample = samples.computeIfAbsent(key, k -> new ArrayList<>());
-            if (entry.getPolicyId() != null
-                    && sample.size() < KnownUnmappableActionSummary.SAMPLE_LIMIT) {
-                sample.add(entry.getPolicyId());
+            List<String> entryAccessTypes = entry.getAccessTypes();
+            if (entryAccessTypes == null) {
+                continue;
+            }
+            // A conflated per-policy entry carries every known-unmappable access type that
+            // policy used, so it counts as one occurrence per (serviceType, accessType) pair,
+            // not one occurrence for the entry as a whole.
+            for (String accessType : entryAccessTypes) {
+                String key = entry.getServiceType() + " " + accessType;
+                keyParts.putIfAbsent(key, new String[]{entry.getServiceType(), accessType});
+                counts.computeIfAbsent(key, k -> new int[1])[0]++;
+                List<String> sample = samples.computeIfAbsent(key, k -> new ArrayList<>());
+                if (entry.getPolicyId() != null
+                        && sample.size() < KnownUnmappableActionSummary.SAMPLE_LIMIT) {
+                    sample.add(entry.getPolicyId());
+                }
             }
         }
 
@@ -263,7 +272,7 @@ public class AssessmentRunner {
                             + row.getOccurrenceCount() + " policy item(s).",
                     "No action required unless this capability is needed — Lake Formation does not "
                             + "model it. Remove the access type from the Ranger policies to silence this.",
-                    row.getServiceType(), row.getAccessType()));
+                    row.getServiceType(), List.of(row.getAccessType())));
         }
         return new GapReport(collapsed, GapReport.computeSummary(collapsed), report.getGeneratedAt());
     }
@@ -329,12 +338,18 @@ public class AssessmentRunner {
                 && cfg.getDelegates().isEmpty();
     }
 
-    // Gap types that are informational only: they never demote a policy's convertibility
-    // classification and are excluded from the per-policy entries in the gaps output file.
-    private static final Set<GapEntry.GapType> INFORMATIONAL_GAP_TYPES = new HashSet<>(Arrays.asList(
+    // Gap types that never demote a policy's convertibility classification.
+    private static final Set<GapEntry.GapType> NON_DEMOTING_GAP_TYPES = new HashSet<>(Arrays.asList(
             GapEntry.GapType.CANNOT_VALIDATE_S3_LOCATION,
             GapEntry.GapType.WILDCARD_PATTERN,
             GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION
+    ));
+
+    // Gap types omitted from the per-policy entries in the gaps output file entirely,
+    // because they are pure noise at scale rather than per-policy findings.
+    private static final Set<GapEntry.GapType> GAPS_FILE_EXCLUDED_TYPES = new HashSet<>(Arrays.asList(
+            GapEntry.GapType.CANNOT_VALIDATE_S3_LOCATION,
+            GapEntry.GapType.WILDCARD_PATTERN
     ));
 
     private static final class ConvertibilityResult {
@@ -362,18 +377,17 @@ public class AssessmentRunner {
             List<S3AccessGrantOperation> s3AgOps,
             GapReport gapReport) {
 
-        // Actionable gaps drive classification. Informational gaps are tracked separately so a
-        // policy that converts to nothing *solely* because of them can still state a reason.
-        Map<String, List<GapEntry>> actionableGapsByPolicy = new LinkedHashMap<>();
-        Map<String, List<GapEntry>> informationalGapsByPolicy = new LinkedHashMap<>();
+        // All policy-scoped gaps, regardless of type. Classification and file-inclusion each
+        // apply their own filter over this same map (see NON_DEMOTING_GAP_TYPES /
+        // GAPS_FILE_EXCLUDED_TYPES below) rather than partitioning gaps into two maps up front —
+        // KNOWN_UNMAPPABLE_ACTION is non-demoting but must still appear in the gaps file, so a
+        // single partition can no longer serve both purposes.
+        Map<String, List<GapEntry>> gapsByPolicy = new LinkedHashMap<>();
         for (GapEntry entry : gapReport.getEntries()) {
             if (entry.getPolicyId() == null) {
                 continue;
             }
-            Map<String, List<GapEntry>> target =
-                    INFORMATIONAL_GAP_TYPES.contains(entry.getGapType())
-                            ? informationalGapsByPolicy : actionableGapsByPolicy;
-            target.computeIfAbsent(entry.getPolicyId(), k -> new ArrayList<>()).add(entry);
+            gapsByPolicy.computeIfAbsent(entry.getPolicyId(), k -> new ArrayList<>()).add(entry);
         }
 
         // Build set of policy IDs that produced at least one projected op.
@@ -404,10 +418,14 @@ public class AssessmentRunner {
         for (RangerPolicy policy : allPolicies) {
             String id = policy.getId() != null ? String.valueOf(policy.getId()) : null;
             boolean hasOps = id != null && policiesWithOps.contains(id);
-            List<GapEntry> gaps = id != null
-                    ? actionableGapsByPolicy.getOrDefault(id, Collections.emptyList())
+            List<GapEntry> allGapsForPolicy = id != null
+                    ? gapsByPolicy.getOrDefault(id, Collections.emptyList())
                     : Collections.emptyList();
-            boolean hasActionableGaps = !gaps.isEmpty();
+            boolean hasActionableGaps = allGapsForPolicy.stream()
+                    .anyMatch(g -> !NON_DEMOTING_GAP_TYPES.contains(g.getGapType()));
+            List<GapEntry> gapsForFile = allGapsForPolicy.stream()
+                    .filter(g -> !GAPS_FILE_EXCLUDED_TYPES.contains(g.getGapType()))
+                    .collect(java.util.stream.Collectors.toList());
 
             PolicyGapSummary.Convertibility convertibility;
             if (hasOps && !hasActionableGaps) {
@@ -419,15 +437,10 @@ public class AssessmentRunner {
             } else {
                 notConvertible++;
                 convertibility = PolicyGapSummary.Convertibility.NOT_CONVERTIBLE;
-                if (gaps.isEmpty() && id != null) {
-                    // Nothing actionable, yet it produced no grants. Surface the informational
-                    // gaps so the report never says "not convertible" without saying why.
-                    gaps = informationalGapsByPolicy.getOrDefault(id, Collections.emptyList());
-                }
             }
 
             if (convertibility != null) {
-                summaries.add(new PolicyGapSummary(id, policy.getName(), convertibility, gaps));
+                summaries.add(new PolicyGapSummary(id, policy.getName(), convertibility, gapsForFile));
             }
         }
 

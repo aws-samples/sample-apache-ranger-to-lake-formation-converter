@@ -182,7 +182,8 @@ class AssessmentReporterTest {
         GapEntry actionableGap = new GapEntry("42", "policy-42", GapType.DATA_MASKING,
                 "db.table", "has masking item", "remove masking");
         GapEntry collapsedKnownUnmappable = new GapEntry(null, null, GapType.KNOWN_UNMAPPABLE_ACTION,
-                null, "hive: index appears in 1204 policies", "no action needed", "hive", "index");
+                null, "hive: index appears in 1204 policies", "no action needed", "hive",
+                List.of("index"));
         List<GapEntry> entries = List.of(actionableGap, collapsedKnownUnmappable);
         GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
         AssessmentResult result = new AssessmentResult(3, 1, 1, 1, 5, gapReport,
@@ -281,7 +282,7 @@ class AssessmentReporterTest {
             entries.add(new GapEntry(null, null, GapType.KNOWN_UNMAPPABLE_ACTION, null,
                     row.getServiceType() + ": " + row.getAccessType() + " appears in "
                             + row.getOccurrenceCount() + " policies",
-                    "no action needed", row.getServiceType(), row.getAccessType()));
+                    "no action needed", row.getServiceType(), List.of(row.getAccessType())));
         }
         GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
         return new AssessmentResult(5, 5, 0, 0, 10, gapReport,
