@@ -255,4 +255,73 @@ class AssessmentRunnerTest {
                 stubSource("lakeformation", "lakeformation", List.of()));
         assertTrue(result.getWarnings().isEmpty(), "No warning expected when principal mapping is configured");
     }
+
+    @Test
+    void policyWithGrantsAndOnlyKnownUnmappableActionsIsFullyConvertible() {
+        // hive policy: select (converts) + index (known-unmappable).
+        // Before this change it was reported PARTIALLY_CONVERTIBLE, which is the headline
+        // number customers plan against.
+        AssessmentResult result = runAssessment(
+                hivePolicy(1L, "analyst-select", List.of("select", "index")));
+
+        assertEquals(1, result.getFullyConvertible());
+        assertEquals(0, result.getPartiallyConvertible());
+        assertEquals(0, result.getNotConvertible());
+        assertEquals(1, result.getFullyConvertible() + result.getPartiallyConvertible()
+                + result.getNotConvertible(), "counts must sum to total policy count");
+    }
+
+    @Test
+    void policyWithOnlyKnownUnmappableActionsIsNotConvertibleAndStatesTheReason() {
+        // Zero grants produced. It must stay NOT_CONVERTIBLE *and* the gaps file entry
+        // must explain why, or the report says "not convertible" with no reason.
+        AssessmentResult result = runAssessment(
+                hivePolicy(2L, "lock-only", List.of("index", "lock")));
+
+        assertEquals(0, result.getFullyConvertible());
+        assertEquals(1, result.getNotConvertible());
+
+        PolicyGapSummary summary = result.getPolicyGapSummaries().stream()
+                .filter(s -> "2".equals(s.getPolicyId()))
+                .findFirst().orElseThrow();
+        assertEquals(PolicyGapSummary.Convertibility.NOT_CONVERTIBLE, summary.getConvertibility());
+        assertFalse(summary.getGaps().isEmpty(),
+                "a NOT_CONVERTIBLE policy must never be reported with an empty gap list");
+        assertTrue(summary.getGaps().stream().anyMatch(
+                g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION));
+    }
+
+    @Test
+    void unrecognizedActionStillDemotesToPartiallyConvertible() {
+        AssessmentResult result = runAssessment(
+                hivePolicy(3L, "mixed", List.of("select", "totally_made_up")));
+
+        assertEquals(0, result.getFullyConvertible());
+        assertEquals(1, result.getPartiallyConvertible());
+    }
+
+    // ---- helpers for known-unmappable-action gap tests ----
+
+    private AssessmentResult runAssessment(RangerPolicy policy) {
+        PolicySource source = stubSource("hive", "hive", List.of(policy));
+        return new AssessmentRunner().run(minimalConfig(), source);
+    }
+
+    private RangerPolicy hivePolicy(long id, String name, List<String> accessTypes) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(id);
+        policy.setName(name);
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", new RangerPolicyResource("db1"));
+        resources.put("table", new RangerPolicyResource("table1"));
+        policy.setResources(resources);
+
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setAccesses(accessTypes.stream().map(this::access).collect(java.util.stream.Collectors.toList()));
+        item.setUsers(List.of("alice"));
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
 }

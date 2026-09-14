@@ -258,10 +258,12 @@ public class AssessmentRunner {
                 && cfg.getDelegates().isEmpty();
     }
 
-    // Gap types that are informational only and excluded from the gaps output file.
+    // Gap types that are informational only: they never demote a policy's convertibility
+    // classification and are excluded from the per-policy entries in the gaps output file.
     private static final Set<GapEntry.GapType> INFORMATIONAL_GAP_TYPES = new HashSet<>(Arrays.asList(
             GapEntry.GapType.CANNOT_VALIDATE_S3_LOCATION,
-            GapEntry.GapType.WILDCARD_PATTERN
+            GapEntry.GapType.WILDCARD_PATTERN,
+            GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION
     ));
 
     private static final class ConvertibilityResult {
@@ -289,14 +291,18 @@ public class AssessmentRunner {
             List<S3AccessGrantOperation> s3AgOps,
             GapReport gapReport) {
 
-        // Group actionable gap entries by policy ID (excluding informational gap types)
+        // Actionable gaps drive classification. Informational gaps are tracked separately so a
+        // policy that converts to nothing *solely* because of them can still state a reason.
         Map<String, List<GapEntry>> actionableGapsByPolicy = new LinkedHashMap<>();
+        Map<String, List<GapEntry>> informationalGapsByPolicy = new LinkedHashMap<>();
         for (GapEntry entry : gapReport.getEntries()) {
-            if (entry.getPolicyId() != null && !INFORMATIONAL_GAP_TYPES.contains(entry.getGapType())) {
-                actionableGapsByPolicy
-                        .computeIfAbsent(entry.getPolicyId(), k -> new ArrayList<>())
-                        .add(entry);
+            if (entry.getPolicyId() == null) {
+                continue;
             }
+            Map<String, List<GapEntry>> target =
+                    INFORMATIONAL_GAP_TYPES.contains(entry.getGapType())
+                            ? informationalGapsByPolicy : actionableGapsByPolicy;
+            target.computeIfAbsent(entry.getPolicyId(), k -> new ArrayList<>()).add(entry);
         }
 
         // Build set of policy IDs that produced at least one projected op.
@@ -342,6 +348,11 @@ public class AssessmentRunner {
             } else {
                 notConvertible++;
                 convertibility = PolicyGapSummary.Convertibility.NOT_CONVERTIBLE;
+                if (gaps.isEmpty() && id != null) {
+                    // Nothing actionable, yet it produced no grants. Surface the informational
+                    // gaps so the report never says "not convertible" without saying why.
+                    gaps = informationalGapsByPolicy.getOrDefault(id, Collections.emptyList());
+                }
             }
 
             if (convertibility != null) {
