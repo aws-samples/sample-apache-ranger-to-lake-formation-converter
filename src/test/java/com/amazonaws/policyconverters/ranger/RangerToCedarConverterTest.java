@@ -565,29 +565,33 @@ class RangerToCedarConverterTest {
         return r;
     }
 
-    // --- Unsupported access type dedup tests ---
+    // --- Unsupported access type conflation tests ---
+    //
+    // "totally_made_up" / "another_bogus_type" stand in for a genuinely unrecognised access
+    // type. "refresh" and "repladmin" (used pre-conflation) are now declared known-unmappable
+    // on HiveServiceAdapter, so they no longer exercise the UNSUPPORTED_ACTION path.
 
     @Test
     void unsupportedAccessTypeIsReportedOncePerPolicyNotPerPrincipal() {
         // Multiple principals on one policy: the access type is unmappable regardless of
         // principal, so the operator must see one finding, not one per principal.
         RangerPolicy policy = buildHiveTablePolicyWithPrincipals(
-                List.of("alice", "bob", "carol"), List.of("select", "refresh"));
+                List.of("alice", "bob", "carol"), List.of("select", "totally_made_up"));
 
         hiveConverter.convert(List.of(policy));
 
-        long refreshGaps = gapReporter.getReport().getEntries().stream()
+        long gaps = gapReporter.getReport().getEntries().stream()
                 .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
-                .filter(g -> g.getDetails().contains("'refresh'"))
+                .filter(g -> g.getDetails().contains("totally_made_up"))
                 .count();
-        assertEquals(1, refreshGaps, "one entry per (policy, accessType)");
+        assertEquals(1, gaps, "one conflated entry per policy regardless of principal count");
     }
 
     @Test
     void unsupportedAccessTypeIsReportedOncePerPolicyNotPerResource() {
         // Several tables in one policy — same reasoning.
         RangerPolicy policy = buildHiveMultiTablePolicy(
-                List.of("orders", "events", "users"), List.of("refresh"));
+                List.of("orders", "events", "users"), List.of("totally_made_up"));
 
         hiveConverter.convert(List.of(policy));
 
@@ -597,23 +601,28 @@ class RangerToCedarConverterTest {
     }
 
     @Test
-    void twoDistinctUnsupportedAccessTypesEachReportOnce() {
+    void twoDistinctUnsupportedAccessTypesAreConflatedIntoOneEntry() {
+        // The user-requested behavior: a policy with two unrecognised access types gets one
+        // UNSUPPORTED_ACTION entry listing both, not one entry per access type.
         RangerPolicy policy = buildHiveTablePolicyWithPrincipals(
-                List.of("alice", "bob"), List.of("refresh", "repladmin"));
+                List.of("alice", "bob"), List.of("totally_made_up", "another_bogus_type"));
 
         hiveConverter.convert(List.of(policy));
 
-        assertEquals(2, gapReporter.getReport().getEntries().stream()
+        List<GapEntry> unsupported = gapReporter.getReport().getEntries().stream()
                 .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
-                .count());
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals(1, unsupported.size(), "both unrecognised types must conflate to one entry");
+        assertEquals(List.of("another_bogus_type", "totally_made_up"),
+                unsupported.get(0).getAccessTypes(), "accessTypes must be sorted");
     }
 
     @Test
     void separatePoliciesWithTheSameUnsupportedActionEachReportOnce() {
-        // Dedup is per policy, not global — two policies must yield two findings.
+        // Conflation is per policy, not global — two policies must yield two findings.
         hiveConverter.convert(List.of(
-                buildHiveTablePolicyWithPrincipals(1L, List.of("alice"), List.of("refresh")),
-                buildHiveTablePolicyWithPrincipals(2L, List.of("alice"), List.of("refresh"))));
+                buildHiveTablePolicyWithPrincipals(1L, List.of("alice"), List.of("totally_made_up")),
+                buildHiveTablePolicyWithPrincipals(2L, List.of("alice"), List.of("totally_made_up"))));
 
         assertEquals(2, gapReporter.getReport().getEntries().stream()
                 .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
@@ -623,9 +632,9 @@ class RangerToCedarConverterTest {
     @Test
     void repeatedConvertCallsReportTheGapEachTime() {
         // Critical lifecycle guard: the sync server holds one long-lived converter and calls
-        // convert() every cycle. Dedup state must NOT persist across calls, or the gap report
-        // silently empties out after the first cycle.
-        RangerPolicy policy = buildHiveTablePolicyWithPrincipals(List.of("alice"), List.of("refresh"));
+        // convert() every cycle. Accumulator state must NOT persist across calls, or the gap
+        // report silently empties out after the first cycle.
+        RangerPolicy policy = buildHiveTablePolicyWithPrincipals(List.of("alice"), List.of("totally_made_up"));
 
         hiveConverter.convert(List.of(policy));
         hiveConverter.convert(List.of(policy));
@@ -638,7 +647,7 @@ class RangerToCedarConverterTest {
     @Test
     void nullAccessTypeReportsGapWithoutThrowing() {
         // A malformed policy item with a null access type must not crash the whole assessment
-        // run (dedupKey computation used to call accessType.trim() unconditionally). It should
+        // run (normalization used to call accessType.trim() unconditionally). It should
         // still surface exactly one gap, matching pre-fix behavior of reporting null access types.
         //
         // Reaching a true null takes reflection, because RangerPolicyItemAccess.setType(null)
@@ -693,10 +702,10 @@ class RangerToCedarConverterTest {
 
     @Test
     void unsupportedAccessTypeSharedBetweenAllowAndDenyItemsReportsOnce() {
-        // The dedup set is scoped per policy (not per policy-item type): an allow item and a
+        // The accumulator is scoped per policy (not per policy-item type): an allow item and a
         // deny item in the same policy that share an unmappable access type must collapse to
-        // one gap, locking in the cross-item-type dedup that motivated the per-policy scoping.
-        RangerPolicy policy = buildHiveTablePolicyWithPrincipals(List.of("alice"), List.of("refresh"));
+        // one gap, locking in the cross-item-type conflation that motivated the per-policy scoping.
+        RangerPolicy policy = buildHiveTablePolicyWithPrincipals(List.of("alice"), List.of("totally_made_up"));
         policy.setDenyPolicyItems(policy.getPolicyItems());
 
         hiveConverter.convert(List.of(policy));
@@ -719,7 +728,7 @@ class RangerToCedarConverterTest {
         List<GapEntry> gaps = gapReporter.getReport().getEntries();
         assertTrue(gaps.stream().anyMatch(g ->
                         g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION
-                                && "index".equals(g.getAccessType())
+                                && List.of("index").equals(g.getAccessTypes())
                                 && "hive".equals(g.getServiceType())),
                 "index must be reported as KNOWN_UNMAPPABLE_ACTION with structured fields");
         assertFalse(gaps.stream().anyMatch(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION),
@@ -727,9 +736,32 @@ class RangerToCedarConverterTest {
     }
 
     @Test
+    void hiveAdminAccessTypesProduceKnownUnmappableGapNotUnsupportedAction() {
+        // The real user complaint: a Hive policy granting select plus the four Hive admin
+        // access types (repladmin, serviceadmin, tempudfadmin, refresh) must conflate to one
+        // KNOWN_UNMAPPABLE_ACTION entry listing all three admin types, sorted, and must NOT
+        // produce any UNSUPPORTED_ACTION gap.
+        RangerPolicy policy = buildHiveTablePolicy("analyst",
+                List.of("select", "index", "lock", "refresh"));
+
+        hiveConverter.convert(List.of(policy));
+
+        List<GapEntry> gaps = gapReporter.getReport().getEntries();
+        List<GapEntry> knownUnmappable = gaps.stream()
+                .filter(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION)
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals(1, knownUnmappable.size(), "exactly one KNOWN_UNMAPPABLE_ACTION entry");
+        assertEquals(List.of("index", "lock", "refresh"), knownUnmappable.get(0).getAccessTypes(),
+                "accessTypes must be sorted");
+        assertEquals("hive", knownUnmappable.get(0).getServiceType());
+        assertTrue(gaps.stream().noneMatch(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION),
+                "no UNSUPPORTED_ACTION gap must be produced");
+    }
+
+    @Test
     void unrecognizedHiveAccessTypeStillProducesUnsupportedActionGap() {
         // The signal we must not lose: an access type no adapter knows about.
-        RangerPolicy policy = buildHiveTablePolicy("analyst", List.of("repladmin"));
+        RangerPolicy policy = buildHiveTablePolicy("analyst", List.of("totally_made_up"));
 
         hiveConverter.convert(List.of(policy));
 
@@ -737,6 +769,21 @@ class RangerToCedarConverterTest {
         assertTrue(gaps.stream().anyMatch(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION),
                 "an unrecognised access type must stay loud");
         assertFalse(gaps.stream().anyMatch(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION));
+    }
+
+    @Test
+    void policyWithOnlyAnUnmappedAccessTypeStillReportsGapDespiteProducingNoStatements() {
+        // A policy whose only access type is unmapped yields zero Cedar statements. The gap
+        // must still be emitted — it must not be silently swallowed by the "no statements"
+        // path.
+        RangerPolicy policy = buildHiveTablePolicy("analyst", List.of("index"));
+
+        hiveConverter.convert(List.of(policy));
+
+        assertTrue(gapReporter.getReport().getEntries().stream().anyMatch(g ->
+                        g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION
+                                && List.of("index").equals(g.getAccessTypes())),
+                "the gap must be emitted even though the policy produces no Cedar statements");
     }
 
     @Test
@@ -778,21 +825,21 @@ class RangerToCedarConverterTest {
         GapEntry gap = gapReporter.getReport().getEntries().stream()
                 .filter(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION)
                 .findFirst().orElseThrow();
-        assertEquals("index", gap.getAccessType(),
-                "accessType must be trimmed and lower-cased so the rollup groups correctly");
+        assertEquals(List.of("index"), gap.getAccessTypes(),
+                "accessTypes must be trimmed and lower-cased so the rollup groups correctly");
         assertEquals("hive", gap.getServiceType());
     }
 
     @Test
     void unsupportedAccessTypeIsAlsoStoredNormalizedForGrouping() {
-        RangerPolicy policy = buildHiveTablePolicy("analyst", List.of("REPLADMIN"));
+        RangerPolicy policy = buildHiveTablePolicy("analyst", List.of("TOTALLY_MADE_UP"));
 
         hiveConverter.convert(List.of(policy));
 
         GapEntry gap = gapReporter.getReport().getEntries().stream()
                 .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
                 .findFirst().orElseThrow();
-        assertEquals("repladmin", gap.getAccessType());
+        assertEquals(List.of("totally_made_up"), gap.getAccessTypes());
     }
 
     @Test
@@ -808,7 +855,7 @@ class RangerToCedarConverterTest {
 
         assertTrue(gapReporter.getReport().getEntries().stream().anyMatch(g ->
                         g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION
-                                && "grant".equals(g.getAccessType())
+                                && List.of("grant").equals(g.getAccessTypes())
                                 && "trino".equals(g.getServiceType())),
                 "Trino 'grant' must be reported as KNOWN_UNMAPPABLE_ACTION, not UNSUPPORTED_ACTION");
         assertFalse(gapReporter.getReport().getEntries().stream()

@@ -19,11 +19,11 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Converts Ranger policies into a Cedar PolicySet using registered
@@ -112,10 +112,10 @@ public class RangerToCedarConverter {
         String policyId = policy.getId() != null ? String.valueOf(policy.getId()) : "unknown";
         String policyName = policy.getName() != null ? policy.getName() : "unknown";
 
-        // One entry per (accessType) for this policy: the gap emission in extractCedarActions
-        // sits inside per-principal and per-resource loops, but the finding does not vary by
-        // either. Scoped to this policy so nothing persists across policies or convert() calls.
-        Set<String> reportedUnmappedAccessTypes = new HashSet<>();
+        // Accumulated per policy, then emitted as ONE gap entry each after statement
+        // generation. Sorted for deterministic output.
+        Set<String> knownUnmappableAccessTypes = new TreeSet<>();
+        Set<String> unrecognizedAccessTypes = new TreeSet<>();
 
         // Look up adapter by service type
         String serviceType = policy.getService() != null ? policy.getService() : DEFAULT_SERVICE_TYPE;
@@ -265,7 +265,7 @@ public class RangerToCedarConverter {
             for (RangerPolicyItem item : allowItems) {
                 statements.addAll(generateStatements(
                         item, "permit", policyId, adapter, resourceCombinations, null,
-                        reportedUnmappedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes));
             }
         }
 
@@ -275,7 +275,7 @@ public class RangerToCedarConverter {
             for (RangerPolicyItem item : denyItems) {
                 statements.addAll(generateStatements(
                         item, "forbid", policyId, adapter, resourceCombinations, null,
-                        reportedUnmappedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes));
             }
         }
 
@@ -285,7 +285,7 @@ public class RangerToCedarConverter {
             for (RangerPolicyItem item : denyExceptionItems) {
                 statements.addAll(generateStatements(
                         item, "permit", policyId, adapter, resourceCombinations, "denyException",
-                        reportedUnmappedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes));
             }
         }
 
@@ -304,8 +304,33 @@ public class RangerToCedarConverter {
                 }
                 statements.addAll(generateStatements(
                         filterItem, "permit", policyId, adapter, resourceCombinations, filterExpr,
-                        reportedUnmappedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes));
             }
+        }
+
+        // Emit at most two conflated gaps for this policy — one per gap type — regardless of
+        // whether any Cedar statements were produced above. A policy whose only access types
+        // are unmapped yields zero statements and must still report its gap.
+        if (!knownUnmappableAccessTypes.isEmpty()) {
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.KNOWN_UNMAPPABLE_ACTION, null,
+                    "Access type(s) " + String.join(", ", knownUnmappableAccessTypes)
+                            + " have no Lake Formation equivalent for service type '"
+                            + adapter.getServiceType() + "' and were dropped.",
+                    "No action required unless these capabilities are needed — Lake Formation "
+                            + "does not model them. Remove them from the Ranger policy to silence this.",
+                    adapter.getServiceType(),
+                    new ArrayList<>(knownUnmappableAccessTypes)));
+        }
+        if (!unrecognizedAccessTypes.isEmpty()) {
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.UNSUPPORTED_ACTION, null,
+                    "Access type(s) " + String.join(", ", unrecognizedAccessTypes)
+                            + " have no Cedar mapping for service '" + adapter.getServiceType()
+                            + "' and will be skipped.",
+                    "Review the Ranger policy and remove or replace the unsupported access type(s).",
+                    adapter.getServiceType(),
+                    new ArrayList<>(unrecognizedAccessTypes)));
         }
 
         return statements;
@@ -321,9 +346,12 @@ public class RangerToCedarConverter {
      * @param resourceCombinations expanded resource combinations
      * @param extraAnnotation     if "denyException" → add @denyException("true");
      *                            if non-null and not "denyException" → treat as row filter expression
-     * @param reportedUnmappedAccessTypes access types already reported as UNSUPPORTED_ACTION for
-     *                            this policy, so the gap is recorded once per (policy, accessType)
-     *                            rather than once per principal x resource combination
+     * @param knownUnmappableAccessTypes accumulator for access types the adapter deliberately
+     *                            does not map for this policy; drained into one gap entry after
+     *                            all statement generation for the policy completes
+     * @param unrecognizedAccessTypes accumulator for access types no adapter recognises for this
+     *                            policy; drained into one gap entry after all statement
+     *                            generation for the policy completes
      * @return list of Cedar statement strings
      */
     private List<String> generateStatements(RangerPolicyItem item,
@@ -332,7 +360,8 @@ public class RangerToCedarConverter {
                                             SourcePolicyAdapter adapter,
                                             List<ResourceCombination> resourceCombinations,
                                             String extraAnnotation,
-                                            Set<String> reportedUnmappedAccessTypes) {
+                                            Set<String> knownUnmappableAccessTypes,
+                                            Set<String> unrecognizedAccessTypes) {
         List<String> statements = new ArrayList<>();
 
         // Resolve principals
@@ -349,8 +378,8 @@ public class RangerToCedarConverter {
         for (String principalArn : principalArns) {
             String principalRef = adapter.buildPrincipalRef(principalArn);
             for (ResourceCombination rc : resourceCombinations) {
-                Set<String> cedarActions = extractCedarActions(item, adapter, rc.resourceLevel, policyId,
-                        reportedUnmappedAccessTypes);
+                Set<String> cedarActions = extractCedarActions(item, adapter, rc.resourceLevel,
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes);
                 if (cedarActions.isEmpty()) continue;
                 for (String action : cedarActions) {
                     StringBuilder sb = new StringBuilder();
@@ -392,8 +421,9 @@ public class RangerToCedarConverter {
     }
 
     private Set<String> extractCedarActions(RangerPolicyItem item, SourcePolicyAdapter adapter,
-                                             String resourceLevel, String policyId,
-                                             Set<String> reportedUnmappedAccessTypes) {
+                                             String resourceLevel,
+                                             Set<String> knownUnmappableAccessTypes,
+                                             Set<String> unrecognizedAccessTypes) {
         if (item.getAccesses() == null || item.getAccesses().isEmpty()) {
             return Collections.emptySet();
         }
@@ -408,47 +438,26 @@ public class RangerToCedarConverter {
                     // drop it silently. Which gap depends on whether the adapter recognises the
                     // type and declines to map it, or has never heard of it — see the branch below.
                     Set<String> rawMapped = adapter.mapAccessTypeToCedarActions(accessType);
-                    // Normalize the key so 'REFRESH' and 'refresh' in different policy items
-                    // of the same policy collapse to one finding. A null accessType (malformed
-                    // policy item) must still be reported, so it gets its own sentinel key
-                    // rather than throwing on the null.trim() call below.
-                    String dedupKey = accessType == null ? "<null>" : accessType.trim().toLowerCase();
-                    // The structured field is the grouping key for the assessment report's
-                    // per-(serviceType, accessType) rollup, so it must be normalized too —
-                    // otherwise 'INDEX' in one policy and 'index' in another produce two rollup
-                    // rows for one capability. Null stays null so @JsonInclude(NON_NULL) omits it.
+                    // Normalize so 'REFRESH' and 'refresh' in different policy items of the same
+                    // policy collapse to one entry in the accumulated set. A null accessType
+                    // (malformed policy item) must still be reported, so it gets its own sentinel
+                    // rather than throwing on the null.trim() call below. This is also the
+                    // grouping key for the assessment report's per-(serviceType, accessType)
+                    // rollup, so it must be normalized for that reason too — otherwise 'INDEX' in
+                    // one policy and 'index' in another produce two rollup rows for one capability.
                     String normalizedAccessType =
-                            accessType == null ? null : accessType.trim().toLowerCase();
-                    if (rawMapped.isEmpty()
-                            && reportedUnmappedAccessTypes.add(dedupKey)) {
+                            accessType == null ? "<null>" : accessType.trim().toLowerCase();
+                    if (rawMapped.isEmpty()) {
                         if (adapter.isKnownUnmappableAccessType(accessType)) {
                             // Recognised, but Lake Formation has no such capability at all.
                             // Informational: it never affects convertibility, and the assessment
                             // layer rolls these up per (serviceType, accessType) rather than
                             // reporting one entry per policy.
-                            gapReporter.recordGap(new GapEntry(
-                                    policyId, null, GapType.KNOWN_UNMAPPABLE_ACTION,
-                                    null,
-                                    "Access type '" + accessType + "' has no Lake Formation equivalent "
-                                            + "for service type '" + adapter.getServiceType()
-                                            + "' and was dropped.",
-                                    "No action required unless this capability is needed — Lake Formation "
-                                            + "does not model it. Remove the access type from the Ranger "
-                                            + "policy to silence this.",
-                                    adapter.getServiceType(),
-                                    normalizedAccessType));
+                            knownUnmappableAccessTypes.add(normalizedAccessType);
                         } else {
                             // Genuinely unknown — this is a coverage gap in our adapter and must
                             // stay actionable. Do not fold this into the case above.
-                            gapReporter.recordGap(new GapEntry(
-                                    policyId, null, GapType.UNSUPPORTED_ACTION,
-                                    null,
-                                    "Access type '" + accessType + "' has no Cedar mapping for service '"
-                                            + adapter.getServiceType() + "' and will be skipped.",
-                                    "Review the Ranger policy and remove or replace the unsupported "
-                                            + "access type.",
-                                    adapter.getServiceType(),
-                                    normalizedAccessType));
+                            unrecognizedAccessTypes.add(normalizedAccessType);
                         }
                     }
                     // If rawMapped is non-empty the type is known but filtered at this resource
