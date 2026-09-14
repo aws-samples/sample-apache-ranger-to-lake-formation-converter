@@ -23,6 +23,7 @@ public class AssessmentResult {
     private final List<String> warnings;
     private final List<LFPermissionOperation> projectedOperations;
     private final List<PolicyGapSummary> policyGapSummaries;
+    private final List<KnownUnmappableActionSummary> knownUnmappableActions;
 
     @JsonCreator
     public AssessmentResult(
@@ -37,7 +38,7 @@ public class AssessmentResult {
             @JsonProperty("warnings") List<String> warnings) {
         this(totalPolicies, fullyConvertible, partiallyConvertible, notConvertible,
                 projectedGrantCount, gapReport, source, services, warnings,
-                Collections.emptyList(), Collections.emptyList());
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
     }
 
     public AssessmentResult(
@@ -51,7 +52,8 @@ public class AssessmentResult {
             List<AssessedService> services,
             List<String> warnings,
             List<LFPermissionOperation> projectedOperations,
-            List<PolicyGapSummary> policyGapSummaries) {
+            List<PolicyGapSummary> policyGapSummaries,
+            List<KnownUnmappableActionSummary> knownUnmappableActions) {
         this.totalPolicies = totalPolicies;
         this.fullyConvertible = fullyConvertible;
         this.partiallyConvertible = partiallyConvertible;
@@ -65,6 +67,8 @@ public class AssessmentResult {
                 ? Collections.unmodifiableList(projectedOperations) : Collections.emptyList();
         this.policyGapSummaries = policyGapSummaries != null
                 ? Collections.unmodifiableList(policyGapSummaries) : Collections.emptyList();
+        this.knownUnmappableActions = knownUnmappableActions != null
+                ? Collections.unmodifiableList(knownUnmappableActions) : Collections.emptyList();
     }
 
     public String getSource()                    { return source; }
@@ -85,4 +89,9 @@ public class AssessmentResult {
 
     @JsonIgnore
     public List<PolicyGapSummary> getPolicyGapSummaries() { return policyGapSummaries; }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    public List<KnownUnmappableActionSummary> getKnownUnmappableActions() {
+        return knownUnmappableActions;
+    }
 }

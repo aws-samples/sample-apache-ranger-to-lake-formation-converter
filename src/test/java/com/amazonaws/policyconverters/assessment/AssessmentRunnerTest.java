@@ -302,8 +302,8 @@ class AssessmentRunnerTest {
 
     // ---- helpers for known-unmappable-action gap tests ----
 
-    private AssessmentResult runAssessment(RangerPolicy policy) {
-        PolicySource source = stubSource("hive", "hive", List.of(policy));
+    private AssessmentResult runAssessment(RangerPolicy... policies) {
+        PolicySource source = stubSource("hive", "hive", List.of(policies));
         return new AssessmentRunner().run(minimalConfig(), source);
     }
 
@@ -323,5 +323,67 @@ class AssessmentRunnerTest {
         item.setUsers(List.of("alice"));
         policy.setPolicyItems(List.of(item));
         return policy;
+    }
+
+    @Test
+    void knownUnmappableActionsAreRolledUpAndCollapsedInTheGapReport() {
+        AssessmentResult result = runAssessment(
+                hivePolicy(1L, "a", List.of("select", "index")),
+                hivePolicy(2L, "b", List.of("select", "index")),
+                hivePolicy(3L, "c", List.of("select", "lock")));
+
+        // Rollup: one row per (serviceType, accessType), with occurrence counts.
+        List<KnownUnmappableActionSummary> rollup = result.getKnownUnmappableActions();
+        assertEquals(2, rollup.size());
+
+        KnownUnmappableActionSummary index = rollup.stream()
+                .filter(r -> "index".equals(r.getAccessType())).findFirst().orElseThrow();
+        assertEquals("hive", index.getServiceType());
+        assertEquals(2, index.getOccurrenceCount());
+        assertEquals(List.of("1", "2"), index.getSamplePolicyIds());
+
+        // Gap report: collapsed to one entry per (serviceType, accessType), not per policy.
+        long entries = result.getGapReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION)
+                .count();
+        assertEquals(2, entries);
+        assertTrue(result.getGapReport().getEntries().stream()
+                        .filter(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION)
+                        .allMatch(g -> g.getPolicyId() == null),
+                "collapsed entries are not policy-scoped and must not claim a policyId");
+
+        // And the summary count matches the collapsed entry count.
+        assertEquals(Integer.valueOf(2),
+                result.getGapReport().getSummary().get(GapType.KNOWN_UNMAPPABLE_ACTION));
+    }
+
+    @Test
+    void samplePolicyIdsAreCappedButOccurrenceCountIsNot() {
+        RangerPolicy[] policies = new RangerPolicy[25];
+        for (int i = 0; i < 25; i++) {
+            policies[i] = hivePolicy(i + 1L, "p" + i, List.of("select", "index"));
+        }
+
+        AssessmentResult result = runAssessment(policies);
+
+        KnownUnmappableActionSummary index = result.getKnownUnmappableActions().get(0);
+        assertEquals(25, index.getOccurrenceCount());
+        assertEquals(10, index.getSamplePolicyIds().size(), "samples are capped at 10");
+    }
+
+    @Test
+    void collapsingDoesNotBreakTheNotConvertibleReason() {
+        // Task 4 backfills informational gaps onto a NOT_CONVERTIBLE policy so it states a
+        // reason. That lookup needs per-policy entries, so it must run before collapsing.
+        AssessmentResult result = runAssessment(hivePolicy(7L, "lock-only", List.of("index", "lock")));
+
+        PolicyGapSummary summary = result.getPolicyGapSummaries().stream()
+                .filter(s -> "7".equals(s.getPolicyId()))
+                .findFirst().orElseThrow();
+        assertFalse(summary.getGaps().isEmpty(),
+                "per-policy reason must survive the collapse");
+        assertTrue(summary.getGaps().stream()
+                .allMatch(g -> "7".equals(g.getPolicyId())),
+                "the reason must be the policy-scoped entry, not the collapsed one");
     }
 }

@@ -35,6 +35,7 @@ import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -179,9 +180,16 @@ public class AssessmentRunner {
             }
         }
 
-        GapReport gapReport = gapReporter.getReport();
+        GapReport rawGapReport = gapReporter.getReport();
+
+        // Classification runs on the raw, policy-scoped entries — Task 4's NOT_CONVERTIBLE
+        // reason lookup needs per-policy granularity.
         ConvertibilityResult convertibility =
-                computeConvertibility(allPolicies, ops, s3AgOps, gapReport);
+                computeConvertibility(allPolicies, ops, s3AgOps, rawGapReport);
+
+        List<KnownUnmappableActionSummary> knownUnmappable =
+                buildKnownUnmappableRollup(rawGapReport);
+        GapReport gapReport = collapseKnownUnmappableEntries(rawGapReport, knownUnmappable);
 
         return new AssessmentResult(
                 allPolicies.size(),
@@ -194,7 +202,70 @@ public class AssessmentRunner {
                 assessedServices,
                 warnings,
                 ops,
-                convertibility.policyGapSummaries);
+                convertibility.policyGapSummaries,
+                knownUnmappable);
+    }
+
+    /**
+     * Rolls KNOWN_UNMAPPABLE_ACTION entries up to one row per (serviceType, accessType),
+     * ordered by descending occurrence count so the console leads with the worst offender.
+     */
+    private static List<KnownUnmappableActionSummary> buildKnownUnmappableRollup(GapReport report) {
+        // LinkedHashMap keeps first-seen order stable before the final sort, which keeps
+        // output deterministic for equal counts (important for the demo's expected output).
+        Map<String, int[]> counts = new LinkedHashMap<>();
+        Map<String, List<String>> samples = new LinkedHashMap<>();
+        Map<String, String[]> keyParts = new LinkedHashMap<>();
+
+        for (GapEntry entry : report.getEntries()) {
+            if (entry.getGapType() != GapType.KNOWN_UNMAPPABLE_ACTION) {
+                continue;
+            }
+            String key = entry.getServiceType() + " " + entry.getAccessType();
+            keyParts.putIfAbsent(key, new String[]{entry.getServiceType(), entry.getAccessType()});
+            counts.computeIfAbsent(key, k -> new int[1])[0]++;
+            List<String> sample = samples.computeIfAbsent(key, k -> new ArrayList<>());
+            if (entry.getPolicyId() != null
+                    && sample.size() < KnownUnmappableActionSummary.SAMPLE_LIMIT) {
+                sample.add(entry.getPolicyId());
+            }
+        }
+
+        List<KnownUnmappableActionSummary> rollup = new ArrayList<>();
+        for (Map.Entry<String, String[]> e : keyParts.entrySet()) {
+            rollup.add(new KnownUnmappableActionSummary(
+                    e.getValue()[0], e.getValue()[1],
+                    counts.get(e.getKey())[0], samples.get(e.getKey())));
+        }
+        rollup.sort(Comparator.comparingInt(KnownUnmappableActionSummary::getOccurrenceCount)
+                .reversed());
+        return rollup;
+    }
+
+    /**
+     * Returns a copy of {@code report} with KNOWN_UNMAPPABLE_ACTION entries replaced by one
+     * collapsed entry per (serviceType, accessType). Prevents the assessment JSON from being
+     * dominated by hundreds of thousands of identical objects on a large estate.
+     */
+    private static GapReport collapseKnownUnmappableEntries(
+            GapReport report, List<KnownUnmappableActionSummary> rollup) {
+        List<GapEntry> collapsed = new ArrayList<>();
+        for (GapEntry entry : report.getEntries()) {
+            if (entry.getGapType() != GapType.KNOWN_UNMAPPABLE_ACTION) {
+                collapsed.add(entry);
+            }
+        }
+        for (KnownUnmappableActionSummary row : rollup) {
+            collapsed.add(new GapEntry(
+                    null, null, GapType.KNOWN_UNMAPPABLE_ACTION, null,
+                    "Access type '" + row.getAccessType() + "' has no Lake Formation equivalent "
+                            + "for service type '" + row.getServiceType() + "' and was dropped in "
+                            + row.getOccurrenceCount() + " policy item(s).",
+                    "No action required unless this capability is needed — Lake Formation does not "
+                            + "model it. Remove the access type from the Ranger policies to silence this.",
+                    row.getServiceType(), row.getAccessType()));
+        }
+        return new GapReport(collapsed, GapReport.computeSummary(collapsed), report.getGeneratedAt());
     }
 
     /**
