@@ -57,6 +57,9 @@ public class AssessmentReporter {
                 "No adapter registered for this Ranger service type; policies will be skipped.");
         GAP_EXPLANATIONS.put(GapEntry.GapType.UNSUPPORTED_ACTION,
                 "One or more Ranger access types have no LF permission equivalent and will be dropped.");
+        GAP_EXPLANATIONS.put(GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION,
+                "Access types with no Lake Formation equivalent by design; dropped, and not counted "
+                        + "against convertibility. See the rollup below.");
         GAP_EXPLANATIONS.put(GapEntry.GapType.UNMAPPED_RESOURCE,
                 "Resource paths cannot be mapped to LF data locations (HDFS/file:// not supported; see details below).");
         GAP_EXPLANATIONS.put(GapEntry.GapType.SCHEMA_VALIDATION_FAILURE,
@@ -190,27 +193,49 @@ public class AssessmentReporter {
                 }
             }
 
-            // Per-policy breakdown grouped by policy
+            List<KnownUnmappableActionSummary> knownUnmappable = result.getKnownUnmappableActions();
+            if (!knownUnmappable.isEmpty()) {
+                out.println();
+                out.println("Known-unmappable access types (informational — no Lake Formation "
+                        + "equivalent, no effect on convertibility):");
+                for (KnownUnmappableActionSummary row : knownUnmappable) {
+                    // Plain %7d, not %,7d — nothing else in this file's console output uses
+                    // grouped thousands separators, and a locale-dependent separator would
+                    // make output assertions locale-dependent too.
+                    out.printf("  %-24s — %7d policy items%n",
+                            row.getServiceType() + ": " + row.getAccessType(),
+                            row.getOccurrenceCount());
+                }
+            }
+
+            // Per-policy breakdown grouped by policy. Known-unmappable entries are excluded:
+            // they are collapsed (policyId == null) and already shown in their own rollup
+            // section above, so they must not create an "<unknown>" pseudo-policy here.
             Map<String, List<GapEntry>> byPolicy = new LinkedHashMap<>();
             for (GapEntry entry : result.getGapReport().getEntries()) {
+                if (entry.getGapType() == GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION) {
+                    continue;
+                }
                 String key = entry.getPolicyId() != null ? entry.getPolicyId() : "<unknown>";
                 byPolicy.computeIfAbsent(key, k -> new ArrayList<>()).add(entry);
             }
 
-            out.println();
-            out.printf("Policies with gaps (%d):%n", byPolicy.size());
-            for (List<GapEntry> entries : byPolicy.values()) {
-                GapEntry first = entries.get(0);
-                String label = first.getPolicyName() != null
-                        ? first.getPolicyName() + " (id=" + first.getPolicyId() + ")"
-                        : "id=" + first.getPolicyId();
-                out.println("  Policy: " + label);
-                if (first.getResourcePath() != null) {
-                    out.println("    Resource: " + first.getResourcePath());
-                }
-                for (GapEntry entry : entries) {
-                    out.println("    [" + entry.getGapType().name() + "] " + entry.getDetails());
-                    out.println("      → " + entry.getRecommendation());
+            if (!byPolicy.isEmpty()) {
+                out.println();
+                out.printf("Policies with gaps (%d):%n", byPolicy.size());
+                for (List<GapEntry> entries : byPolicy.values()) {
+                    GapEntry first = entries.get(0);
+                    String label = first.getPolicyName() != null
+                            ? first.getPolicyName() + " (id=" + first.getPolicyId() + ")"
+                            : "id=" + first.getPolicyId();
+                    out.println("  Policy: " + label);
+                    if (first.getResourcePath() != null) {
+                        out.println("    Resource: " + first.getResourcePath());
+                    }
+                    for (GapEntry entry : entries) {
+                        out.println("    [" + entry.getGapType().name() + "] " + entry.getDetails());
+                        out.println("      → " + entry.getRecommendation());
+                    }
                 }
             }
         }

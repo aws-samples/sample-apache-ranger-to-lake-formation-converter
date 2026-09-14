@@ -135,6 +135,52 @@ class AssessmentReporterTest {
         assertFalse(output.contains("⚠"), "No warning banner expected when warnings list is empty");
     }
 
+    @Test
+    void printsKnownUnmappableActionRollupAsItsOwnSection() {
+        AssessmentResult result = resultWithKnownUnmappable(List.of(
+                new KnownUnmappableActionSummary("hive", "index", 1204, List.of("1", "2")),
+                new KnownUnmappableActionSummary("hive", "lock", 1198, List.of("3")),
+                new KnownUnmappableActionSummary("trino", "grant", 12, List.of("4"))));
+
+        String output = capture(result);
+
+        assertTrue(output.contains("Known-unmappable access types"));
+        assertTrue(output.contains("hive: index"));
+        assertTrue(output.contains("1204"));
+        assertTrue(output.contains("trino: grant"));
+    }
+
+    @Test
+    void knownUnmappableActionsAreNotListedInThePerPolicyBreakdown() {
+        // The whole point: one policy per line for 1204 policies is what we are removing.
+        AssessmentResult result = resultWithKnownUnmappable(List.of(
+                new KnownUnmappableActionSummary("hive", "index", 1204, List.of("1"))));
+
+        String output = capture(result);
+
+        assertFalse(output.contains("Policies with gaps"),
+                "no actionable gaps means no per-policy breakdown");
+    }
+
+    @Test
+    void printsBothKnownUnmappableRollupAndPerPolicyBreakdownWhenBothPresent() {
+        GapEntry actionableGap = new GapEntry("42", "policy-42", GapType.DATA_MASKING,
+                "db.table", "has masking item", "remove masking");
+        GapEntry collapsedKnownUnmappable = new GapEntry(null, null, GapType.KNOWN_UNMAPPABLE_ACTION,
+                null, "hive: index appears in 1204 policies", "no action needed", "hive", "index");
+        List<GapEntry> entries = List.of(actionableGap, collapsedKnownUnmappable);
+        GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
+        AssessmentResult result = new AssessmentResult(3, 1, 1, 1, 5, gapReport,
+                "ranger-admin:http://localhost:6080", List.of(), List.of(), List.of(), List.of(),
+                List.of(new KnownUnmappableActionSummary("hive", "index", 1204, List.of("1"))));
+
+        String output = capture(result);
+
+        assertTrue(output.contains("Known-unmappable access types"), "Missing rollup section");
+        assertTrue(output.contains("Policies with gaps"), "Missing per-policy breakdown");
+        assertTrue(output.contains("DATA_MASKING"), "Missing actionable gap in per-policy breakdown");
+    }
+
     // ---- helpers ----
 
     private AssessmentResult buildResult(int total, int fully, int partial, int notConv,
@@ -159,5 +205,29 @@ class AssessmentReporterTest {
                 .rangerAdminUrl("http://localhost:6080")
                 .consoleOnly(true)
                 .build();
+    }
+
+    /**
+     * Builds an AssessmentResult whose collapsed gap report contains one
+     * KNOWN_UNMAPPABLE_ACTION entry per rollup row (policyId == null, as the real
+     * collapsed report produces them) alongside the rollup itself.
+     */
+    private AssessmentResult resultWithKnownUnmappable(List<KnownUnmappableActionSummary> rollup) {
+        List<GapEntry> entries = new java.util.ArrayList<>();
+        for (KnownUnmappableActionSummary row : rollup) {
+            entries.add(new GapEntry(null, null, GapType.KNOWN_UNMAPPABLE_ACTION, null,
+                    row.getServiceType() + ": " + row.getAccessType() + " appears in "
+                            + row.getOccurrenceCount() + " policies",
+                    "no action needed", row.getServiceType(), row.getAccessType()));
+        }
+        GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
+        return new AssessmentResult(5, 5, 0, 0, 10, gapReport,
+                "ranger-admin:http://localhost:6080", List.of(), List.of(), List.of(), List.of(), rollup);
+    }
+
+    private String capture(AssessmentResult result) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        new AssessmentReporter().report(result, configConsoleOnly(), new PrintStream(baos));
+        return baos.toString();
     }
 }
