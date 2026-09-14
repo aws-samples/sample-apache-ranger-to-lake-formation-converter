@@ -18,6 +18,14 @@ class HiveServiceAdapterTest {
     }
 
     @Test
+    void hiveAdminAccessTypesAreDeclaredKnownUnmappable() {
+        assertTrue(adapter.isKnownUnmappableAccessType("refresh"));
+        assertTrue(adapter.isKnownUnmappableAccessType("repladmin"));
+        assertTrue(adapter.isKnownUnmappableAccessType("serviceadmin"));
+        assertTrue(adapter.isKnownUnmappableAccessType("tempudfadmin"));
+    }
+
+    @Test
     void knownUnmappableMatchIsCaseAndWhitespaceInsensitive() {
         // Ranger policy JSON is not normalized; the converter passes access.getType() raw.
         assertTrue(adapter.isKnownUnmappableAccessType("  INDEX  "));
@@ -32,7 +40,7 @@ class HiveServiceAdapterTest {
     void unrecognizedAccessTypeIsNotKnownUnmappable() {
         // This is the critical case: an access type we have never seen must NOT be
         // classified as known-unmappable, or we lose our adapter-coverage signal.
-        assertFalse(adapter.isKnownUnmappableAccessType("repladmin"));
+        assertFalse(adapter.isKnownUnmappableAccessType("totally_made_up"));
     }
 
     @Test

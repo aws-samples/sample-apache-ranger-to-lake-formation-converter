@@ -44,8 +44,14 @@ public class HiveServiceAdapter implements SourcePolicyAdapter {
         ACTION_MAPPING = Collections.unmodifiableMap(m);
     }
 
-    /** Hive access types that have no Cedar mapping and are silently skipped with a log. */
-    private static final Set<String> UNMAPPED_ACCESS_TYPES = Set.of("index", "lock");
+    /**
+     * Hive access types that have no Cedar mapping and are silently skipped with a log:
+     * {@code index}/{@code lock} are Hive index and locking operations, and
+     * {@code refresh}/{@code repladmin}/{@code serviceadmin}/{@code tempudfadmin} are Hive
+     * admin operations. Lake Formation has no equivalent concept for any of them.
+     */
+    private static final Set<String> UNMAPPED_ACCESS_TYPES =
+            Set.of("index", "lock", "refresh", "repladmin", "serviceadmin", "tempudfadmin");
 
     private final AwsContext awsContext;
     private volatile MetricsEmitter metricsEmitter;
