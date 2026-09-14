@@ -407,20 +407,41 @@ public class RangerToCedarConverter {
                     // the adapter already logs it, but we must also surface a gap so it is
                     // visible in the assessment report and not silently dropped.
                     Set<String> rawMapped = adapter.mapAccessTypeToCedarActions(accessType);
-                    if (rawMapped.isEmpty()) {
-                        // Normalize the key so 'REFRESH' and 'refresh' in different policy items
-                        // of the same policy collapse to one finding. A null accessType (malformed
-                        // policy item) must still be reported, so it gets its own sentinel key
-                        // rather than throwing on the null.trim() call below.
-                        String dedupKey = accessType == null ? "<null>" : accessType.trim().toLowerCase();
-                        if (reportedUnmappedAccessTypes.add(dedupKey)) {
+                    // Normalize the key so 'REFRESH' and 'refresh' in different policy items
+                    // of the same policy collapse to one finding. A null accessType (malformed
+                    // policy item) must still be reported, so it gets its own sentinel key
+                    // rather than throwing on the null.trim() call below.
+                    String dedupKey = accessType == null ? "<null>" : accessType.trim().toLowerCase();
+                    if (rawMapped.isEmpty()
+                            && reportedUnmappedAccessTypes.add(dedupKey)) {
+                        if (adapter.isKnownUnmappableAccessType(accessType)) {
+                            // Recognised, but Lake Formation has no such capability at all.
+                            // Informational: it never affects convertibility, and the assessment
+                            // layer rolls these up per (serviceType, accessType) rather than
+                            // reporting one entry per policy.
+                            gapReporter.recordGap(new GapEntry(
+                                    policyId, null, GapType.KNOWN_UNMAPPABLE_ACTION,
+                                    null,
+                                    "Access type '" + accessType + "' has no Lake Formation equivalent "
+                                            + "for service type '" + adapter.getServiceType()
+                                            + "' and was dropped.",
+                                    "No action required unless this capability is needed — Lake Formation "
+                                            + "does not model it. Remove the access type from the Ranger "
+                                            + "policy to silence this.",
+                                    adapter.getServiceType(),
+                                    accessType));
+                        } else {
+                            // Genuinely unknown — this is a coverage gap in our adapter and must
+                            // stay actionable. Do not fold this into the case above.
                             gapReporter.recordGap(new GapEntry(
                                     policyId, null, GapType.UNSUPPORTED_ACTION,
                                     null,
                                     "Access type '" + accessType + "' has no Cedar mapping for service '"
                                             + adapter.getServiceType() + "' and will be skipped.",
                                     "Review the Ranger policy and remove or replace the unsupported "
-                                            + "access type."));
+                                            + "access type.",
+                                    adapter.getServiceType(),
+                                    accessType));
                         }
                     }
                     // If rawMapped is non-empty the type is known but filtered at this resource

@@ -706,6 +706,101 @@ class RangerToCedarConverterTest {
                 .count(), "allow and deny items sharing an unmappable access type must dedup to one gap");
     }
 
+    // --- Known-unmappable vs. unsupported access type tests ---
+
+    @Test
+    void hiveIndexAccessTypeProducesKnownUnmappableGapNotUnsupportedAction() {
+        // A Hive policy granting select + index. select converts; index is a capability
+        // Lake Formation simply does not have, and must not be reported as actionable.
+        RangerPolicy policy = buildHiveTablePolicy("analyst", List.of("select", "index"));
+
+        hiveConverter.convert(List.of(policy));
+
+        List<GapEntry> gaps = gapReporter.getReport().getEntries();
+        assertTrue(gaps.stream().anyMatch(g ->
+                        g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION
+                                && "index".equals(g.getAccessType())
+                                && "hive".equals(g.getServiceType())),
+                "index must be reported as KNOWN_UNMAPPABLE_ACTION with structured fields");
+        assertFalse(gaps.stream().anyMatch(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION),
+                "index must NOT produce an actionable UNSUPPORTED_ACTION gap");
+    }
+
+    @Test
+    void unrecognizedHiveAccessTypeStillProducesUnsupportedActionGap() {
+        // The signal we must not lose: an access type no adapter knows about.
+        RangerPolicy policy = buildHiveTablePolicy("analyst", List.of("repladmin"));
+
+        hiveConverter.convert(List.of(policy));
+
+        List<GapEntry> gaps = gapReporter.getReport().getEntries();
+        assertTrue(gaps.stream().anyMatch(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION),
+                "an unrecognised access type must stay loud");
+        assertFalse(gaps.stream().anyMatch(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION));
+    }
+
+    @Test
+    void resourceLevelFilteredAccessTypeStillProducesNoGap() {
+        // Regression guard on pre-existing behaviour: "select" at database level is a known
+        // type filtered by resource level, which is intentional and must stay gap-free.
+        RangerPolicy policy = buildHiveDatabasePolicy("analyst", List.of("select"));
+
+        hiveConverter.convert(List.of(policy));
+
+        assertTrue(gapReporter.getReport().getEntries().stream().noneMatch(g ->
+                        g.getGapType() == GapType.UNSUPPORTED_ACTION
+                                || g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION),
+                "resource-level filtering of a known type is intentional — no gap");
+    }
+
+    @Test
+    void knownUnmappableActionIsAlsoReportedOncePerPolicy() {
+        RangerPolicy policy = buildHiveTablePolicyWithPrincipals(
+                List.of("alice", "bob", "carol"), List.of("select", "index"));
+
+        hiveConverter.convert(List.of(policy));
+
+        assertEquals(1, gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION)
+                .count(), "a later task's occurrenceCount depends on this being per-policy");
+    }
+
+    /**
+     * Single-principal table-level Hive policy, modelled on
+     * {@link #buildHiveTablePolicyWithPrincipals(List, List)}.
+     */
+    private RangerPolicy buildHiveTablePolicy(String principal, List<String> accessTypes) {
+        return buildHiveTablePolicyWithPrincipals(List.of(principal), accessTypes);
+    }
+
+    /**
+     * Database-level (no "table" resource key) Hive policy, so access types are mapped with
+     * {@code resourceLevel == "database"} and are subject to resource-level filtering.
+     */
+    private RangerPolicy buildHiveDatabasePolicy(String principal, List<String> accessTypes) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(5100L);
+        policy.setName("test-hive-database-policy");
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", resource("mydb"));
+        policy.setResources(resources);
+
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setUsers(List.of(principal));
+        List<RangerPolicyItemAccess> accesses = new ArrayList<>();
+        for (String accessType : accessTypes) {
+            RangerPolicyItemAccess access = new RangerPolicyItemAccess();
+            access.setType(accessType);
+            access.setIsAllowed(true);
+            accesses.add(access);
+        }
+        item.setAccesses(accesses);
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
     private RangerPolicy buildHiveTablePolicyWithPrincipals(List<String> principals, List<String> accessTypes) {
         return buildHiveTablePolicyWithPrincipals(5000L, principals, accessTypes);
     }
