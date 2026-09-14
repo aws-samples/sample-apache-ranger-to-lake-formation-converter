@@ -863,6 +863,42 @@ class RangerToCedarConverterTest {
                 "'grant' is deliberately unmapped, so it must not be actionable");
     }
 
+    // ---- resilience: an adapter with no case for a resource level must not abort the run ----
+
+    @Test
+    void unmappableResourceLevel_recordsGapInsteadOfThrowing() {
+        // Reproduces the real crash: RangerServiceAdapter (registered as "trino" here to force
+        // the mismatch) has a "datalocation" branch in expandResources that unconditionally calls
+        // buildEntityRef regardless of the adapter's actual capabilities. TrinoServiceAdapter has
+        // no "datalocation" case (only Hive/EMR model that resource), so buildEntityRefFromValues
+        // throws IllegalArgumentException("Unknown resource level: datalocation") from inside
+        // expandResources — exactly the mechanism that let one bad policy abort the whole
+        // 241-policy assessment run before this fix.
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(9001L);
+        policy.setName("test_trino_datalocation_policy");
+        policy.setService("trino");
+        policy.setPolicyType(0);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource catalogRes = new RangerPolicyResource();
+        catalogRes.setValues(Collections.singletonList("hive"));
+        resources.put("catalog", catalogRes);
+        RangerPolicyResource dataLocRes = new RangerPolicyResource();
+        dataLocRes.setValues(Collections.singletonList("s3://my-bucket/data/"));
+        resources.put("datalocation", dataLocRes);
+        policy.setResources(resources);
+        policy.setPolicyItems(List.of(buildItem("alice", "alter")));
+
+        CedarPolicySet result = assertDoesNotThrow(() -> trinoConverter.convert(List.of(policy)),
+                "An adapter's unsupported resource level must not crash the whole assessment run");
+
+        assertEquals(0, result.getPermitCount(),
+                "No Cedar statement should be produced for a resource level the adapter can't map");
+        assertTrue(gapReporter.getReport().getEntries().stream().anyMatch(g ->
+                        "9001".equals(g.getPolicyId()) && g.getGapType() == GapType.UNMAPPED_RESOURCE),
+                "Unsupported resource level must be recorded as an UNMAPPED_RESOURCE gap");
+    }
+
     /**
      * Single-principal table-level Hive policy, modelled on
      * {@link #buildHiveTablePolicyWithPrincipals(List, List)}.

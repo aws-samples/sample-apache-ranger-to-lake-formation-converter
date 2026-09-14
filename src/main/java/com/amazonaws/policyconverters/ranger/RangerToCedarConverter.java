@@ -237,9 +237,26 @@ public class RangerToCedarConverter {
         String resourceLevel = determineResourceLevel(resources);
         resourceLevel = promoteResourceLevel(resourceLevel, resources);
 
-        // Expand wildcards and build resource combinations
-        List<ResourceCombination> resourceCombinations = expandResources(
-                resources, resourceLevel, adapter, policyId);
+        // Expand wildcards and build resource combinations. An adapter that has no case for this
+        // resource level (e.g. a new/unexpected combination of resource keys) throws
+        // IllegalArgumentException from buildEntityRef(FromValues) — a coverage gap, not a
+        // programming error, so we record it as a gap and skip only this policy rather than
+        // aborting the whole run. Scoped tightly to this one call: it must NOT wrap
+        // generateStatements or parseAndValidate below, so a real bug there still fails loudly.
+        List<ResourceCombination> resourceCombinations;
+        try {
+            resourceCombinations = expandResources(resources, resourceLevel, adapter, policyId);
+        } catch (IllegalArgumentException e) {
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.UNMAPPED_RESOURCE,
+                    buildResourcePath(policy),
+                    "Resource level '" + resourceLevel + "' has no Lake Formation mapping for "
+                            + "service type '" + serviceType + "': " + e.getMessage(),
+                    "This resource type has no Lake Formation equivalent for service '" + serviceType
+                            + "'; the policy will produce no grants."
+            ));
+            return Collections.emptyList();
+        }
 
         if (resourceCombinations.isEmpty()) {
             LOG.warn("Policy {} ({}) - no resources resolved after expansion", policyId, policyName);
