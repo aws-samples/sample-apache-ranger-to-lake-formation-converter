@@ -3,6 +3,8 @@ package com.amazonaws.policyconverters.assessment;
 import com.amazonaws.policyconverters.model.GapEntry;
 import com.amazonaws.policyconverters.model.GapEntry.GapType;
 import com.amazonaws.policyconverters.model.GapReport;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -181,6 +183,46 @@ class AssessmentReporterTest {
         assertTrue(output.contains("DATA_MASKING"), "Missing actionable gap in per-policy breakdown");
     }
 
+    @Test
+    void gapsFileIsAnObjectWithPoliciesAndKnownUnmappableRollup(@TempDir Path tmp)
+            throws Exception {
+        Path gapsPath = tmp.resolve("gaps.json");
+        GapEntry gap = new GapEntry("42", "policy-42", GapType.DATA_MASKING,
+                "db.table", "has masking item", "remove masking");
+        PolicyGapSummary policySummary = new PolicyGapSummary("42", "policy-42",
+                PolicyGapSummary.Convertibility.PARTIALLY_CONVERTIBLE, List.of(gap));
+        GapReport gapReport = new GapReport(List.of(gap), GapReport.computeSummary(List.of(gap)),
+                "2024-01-01T00:00:00Z");
+        AssessmentResult result = new AssessmentResult(1, 0, 1, 0, 1, gapReport,
+                "ranger-admin:http://localhost:6080", List.of(), List.of(), List.of(),
+                List.of(policySummary),
+                List.of(new KnownUnmappableActionSummary("hive", "index", 1204, List.of("1"))));
+
+        new AssessmentReporter().report(result, configWithGapsPath(gapsPath),
+                new PrintStream(new ByteArrayOutputStream()));
+
+        JsonNode root = new ObjectMapper().readTree(gapsPath.toFile());
+        assertTrue(root.isObject(), "gaps file is now an object, not a bare array");
+        assertTrue(root.get("policies").isArray());
+        assertEquals(1, root.get("policies").size());
+        assertEquals("index", root.get("knownUnmappableActions").get(0).get("accessType").asText());
+        assertEquals(1204,
+                root.get("knownUnmappableActions").get(0).get("occurrenceCount").asInt());
+    }
+
+    @Test
+    void gapsFileOmitsRollupKeyWhenThereAreNoKnownUnmappableActions(@TempDir Path tmp)
+            throws Exception {
+        Path gapsPath = tmp.resolve("gaps.json");
+        AssessmentResult result = buildResult(5, 5, 0, 0, 10, List.of(), null, List.of());
+
+        new AssessmentReporter().report(result, configWithGapsPath(gapsPath),
+                new PrintStream(new ByteArrayOutputStream()));
+
+        JsonNode root = new ObjectMapper().readTree(gapsPath.toFile());
+        assertFalse(root.has("knownUnmappableActions"));
+    }
+
     // ---- helpers ----
 
     private AssessmentResult buildResult(int total, int fully, int partial, int notConv,
@@ -204,6 +246,14 @@ class AssessmentReporterTest {
         return AssessmentConfig.builder()
                 .rangerAdminUrl("http://localhost:6080")
                 .consoleOnly(true)
+                .build();
+    }
+
+    private AssessmentConfig configWithGapsPath(Path gapsPath) {
+        return AssessmentConfig.builder()
+                .rangerAdminUrl("http://localhost:6080")
+                .consoleOnly(true)
+                .gapsOutputPath(gapsPath)
                 .build();
     }
 

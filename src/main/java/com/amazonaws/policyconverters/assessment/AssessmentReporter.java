@@ -245,7 +245,8 @@ public class AssessmentReporter {
     private void writeGapsFile(AssessmentResult result, Path outputPath) throws IOException {
         Path parent = outputPath.toAbsolutePath().getParent();
         if (parent != null) Files.createDirectories(parent);
-        objectMapper.writeValue(outputPath.toFile(), result.getPolicyGapSummaries());
+        objectMapper.writeValue(outputPath.toFile(), new GapsFileOutput(
+                result.getPolicyGapSummaries(), result.getKnownUnmappableActions()));
         LOG.info("Gap report written to {}", outputPath.toAbsolutePath());
     }
 
