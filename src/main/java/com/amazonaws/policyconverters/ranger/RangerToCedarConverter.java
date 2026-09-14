@@ -403,15 +403,22 @@ public class RangerToCedarConverter {
                 String accessType = access.getType();
                 Set<String> mapped = adapter.mapAccessTypeToCedarActions(accessType, resourceLevel);
                 if (mapped.isEmpty()) {
-                    // If the 1-arg overload also returns empty, the type is genuinely unknown —
-                    // the adapter already logs it, but we must also surface a gap so it is
-                    // visible in the assessment report and not silently dropped.
+                    // The 1-arg overload ignores resource level. If it too returns empty, this
+                    // access type maps to nothing anywhere, and we must surface a gap rather than
+                    // drop it silently. Which gap depends on whether the adapter recognises the
+                    // type and declines to map it, or has never heard of it — see the branch below.
                     Set<String> rawMapped = adapter.mapAccessTypeToCedarActions(accessType);
                     // Normalize the key so 'REFRESH' and 'refresh' in different policy items
                     // of the same policy collapse to one finding. A null accessType (malformed
                     // policy item) must still be reported, so it gets its own sentinel key
                     // rather than throwing on the null.trim() call below.
                     String dedupKey = accessType == null ? "<null>" : accessType.trim().toLowerCase();
+                    // The structured field is the grouping key for the assessment report's
+                    // per-(serviceType, accessType) rollup, so it must be normalized too —
+                    // otherwise 'INDEX' in one policy and 'index' in another produce two rollup
+                    // rows for one capability. Null stays null so @JsonInclude(NON_NULL) omits it.
+                    String normalizedAccessType =
+                            accessType == null ? null : accessType.trim().toLowerCase();
                     if (rawMapped.isEmpty()
                             && reportedUnmappedAccessTypes.add(dedupKey)) {
                         if (adapter.isKnownUnmappableAccessType(accessType)) {
@@ -429,7 +436,7 @@ public class RangerToCedarConverter {
                                             + "does not model it. Remove the access type from the Ranger "
                                             + "policy to silence this.",
                                     adapter.getServiceType(),
-                                    accessType));
+                                    normalizedAccessType));
                         } else {
                             // Genuinely unknown — this is a coverage gap in our adapter and must
                             // stay actionable. Do not fold this into the case above.
@@ -441,7 +448,7 @@ public class RangerToCedarConverter {
                                     "Review the Ranger policy and remove or replace the unsupported "
                                             + "access type.",
                                     adapter.getServiceType(),
-                                    accessType));
+                                    normalizedAccessType));
                         }
                     }
                     // If rawMapped is non-empty the type is known but filtered at this resource

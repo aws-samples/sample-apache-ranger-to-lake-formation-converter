@@ -765,6 +765,57 @@ class RangerToCedarConverterTest {
                 .count(), "a later task's occurrenceCount depends on this being per-policy");
     }
 
+    @Test
+    void knownUnmappableAccessTypeIsStoredNormalizedForGrouping() {
+        // The assessment report groups these findings by (serviceType, accessType). If the raw
+        // Ranger value were stored, 'INDEX' here and 'index' in another policy would become two
+        // rollup rows — and two console lines — for one capability. Casing inconsistency across a
+        // real 133K-policy estate is close to certain, so the stored key must be normalized.
+        RangerPolicy policy = buildHiveTablePolicy("analyst", List.of("  INDEX  "));
+
+        hiveConverter.convert(List.of(policy));
+
+        GapEntry gap = gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION)
+                .findFirst().orElseThrow();
+        assertEquals("index", gap.getAccessType(),
+                "accessType must be trimmed and lower-cased so the rollup groups correctly");
+        assertEquals("hive", gap.getServiceType());
+    }
+
+    @Test
+    void unsupportedAccessTypeIsAlsoStoredNormalizedForGrouping() {
+        RangerPolicy policy = buildHiveTablePolicy("analyst", List.of("REPLADMIN"));
+
+        hiveConverter.convert(List.of(policy));
+
+        GapEntry gap = gapReporter.getReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION)
+                .findFirst().orElseThrow();
+        assertEquals("repladmin", gap.getAccessType());
+    }
+
+    @Test
+    void trinoGrantAccessTypeProducesKnownUnmappableGap() {
+        // Presto/Trino "grant"/"revoke" are the other half of this feature — Hive index/lock is
+        // covered above. Trino resolves resources through catalog/schema/table rather than
+        // database/table, so it is worth exercising end-to-end through the converter and not
+        // only at the adapter level.
+        RangerPolicy policy = buildTrinoTablePolicy();
+        policy.setPolicyItems(List.of(buildItem("alice", "grant")));
+
+        trinoConverter.convert(List.of(policy));
+
+        assertTrue(gapReporter.getReport().getEntries().stream().anyMatch(g ->
+                        g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION
+                                && "grant".equals(g.getAccessType())
+                                && "trino".equals(g.getServiceType())),
+                "Trino 'grant' must be reported as KNOWN_UNMAPPABLE_ACTION, not UNSUPPORTED_ACTION");
+        assertFalse(gapReporter.getReport().getEntries().stream()
+                        .anyMatch(g -> g.getGapType() == GapType.UNSUPPORTED_ACTION),
+                "'grant' is deliberately unmapped, so it must not be actionable");
+    }
+
     /**
      * Single-principal table-level Hive policy, modelled on
      * {@link #buildHiveTablePolicyWithPrincipals(List, List)}.
