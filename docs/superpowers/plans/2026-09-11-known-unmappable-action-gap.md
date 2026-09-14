@@ -1394,6 +1394,67 @@ git commit -m "docs: document KNOWN_UNMAPPABLE_ACTION gap type and new gaps file
 
 ---
 
+## Task 8.5: Quiet the adapter logs for unmappable access types
+
+Added after the user observed the same fan-out in the logs that Task 0 fixed in the gap report.
+Measured: each unmappable access type logs **2–3× per principal × resource combination**, because
+`HiveServiceAdapter.mapAccessTypeToCedarActions(type, level)` calls the one-arg overload internally
+(`HiveServiceAdapter.java:119, 122`) and `extractCedarActions` then calls the one-arg overload again
+directly. The unit-test suite alone emits 28 identical `Unknown Hive access type: 'refresh'` lines.
+On a policy with 5 principals across 3 tables that is ~30 ERROR lines for one access type in one
+policy — which interleaves with `--console-only` assessment output and churns the bounded rolling
+log file.
+
+**Files:**
+- Modify: `src/main/java/com/amazonaws/policyconverters/ranger/HiveServiceAdapter.java:82-103`
+- Modify: `src/main/java/com/amazonaws/policyconverters/ranger/PrestoServiceAdapter.java` (same shape)
+- Modify: `src/main/java/com/amazonaws/policyconverters/ranger/TrinoServiceAdapter.java` (same shape)
+- Modify: `src/main/java/com/amazonaws/policyconverters/ranger/RangerToCedarConverter.java`
+- Test: the three adapter test classes
+
+**User's decision:** downgrade deliberately-unmappable types to DEBUG; keep genuinely-unknown types
+at ERROR but emit them once per policy rather than per principal × resource.
+
+- [ ] **Step 1: Downgrade the known-unmappable log**
+
+In each of the three adapters, the `UNMAPPED_ACCESS_TYPES` branch currently does `LOG.warn(...)`.
+Change to `LOG.debug(...)`. These are expected, by-design outcomes — Task 3 already reports them
+as an informational gap, so an operator-visible log line adds nothing. Leave the
+`metricsEmitter.recordUnmappedAccessType(...)` call in place: the metric is the intended signal.
+
+- [ ] **Step 2: Suppress the repeated unknown-type ERROR**
+
+The `LOG.error("Unknown … access type")` lines must stay at ERROR (they indicate a real coverage
+gap) but fire once per policy. The adapters are stateless and have no policy scope, so the
+deduplication cannot live in them without introducing exactly the cross-cycle state hazard Task 0
+avoided.
+
+Instead, reuse Task 0's existing `reportedUnmappedAccessTypes` set, which already has precisely the
+right scope. Move the operator-facing log to the converter, beside the gap emission that Task 3
+added, and drop the `LOG.error` from the adapters (keep `LOG.debug` there if useful for tracing).
+This puts one log line and one gap entry on the same guarded path, so they can never diverge again.
+
+**Reviewer note:** verify the metric is still emitted per occurrence if that is the existing
+contract — deduplicating a CloudWatch count metric would silently change its meaning. If the metric
+must stay per-occurrence, keep it outside the dedup guard and say so in a comment.
+
+- [ ] **Step 3: Assert the log levels in tests**
+
+Attach a Logback `ListAppender` to the adapter logger and assert:
+- an `index` access type produces no WARN or ERROR record
+- an unrecognised access type still produces exactly one ERROR across a multi-principal,
+  multi-resource policy
+
+- [ ] **Step 4: Run the full suite and commit**
+
+```bash
+mvn -q test 2>&1 | tail -20
+git add src/main/java/com/amazonaws/policyconverters/ranger/ src/test/java/com/amazonaws/policyconverters/ranger/
+git commit -m "fix: stop logging unmappable access types once per principal and resource"
+```
+
+---
+
 ## Verification Checklist
 
 Before declaring this done, confirm each with actual command output — not by inspection:
