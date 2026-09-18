@@ -289,4 +289,45 @@ class TrinoServiceAdapterTest {
         res.setIsExcludes(false);
         return res;
     }
+
+    @Test
+    void allMapsToLfAllAtEveryResourceLevel() {
+        // 97 policies in the customer's Trino export grant "all". It was absent from
+        // ACTION_MAPPING, so every one of them silently produced zero LF permissions.
+        assertEquals(Set.of("ALL"), adapter.mapAccessTypeToCedarActions("all"));
+        assertEquals(Set.of("ALL"), adapter.mapAccessTypeToCedarActions("all", "table"));
+        assertEquals(Set.of("ALL"), adapter.mapAccessTypeToCedarActions("all", "column"));
+        assertEquals(Set.of("ALL"), adapter.mapAccessTypeToCedarActions("all", "schema"));
+    }
+
+    @Test
+    void allOnUrlResourceCollapsesToDataLocationAccess() {
+        // LF accepts only DATA_LOCATION_ACCESS on a data location, so "all" must not leak
+        // an ALL permission onto a url resource.
+        assertEquals(Set.of("DATA_LOCATION_ACCESS"),
+                adapter.mapAccessTypeToCedarActions("all", "url"));
+    }
+
+    @Test
+    void updateMapsToInsert() {
+        assertEquals(Set.of("INSERT"), adapter.mapAccessTypeToCedarActions("update"));
+        assertEquals(Set.of("INSERT"), adapter.mapAccessTypeToCedarActions("update", "table"));
+    }
+
+    @Test
+    void trinoOnlyCapabilitiesAreDeclaredKnownUnmappable() {
+        // execute (183 policies) and impersonate (96) are Trino engine capabilities with no
+        // Lake Formation analogue — informational, not adapter coverage gaps.
+        assertTrue(adapter.isKnownUnmappableAccessType("execute"));
+        assertTrue(adapter.isKnownUnmappableAccessType("impersonate"));
+        assertTrue(adapter.isKnownUnmappableAccessType("grant"));
+        assertTrue(adapter.isKnownUnmappableAccessType("revoke"));
+    }
+
+    @Test
+    void genuinelyUnknownAccessTypeStaysActionable() {
+        // The coverage signal we must not lose.
+        assertFalse(adapter.isKnownUnmappableAccessType("totally_made_up"));
+        assertTrue(adapter.mapAccessTypeToCedarActions("totally_made_up").isEmpty());
+    }
 }

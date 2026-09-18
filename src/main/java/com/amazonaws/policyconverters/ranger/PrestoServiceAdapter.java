@@ -51,11 +51,31 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
         // recognises them as known access types and collapses them to DATA_LOCATION_ACCESS.
         m.put("read", Collections.singleton("SELECT"));
         m.put("write", Collections.singleton("INSERT"));
+        m.put("update", Collections.singleton("INSERT"));
+        // "all" is Ranger's shorthand for every privilege on the resource. It maps to LF's own
+        // ALL ("Super") permission rather than being expanded, matching HiveServiceAdapter, and
+        // is already accepted by the table/column/database resource-level filters below.
+        m.put("all", Collections.singleton("ALL"));
         ACTION_MAPPING = Collections.unmodifiableMap(m);
     }
 
-    /** Presto access types that have no Cedar mapping and are silently skipped with a log. */
-    private static final Set<String> UNMAPPED_ACCESS_TYPES = Set.of("grant", "revoke");
+    /**
+     * Presto access types recognised but deliberately not mapped, because Lake Formation has no
+     * equivalent concept:
+     * <ul>
+     *   <li>{@code grant}/{@code revoke} — standalone privileges to delegate access. LF models
+     *       delegation as a per-permission grant option, not a standalone privilege. Mapping these
+     *       onto the grant option is a tracked follow-up, not a silent drop.</li>
+     *   <li>{@code execute} — the right to run a function or procedure; LF governs data access
+     *       only.</li>
+     *   <li>{@code impersonate} — the right to act as another user; an engine-level capability
+     *       with no catalog-permission analogue.</li>
+     * </ul>
+     * Distinct from an unrecognised access type, which signals a coverage gap in this adapter and
+     * stays actionable.
+     */
+    private static final Set<String> UNMAPPED_ACCESS_TYPES =
+            Set.of("grant", "revoke", "execute", "impersonate");
 
     private final AwsContext awsContext;
     private final String gdcCatalogName;
