@@ -84,7 +84,11 @@ Dispatched from `ConversionServerMain.createRangerService(RangerServiceConfig)`.
 
 ### `ranger/HiveServiceAdapter.java` — `"hive"`
 
-Same action mapping as `RangerServiceAdapter` for table/db/column/url resources. Explicitly skips `"index"` and `"lock"` with a warning. `url`/`datalocation` access types → `DATA_LOCATION_ACCESS`. Same Glue ARN structure.
+Same action mapping as `RangerServiceAdapter` for table/db/column/url resources. Declares six
+access types as deliberately unmapped via `getKnownUnmappableAccessTypes()` —
+`index`, `lock`, `refresh`, `repladmin`, `serviceadmin`, `tempudfadmin` — which surface as an
+informational `KNOWN_UNMAPPABLE_ACTION` gap rather than the demoting `UNSUPPORTED_ACTION`.
+`url`/`datalocation` access types → `DATA_LOCATION_ACCESS`. Same Glue ARN structure.
 
 ---
 
@@ -113,16 +117,22 @@ Maps catalog actions (`select`, `update`, `alter`, `create`, `drop`, `read`, `wr
 
 | Ranger access type | Cedar action |
 |---|---|
-| `select` | `SELECT` |
-| `insert` | `INSERT` |
+| `select`, `read` | `SELECT` |
+| `insert`, `write`, `update` | `INSERT` |
 | `delete` | `DELETE` |
 | `create` | `CREATE_TABLE` |
 | `drop` | `DROP` |
 | `alter` | `ALTER` |
 | `use`, `show` | `DESCRIBE` |
-| `grant`, `revoke` | silently skipped |
+| `all` | `ALL` |
+| `grant`, `revoke`, `execute`, `impersonate` | known-unmappable — reported as `KNOWN_UNMAPPABLE_ACTION` (informational; never demotes convertibility), **not** silently skipped as previously documented here. These always produced a gap entry, just under `UNSUPPORTED_ACTION` before this change. |
 
-**Resource levels:** `schema` (maps to `database` in Glue ARNs), `table`, `column`.
+**Resource levels:** `schema` (maps to `database` in Glue ARNs), `table`, `column`, `url`
+(Presto's `external_location`; always collapses to `DATA_LOCATION_ACCESS`, mirroring Hive).
+
+`detectUnmappableResourceType(policy)` gaps Presto-only resource keys that have no Glue/LF shape
+at all — `procedure`, `function`, `trinouser`, `sessionproperty`, `systemproperty` — before they
+can fall through to the database resource level and silently produce a wrong-scoped grant.
 
 **`shouldProcessPolicy(policy)`:** checks `catalog` resource value == `gdcCatalogName`; policies without a `catalog` resource are always processed.
 
@@ -130,7 +140,10 @@ Maps catalog actions (`select`, `update`, `alter`, `create`, `drop`, `read`, `wr
 
 ### `ranger/TrinoServiceAdapter.java` — `"trino"`
 
-Identical to `PrestoServiceAdapter` in every detail. Separate class, same logic, same resource levels and action mappings.
+Identical to `PrestoServiceAdapter` in every detail, including the access-type table above,
+the `url` → `DATA_LOCATION_ACCESS` resource support, and the `grant`/`revoke`/`execute`/
+`impersonate` known-unmappable set. Separate class, same logic, same resource levels and action
+mappings.
 
 ---
 

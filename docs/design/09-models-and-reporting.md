@@ -14,11 +14,45 @@ Inter-component: Constructed in entry points; passed to `RangerToCedarConverter`
 
 Immutable record of a single unsupported Ranger feature.
 
-**Fields:** `policyId`, `policyName`, `gapType (GapEntry.GapType)`, `resourcePath`, `details`, `recommendation`.
+**Fields:** `policyId`, `policyName`, `gapType (GapEntry.GapType)`, `resourcePath`, `details`, `recommendation`, `serviceType`, `accessTypes (List<String>)`.
 
-### `GapType` enum (16 values)
+`serviceType` and `accessTypes` are populated only for the two action-related gap types
+(`UNSUPPORTED_ACTION`, `KNOWN_UNMAPPABLE_ACTION`); null/absent (`@JsonInclude(NON_NULL)`) for the
+other fifteen. `accessTypes` replaces a former single `accessType` string — one entry is now
+built per `(policy, gapType)`, conflating every affected access type for that policy into one
+sorted list, rather than one entry per access type.
 
-`DATA_MASKING`, `TAG_BASED_POLICY`, `DENY_POLICY`, `DENY_EXCEPTION`, `VALIDITY_SCHEDULE`, `CUSTOM_CONDITION`, `SECURITY_ZONE`, `DELEGATED_ADMIN`, `WILDCARD_PATTERN`, `UNSUPPORTED_SERVICE_TYPE`, `UNSUPPORTED_ACTION`, `UNMAPPED_RESOURCE`, `SCHEMA_VALIDATION_FAILURE`, `UNREGISTERED_S3_LOCATION`, `CANNOT_VALIDATE_S3_LOCATION`, `EXCLUDES_PATTERN`.
+### `GapType` enum (17 values)
+
+`DATA_MASKING`, `TAG_BASED_POLICY`, `DENY_POLICY`, `DENY_EXCEPTION`, `VALIDITY_SCHEDULE`, `CUSTOM_CONDITION`, `SECURITY_ZONE`, `DELEGATED_ADMIN`, `WILDCARD_PATTERN`, `UNSUPPORTED_SERVICE_TYPE`, `UNSUPPORTED_ACTION`, `KNOWN_UNMAPPABLE_ACTION`, `UNMAPPED_RESOURCE`, `SCHEMA_VALIDATION_FAILURE`, `UNREGISTERED_S3_LOCATION`, `CANNOT_VALIDATE_S3_LOCATION`, `EXCLUDES_PATTERN`.
+
+`KNOWN_UNMAPPABLE_ACTION` is informational — never demotes a policy's convertibility
+classification. `UNSUPPORTED_ACTION` is now restricted to access types no adapter recognises at
+all (an adapter coverage gap); access types an adapter recognises but deliberately never maps
+(Lake Formation has no equivalent) go to `KNOWN_UNMAPPABLE_ACTION` instead, via
+`SourcePolicyAdapter.getKnownUnmappableAccessTypes()` / `isKnownUnmappableAccessType(String)`.
+
+---
+
+## `assessment/KnownUnmappableActionSummary.java`
+
+Per-`(serviceType, accessType)` rollup of `KNOWN_UNMAPPABLE_ACTION` occurrences, built by
+`AssessmentRunner.buildKnownUnmappableRollup()` and exposed via
+`AssessmentResult.getKnownUnmappableActions()` (`@JsonInclude(NON_EMPTY)`).
+
+**Fields:** `serviceType (String)`, `accessType (String)`, `occurrenceCount (int)` — number of
+*policies* that used this access type, not a raw entry count — `samplePolicyIds (List<String>)`.
+
+`samplePolicyIds` is capped at `SAMPLE_LIMIT` (10); `occurrenceCount` stays exact regardless of
+the cap. Sorted by descending `occurrenceCount` so the console/report leads with the worst
+offender.
+
+`AssessmentRunner.collapseKnownUnmappableEntries()` uses this rollup to replace every per-policy
+`KNOWN_UNMAPPABLE_ACTION` entry in the assessment JSON's `gapReport.entries` with one collapsed
+entry per row (`policyId: null`), to keep the file bounded on large estates. Because
+`GapReport.computeSummary` counts entries, `gapReport.summary`'s `KNOWN_UNMAPPABLE_ACTION` count
+after collapsing is the number of distinct `(serviceType, accessType)` pairs, not the occurrence
+count — that lives in `KnownUnmappableActionSummary.occurrenceCount`.
 
 ---
 

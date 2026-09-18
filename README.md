@@ -66,9 +66,9 @@ The following Ranger features have no direct equivalent in Lake Formation. When 
 | Delegated admin | Partial | Recorded in gap report. LF uses a different admin delegation model (`WITH GRANT OPTION`). |
 | Policy deltas from Ranger Admin | Not yet handled | The plugin currently processes only full policy snapshots. Delta updates from Ranger Admin (Ranger 2.0+) are not yet supported and may cause incorrect behavior. This is a known issue planned for a future release. |
 | LF tag-policy resources in reverse sync | Silently skipped | `LFPermissionFetcher` drops `CatalogResource` and `LFTagPolicyResource` entries returned by `ListPermissions` with only a log warning — no gap entry is recorded. Out-of-band LF-Tag grants will not be detected or corrected by reverse sync. |
-| `WILDCARD_PATTERN` gap not emitted at runtime | Known gap | The `WILDCARD_PATTERN` gap type is defined and documented but is never triggered at runtime. Wildcard expansion failures (when no AWS credentials are available) produce only a log warning; no gap entry is recorded. |
 | IDC mapper does not support roles | Limitation | When using the Identity Center principal mapper, Ranger role principals always produce an empty mapping and are silently skipped with an `UnmappedPrincipal` metric. Use the static mapper if you need role-to-IAM-ARN mappings. |
 | Ranger policy for a deleted Glue resource | Handled — see [Deleted Glue Resources](#deleted-glue-resources) | Lake Formation auto-removes permissions when a table/database is deleted. A Ranger policy still referencing it produces a grant that fails with "Table/Database not found"; the sync service skips it (no dead-letter), retries each cycle (self-heals if the resource is recreated), and publishes the `MissingResourceGrants` gauge so you can prune stale policies. |
+| Access types with no LF equivalent by design | Informational — see `KNOWN_UNMAPPABLE_ACTION` in [Gap Types](#gap-types) | Hive `index`/`lock`/`refresh` and admin types (`repladmin`/`serviceadmin`/`tempudfadmin`); Presto/Trino `grant`/`revoke`/`execute`/`impersonate`. These are recognised but deliberately dropped — Lake Formation has no equivalent concept — and never demote a policy's convertibility. Exact per-access-type occurrence counts and sample policy IDs are in the assessment tool's `knownUnmappableActions` rollup, not the per-policy gap entries. |
 
 ## Features not yet implemented
 
@@ -747,20 +747,38 @@ EMRFS policies do not interact with the Glue Data Catalog. They map S3 object op
 
 Presto and Trino use a `catalog → schema → table → column` hierarchy. The adapter maps "schema" to "database" in the Glue model and filters policies by `gdcCatalogName` (configured per service).
 
-| Ranger Access Type | Cedar Action (raw) | Valid at schema/database level | Valid at table level | Valid at column level |
-|---|---|---|---|---|
-| `select` | SELECT | — | SELECT | SELECT |
-| `insert` | INSERT | — | INSERT | — |
-| `delete` | DELETE | — | DELETE | — |
-| `create` | CREATE_TABLE | CREATE_TABLE | — | — |
-| `drop` | DROP | DROP | DROP | — |
-| `alter` | ALTER | ALTER | ALTER | — |
-| `use` | DESCRIBE | DESCRIBE | DESCRIBE | — |
-| `show` | DESCRIBE | DESCRIBE | DESCRIBE | — |
-| `grant` | _(unmapped)_ | — | — | — |
-| `revoke` | _(unmapped)_ | — | — | — |
+| Ranger Access Type | Cedar Action (raw) | Valid at schema/database level | Valid at table level | Valid at column level | URL (`external_location`) |
+|---|---|---|---|---|---|
+| `select` | SELECT | — | SELECT | SELECT | DATA_LOCATION_ACCESS |
+| `insert` | INSERT | — | INSERT | — | DATA_LOCATION_ACCESS |
+| `delete` | DELETE | — | DELETE | — | — |
+| `create` | CREATE_TABLE | CREATE_TABLE | — | — | — |
+| `drop` | DROP | DROP | DROP | — | — |
+| `alter` | ALTER | ALTER | ALTER | — | — |
+| `use` | DESCRIBE | DESCRIBE | DESCRIBE | — | — |
+| `show` | DESCRIBE | DESCRIBE | DESCRIBE | — | — |
+| `read` | SELECT | — | SELECT | SELECT | DATA_LOCATION_ACCESS |
+| `write` | INSERT | — | INSERT | — | DATA_LOCATION_ACCESS |
+| `update` | INSERT | — | INSERT | — | DATA_LOCATION_ACCESS |
+| `all` | ALL | ALL | ALL | ALL | DATA_LOCATION_ACCESS |
+| `grant` | _(known-unmappable)_ | — | — | — | — |
+| `revoke` | _(known-unmappable)_ | — | — | — | — |
+| `execute` | _(known-unmappable)_ | — | — | — | — |
+| `impersonate` | _(known-unmappable)_ | — | — | — | — |
 
-> Presto and Trino have no URL/data-location resource type. All access types without a Cedar equivalent are logged and skipped.
+> Presto and Trino **do** support a `url` resource (Presto/Trino `external_location`), which
+> always collapses to `DATA_LOCATION_ACCESS` — the same behavior as Hive's `url`/`datalocation`
+> resources, since Lake Formation accepts only that one permission on a data location.
+>
+> `grant`, `revoke`, `execute`, and `impersonate` are recognised but deliberately unmapped —
+> Lake Formation has no equivalent concept for engine-level delegation, procedure execution, or
+> user impersonation — and are reported as `KNOWN_UNMAPPABLE_ACTION`, not a plain unmapped/dropped
+> action. An access type neither adapter recognises at all is reported as `UNSUPPORTED_ACTION`
+> instead and does demote the policy.
+>
+> Presto/Trino resource keys with no Glue/LF shape at all — `procedure`, `function`, `trinouser`,
+> `sessionproperty`, `systemproperty` — are gapped explicitly rather than silently defaulted to
+> the database level.
 
 ### Cedar Policy Namespace Isolation
 
@@ -991,7 +1009,61 @@ java -jar target/assessment-jar-with-dependencies.jar \
   --console-only
 ```
 
-The file contains one entry per policy classified as `PARTIALLY_CONVERTIBLE` or `NOT_CONVERTIBLE`, each with a `gaps` array describing the specific unsupported features and recommendations. Informational gaps (`WILDCARD_PATTERN`, `CANNOT_VALIDATE_S3_LOCATION`) are excluded so the file focuses on actionable items.
+> **Breaking change:** as of this release, `--output-gaps-path` writes a JSON **object**, not a
+> bare array. Previously the file was `[ {PolicyGapSummary}, ... ]`. It is now
+> `{"policies": [...], "knownUnmappableActions": [...]}`. Nothing in this repository reads the
+> file back, so this only affects external tooling that parses it — update any such scripts to
+> read `.policies` instead of the top-level array.
+
+The `policies` array contains one entry per policy classified as `PARTIALLY_CONVERTIBLE` or
+`NOT_CONVERTIBLE`, each with a `gaps` array describing the specific unsupported features and
+recommendations. `WILDCARD_PATTERN` and `CANNOT_VALIDATE_S3_LOCATION` entries are excluded from
+each policy's `gaps` array so the file focuses on actionable items — a policy whose only gap was
+one of those two types can appear with an empty `gaps` array. `KNOWN_UNMAPPABLE_ACTION` entries
+*are* kept per-policy (they're informational but still worth surfacing per policy).
+
+`knownUnmappableActions` is the per-`(serviceType, accessType)` rollup — see
+[Gap Types](#gap-types) below — and is omitted entirely when empty.
+
+```json
+{
+  "policies": [
+    {
+      "policyId": "1024",
+      "policyName": "raw-unrecognised-access-type",
+      "convertibility": "NOT_CONVERTIBLE",
+      "gaps": [
+        {
+          "gapType": "UNSUPPORTED_ACTION",
+          "details": "Access type(s) notarealprivilege have no Cedar mapping for service 'hive' and will be skipped.",
+          "recommendation": "Review the Ranger policy and remove or replace the unsupported access type(s)."
+        }
+      ]
+    },
+    {
+      "policyId": "1022",
+      "policyName": null,
+      "convertibility": "PARTIALLY_CONVERTIBLE",
+      "gaps": [
+        {
+          "gapType": "KNOWN_UNMAPPABLE_ACTION",
+          "serviceType": "hive",
+          "accessTypes": ["index", "lock"],
+          "details": "..."
+        }
+      ]
+    }
+  ],
+  "knownUnmappableActions": [
+    {
+      "serviceType": "hive",
+      "accessType": "index",
+      "occurrenceCount": 1,
+      "samplePolicyIds": ["1022"]
+    }
+  ]
+}
+```
 
 **Large policy files (>~10,000 policies):**
 
@@ -1036,31 +1108,94 @@ config file and re-run with `server` to generate accurate LF grant output.
 
 ### Sample Console Output
 
+Captured from the demo (`demo/Demo_Ranger_Policies.json`, run with
+`--output-lf-policies-path` / `--output-gaps-path`, no AWS credentials):
+
 ```
 === Apache Ranger → Lake Formation Assessment ===
-Source:       ranger-admin:http://ranger-admin:6080
-Assessed at:  2024-06-01T10:30:00Z
+Source:       file:Demo_Ranger_Policies.json
+Assessed at:  2026-09-18T18:02:03Z
 
 Services assessed:
-  lf_prod              (lakeformation)  — assessed  (31 policies)
-  hive_prod            (hive)           — assessed  (16 policies)
+  acme_hive            (hive            ) — assessed  (86 policies)
+  acme_trino           (trino           ) — assessed  (56 policies)
+  acme_emrfs           (amazon-emr-emrfs) — assessed  (30 policies)
+  acme_tags            (tag             ) — skipped: unsupported service type
 
-Policies scanned:           47
-  Fully convertible:        31 (66%)
-  Partially convertible:    10 (21%)
-  Not convertible:           6 (13%)
-Projected LF grants:       142
+Policies scanned:          172
+  Fully convertible:       157 (91%)
+  Partially convertible:     5 (3%)
+  Not convertible:          10 (6%)
+Projected LF grants:       201
 
-Gaps detected (23 total):
-  DATA_MASKING             :   5  — LF has no column masking. Consider removing or migrating to row-level filters.
-  DENY_POLICY              :   8  — Deny rules emit Cedar forbid statements; review carefully before applying.
-  VALIDITY_SCHEDULE        :   3  — Time-bound access control is not supported in LF.
-  CUSTOM_CONDITION         :   2  — Attribute-based conditions cannot be expressed in LF permissions.
-  SECURITY_ZONE            :   2  — Ranger Security Zones have no equivalent in Lake Formation.
-  TAG_BASED_POLICY         :   3  — Tag-based policies cannot be expressed as LF resource permissions.
+Gaps detected (65 total):
+  DATA_MASKING                :   1  — LF has no column masking. Consider removing or migrating to row-level filters.
+  DENY_POLICY                 :   3  — Deny rules are emitted as Cedar forbid statements; review carefully before applying.
+  DENY_EXCEPTION              :   1  — Deny exceptions are emitted as Cedar deny-exception permits; verify intended access.
+  VALIDITY_SCHEDULE           :   1  — Time-bound access control is not supported in LF permissions.
+  CUSTOM_CONDITION            :   1  — Attribute-based conditions cannot be expressed as LF permissions.
+  SECURITY_ZONE               :   1  — Ranger Security Zones have no equivalent in Lake Formation.
+  WILDCARD_PATTERN            :  14  — Wildcard patterns were not expanded (no AWS credentials); resources treated as-is.
+  UNSUPPORTED_SERVICE_TYPE    :   1  — No adapter registered for this Ranger service type; policies will be skipped.
+  UNSUPPORTED_ACTION          :   1  — One or more Ranger access types have no LF permission equivalent and will be dropped.
+  KNOWN_UNMAPPABLE_ACTION     :   6  — Access types with no Lake Formation equivalent by design; dropped, and not counted against convertibility. See the rollup below.
+  UNMAPPED_RESOURCE           :   2  — Resource paths cannot be mapped to LF data locations (HDFS/file:// not supported; see details below).
+  SCHEMA_VALIDATION_FAILURE   :   1  — A Cedar statement failed schema validation and was excluded from conversion.
+  CANNOT_VALIDATE_S3_LOCATION :  31  — No S3 Access Grants configuration provided. Cannot validate whether S3 locations are registered. Add s3AccessGrants config to enable validation.
+  EXCLUDES_PATTERN            :   1  — isExcludes=true ("all except") patterns have no Lake Formation equivalent; these policies are skipped.
 
-Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
+Unmapped resource paths (2) — convert to S3 URIs or ignore:
+  [1025] hdfs://acme-nn01:8020/staging/inbound/
+  [1025] hdfs://acme-nn01:8020/staging/inbound/
+
+Known-unmappable access types (informational — no Lake Formation equivalent, no effect on convertibility):
+  hive: repladmin          —       1 policy
+  hive: serviceadmin       —       1 policy
+  hive: index              —       1 policy
+  hive: lock               —       1 policy
+  trino: grant             —       1 policy
+  trino: revoke            —       1 policy
+
+Policies with gaps (20):
+  Policy: id=null
+    [UNSUPPORTED_SERVICE_TYPE] Service 'acme_tags' (serviceType='tag') has no registered adapter. All 2 policies in this service are skipped.
+      → Supported service types are: lakeformation, hive, presto, trino, amazon-emr-emrfs.
+    [CANNOT_VALIDATE_S3_LOCATION] No s3AccessGrants config provided; cannot check location registration for s3://acme-datalake-curated/daily_sales/*
+      → null
+    ... (28 more CANNOT_VALIDATE_S3_LOCATION entries, one per EMRFS S3 prefix)
+  Policy: id=1004
+    Resource: acme_refined/*
+    [WILDCARD_PATTERN] Table pattern '*' in database 'acme_refined' could not be expanded (no Glue catalog access). The ARN produced is a placeholder.
+      → Re-run with AWS credentials configured to expand wildcard table patterns.
+    [WILDCARD_PATTERN] Column pattern '*' in acme_refined.* could not be expanded (no Glue catalog access). The ARN produced is a placeholder.
+      → Re-run with AWS credentials configured to expand wildcard column patterns.
+  ...
+  Policy: mask-employee-ssn (id=1016)
+    Resource: hr/employees/ssn
+    [DATA_MASKING] Data masking policy (policyType=1) cannot be represented in Cedar.
+      → Consider using column-level permissions or external masking solutions.
+  ...
+  Policy: raw-unrecognised-access-type (id=1024)
+    [UNSUPPORTED_ACTION] Access type(s) notarealprivilege have no Cedar mapping for service 'hive' and will be skipped.
+      → Review the Ranger policy and remove or replace the unsupported access type(s).
+  Policy: id=1025
+    Resource: hdfs://acme-nn01:8020/staging/inbound/
+    [UNMAPPED_RESOURCE] Location 'hdfs://acme-nn01:8020/staging/inbound/' uses an unsupported scheme (hdfs://) and cannot be mapped to a Lake Formation data location.
+      → Convert HDFS/file paths to S3 URIs (s3://) and re-run the assessment.
+    [UNMAPPED_RESOURCE] Policy resources could not be resolved to any Lake Formation resource after wildcard/catalog expansion (resource level 'url'). The policy produces no LF grants.
+      → Verify the policy's resource keys match the service definition and that any wildcard patterns resolve against the Glue catalog.
+  ... (9 more policies with gaps — deny/deny-exception, validity schedule, custom condition,
+       security zone, excludes-pattern, schema-validation-failure; see demo/README.md for the
+       full annotated walkthrough)
+
+LF permission operations written to: /path/to/demo/out/lf_operations.json
+Gap report written to: /path/to/demo/out/gaps.json
 ```
+
+Note the `raw-unrecognised-access-type` policy (id=1024) above: `notarealprivilege` is not a
+type any Hive adapter recognises at all, so it is reported as `UNSUPPORTED_ACTION` and the
+policy is demoted — contrast with the six `KNOWN_UNMAPPABLE_ACTION` rows in the rollup, which
+never demote.
 
 ### JSON Report Format
 
@@ -1087,26 +1222,61 @@ Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
         "resourcePath": "hr_db/employees",
         "details": "Data masking policy (policyType=1) cannot be represented in Cedar.",
         "recommendation": "Consider using column-level permissions or external masking solutions."
+      },
+      {
+        "gapType": "KNOWN_UNMAPPABLE_ACTION",
+        "serviceType": "hive",
+        "accessTypes": ["index"],
+        "details": "Access type 'index' has no Lake Formation equivalent for service type 'hive' and was dropped in 1 policy item(s).",
+        "recommendation": "No action required unless this capability is needed — Lake Formation does not model it. Remove the access type from the Ranger policies to silence this."
       }
     ],
     "summary": {
       "DATA_MASKING": 5,
-      "DENY_POLICY": 8
+      "DENY_POLICY": 8,
+      "KNOWN_UNMAPPABLE_ACTION": 1
     },
     "generatedAt": "2024-06-01T10:30:00Z"
-  }
+  },
+  "knownUnmappableActions": [
+    {
+      "serviceType": "hive",
+      "accessType": "index",
+      "occurrenceCount": 1,
+      "samplePolicyIds": ["1022"]
+    }
+  ]
 }
 ```
 
 `warnings` is omitted when the list is empty (configured runs are unaffected).
+`knownUnmappableActions` is omitted when there are none.
+
+**`KNOWN_UNMAPPABLE_ACTION` entries in `gapReport` are collapsed**, not per-policy: every
+per-policy occurrence of a deliberately-unmapped access type (e.g. Hive `index`) is replaced by
+a single entry per `(serviceType, accessType)` with `policyId: null`, before the report is
+written. This keeps the file bounded on large estates — a real customer export can carry
+133,000 policies, and hundreds of thousands of identical per-policy entries would dominate the
+file. A consequence worth knowing: because `gapReport.summary` is a count of *entries*, the
+`KNOWN_UNMAPPABLE_ACTION` number there is the count of **distinct access types** affected, not
+the number of policies or occurrences. The exact occurrence count per access type lives in
+`knownUnmappableActions[].occurrenceCount`, with up to 10 sample policy IDs in
+`samplePolicyIds`.
 
 ### Convertibility Classification
 
 | Category | Meaning |
 |----------|---------|
-| **Fully convertible** | Policy produces at least one projected LF grant and has zero gap entries |
-| **Partially convertible** | Policy produces at least one projected LF grant but also has one or more gap entries (some features will be silently dropped) |
+| **Fully convertible** | Policy produces at least one projected LF grant and has zero *actionable* gap entries. Informational gap types — `WILDCARD_PATTERN`, `CANNOT_VALIDATE_S3_LOCATION`, `KNOWN_UNMAPPABLE_ACTION` — never demote a policy out of this bucket, even if it has one or more of them. |
+| **Partially convertible** | Policy produces at least one projected LF grant but also has one or more *actionable* gap entries (some features will be silently dropped) |
 | **Not convertible** | Policy produces zero projected LF grants (entirely skipped — all access types unmapped, no principal mappings, or tag/masking policy type) |
+
+A `NOT_CONVERTIBLE` policy always has at least one gap entry recorded against it — including
+when every one of its gaps is informational — so the report never classifies a policy as
+"not convertible" with nothing to point to as the reason. (The `--output-gaps-path` file's
+per-policy `gaps` array specifically excludes `WILDCARD_PATTERN` and `CANNOT_VALIDATE_S3_LOCATION`,
+so that array can be empty for such a policy — the console "Policies with gaps" section and the
+full JSON report's `gapReport.entries` always show it.)
 
 ### Gap Types
 
@@ -1120,13 +1290,15 @@ Full report written to: ./assessment-report-2024-06-01T10-30-00Z.json
 | `CUSTOM_CONDITION` | Policy has attribute-based conditions. LF has no conditional permission model; conditions are dropped. |
 | `SECURITY_ZONE` | Policy is scoped to a Ranger Security Zone. LF has no equivalent; the zone attribute is ignored. |
 | `DELEGATED_ADMIN` | Policy item has `delegateAdmin=true`. Partially supported — the flag is recorded but no `WITH GRANT OPTION` is applied to the resulting LF grants. |
-| `WILDCARD_PATTERN` | Resource pattern contains wildcards and could not be expanded (no AWS credentials). **Note:** this gap type is defined but is not currently emitted at runtime — wildcard expansion failures produce a log warning only. |
+| `WILDCARD_PATTERN` | Resource pattern contains wildcards and could not be expanded (no AWS credentials). Informational — does not demote convertibility. |
 | `UNSUPPORTED_SERVICE_TYPE` | No adapter registered for this Ranger service type. In `server` subcommand mode, the entire policy is skipped. In `file` subcommand mode, one gap entry is recorded per skipped service (not per policy), and the `details` field includes the count of bypassed policies. |
-| `UNSUPPORTED_ACTION` | One or more access types have no LF permission mapping. The unsupported action is dropped; other actions in the policy continue. |
+| `UNSUPPORTED_ACTION` | An access type **no adapter recognises at all** — a coverage gap in this tool (a new Ranger release, a custom access type). The action is dropped; other actions in the policy continue. This is actionable and demotes convertibility. A service adapter's deliberately-unmapped access types (Lake Formation genuinely has no equivalent) are reported as `KNOWN_UNMAPPABLE_ACTION` instead, not here. |
+| `KNOWN_UNMAPPABLE_ACTION` | An access type a service adapter recognises but deliberately never maps, because Lake Formation has no equivalent concept — e.g. Hive `index`/`lock`/`refresh`/`repladmin`/`serviceadmin`/`tempudfadmin`; Presto/Trino `grant`/`revoke`/`execute`/`impersonate`. Purely informational: it never demotes a policy's convertibility. Conflated per policy (one entry lists every affected access type for that policy) and, in the JSON report, collapsed further into one entry per `(serviceType, accessType)` — see [JSON Report Format](#json-report-format) and the `knownUnmappableActions` rollup. |
 | `UNMAPPED_RESOURCE` | Resource ID cannot be mapped to an LF resource. The resource is skipped. |
 | `SCHEMA_VALIDATION_FAILURE` | A Cedar statement failed schema validation and was excluded. Valid statements in the same policy are retained. |
 | `UNREGISTERED_S3_LOCATION` | An S3 prefix referenced by the policy is not covered by a registered Lake Formation data location. Reported by the assessment tool when S3 Access Grants validation is enabled. |
-| `CANNOT_VALIDATE_S3_LOCATION` | S3 location validation was requested but no S3 Access Grants configuration is present. Reported by the assessment tool. |
+| `CANNOT_VALIDATE_S3_LOCATION` | S3 location validation was requested but no S3 Access Grants configuration is present. Reported by the assessment tool. Informational — does not demote convertibility. |
+| `EXCLUDES_PATTERN` | Policy resource uses `isExcludes=true` ("all except this list"). Lake Formation has no exclusion-pattern resource model; the policy is skipped. |
 
 ### Architecture Note
 

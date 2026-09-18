@@ -391,9 +391,29 @@ def hive_showcase():
         SVC_HIVE, "hive-replication-admin",
         {"database": res("acme_raw"), "table": res("*"), "column": res("*")},
         allow=[item(["repladmin", "serviceadmin"], users=[U_ENGINEER])],
-        description="GAP (UNSUPPORTED_ACTION): Hive replication and service admin rights "
+        description="GAP (KNOWN_UNMAPPABLE_ACTION): Hive replication and service admin rights "
                     "have no Lake Formation equivalent. These are engine operations, not "
-                    "data permissions, so nothing is projected.",
+                    "data permissions, so nothing is projected. Informational only — the "
+                    "adapter declares them unmappable by design, so they do not count against "
+                    "convertibility and are rolled up rather than listed per policy.",
+        labels=["gap:known-unmappable-action"]))
+
+    p.append(policy(
+        SVC_HIVE, "curated-index-lock-maintenance",
+        {"database": res("acme_curated"), "table": res("daily_sales"), "column": res("*")},
+        allow=[item(["select", "index", "lock"], groups=[G_ENGINEERS])],
+        description="Mixed: select converts to an LF TABLE SELECT grant, while index and lock "
+                    "are declared unmappable by the Hive adapter. The policy stays FULLY "
+                    "CONVERTIBLE — index/lock are informational and do not demote it.",
+        labels=["demo:known-unmappable-mixed"]))
+
+    p.append(policy(
+        SVC_HIVE, "raw-unrecognised-access-type",
+        {"database": res("acme_raw"), "table": res("clickstream_events"), "column": res("*")},
+        allow=[item(["select", "notarealprivilege"], users=[U_ENGINEER])],
+        description="GAP (UNSUPPORTED_ACTION): an access type no adapter recognises. Unlike "
+                    "index/lock this signals a real coverage gap in the tool, so it stays "
+                    "actionable and demotes the policy to PARTIALLY CONVERTIBLE.",
         labels=["gap:unsupported-action"]))
 
     p.append(policy(
@@ -491,10 +511,11 @@ def trino_showcase():
         {"catalog": res(GDC_CATALOG), "schema": res("acme_curated"),
          "table": res("*"), "column": res("*")},
         allow=[item(["grant", "revoke"], roles=[R_STEWARD])],
-        description="GAP (UNSUPPORTED_ACTION): Trino GRANT/REVOKE privileges. Lake "
+        description="GAP (KNOWN_UNMAPPABLE_ACTION): Trino GRANT/REVOKE privileges. Lake "
                     "Formation models re-granting as the grant option on a permission, not "
-                    "as standalone privileges, so these are dropped.",
-        labels=["gap:unsupported-action"]))
+                    "as standalone privileges, so these are dropped. Informational only, and "
+                    "not counted against convertibility.",
+        labels=["gap:known-unmappable-action"]))
 
     p.append(policy(
         SVC_TRINO, "trino-clinical-deny-partners",

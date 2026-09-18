@@ -4,7 +4,7 @@ A self-contained, offline demo. No Ranger Admin, no AWS account, no credentials.
 
 | File | What it is |
 |---|---|
-| `Demo_Ranger_Policies.json` | A synthetic Apache Ranger JSON export — 173 policies across four Ranger services. Shaped exactly like what the Ranger Admin "Export" button produces. |
+| `Demo_Ranger_Policies.json` | A synthetic Apache Ranger JSON export — 172 scanned policies (86 Hive, 56 Trino, 30 EMRFS; the tag service's policies are skipped) across four Ranger services. Shaped exactly like what the Ranger Admin "Export" button produces. |
 | `demo-config.yaml` | Principal mapping (Ranger names → IAM ARNs) and the Trino GDC catalog name. |
 | `generate_demo_policies.py` | Regenerates the export. Edit this, not the JSON. |
 | `out/` | Assessment outputs (gitignored). |
@@ -13,8 +13,13 @@ A self-contained, offline demo. No Ranger Admin, no AWS account, no credentials.
 
 ```bash
 mvn clean package -DskipTests
+python3 demo/generate_demo_policies.py   # writes Demo_Ranger_Policies.json
 mkdir -p demo/out
 ```
+
+`Demo_Ranger_Policies.json` is generated, not checked in — the repo ignores `*.json`.
+The generator is deterministic (stable ids and guids), so everyone gets the byte-identical
+export and the expected output below holds.
 
 ## The one command
 
@@ -32,21 +37,67 @@ Runs in a few seconds. Makes zero AWS calls.
 ## Expected output
 
 ```
+=== Apache Ranger → Lake Formation Assessment ===
+Source:       file:Demo_Ranger_Policies.json
+Assessed at:  2026-09-18T18:02:03Z
+
 Services assessed:
-  acme_hive            (hive            ) — assessed  (84 policies)
+  acme_hive            (hive            ) — assessed  (86 policies)
   acme_trino           (trino           ) — assessed  (56 policies)
   acme_emrfs           (amazon-emr-emrfs) — assessed  (30 policies)
   acme_tags            (tag             ) — skipped: unsupported service type
 
-Policies scanned:          170
-  Fully convertible:       156 (92%)
-  Partially convertible:     4 (2%)
+Policies scanned:          172
+  Fully convertible:       157 (91%)
+  Partially convertible:     5 (3%)
   Not convertible:          10 (6%)
-Projected LF grants:       199
+Projected LF grants:       201
+
+Gaps detected (65 total):
+  DATA_MASKING                :   1  — LF has no column masking. Consider removing or migrating to row-level filters.
+  DENY_POLICY                 :   3  — Deny rules are emitted as Cedar forbid statements; review carefully before applying.
+  DENY_EXCEPTION              :   1  — Deny exceptions are emitted as Cedar deny-exception permits; verify intended access.
+  VALIDITY_SCHEDULE           :   1  — Time-bound access control is not supported in LF permissions.
+  CUSTOM_CONDITION            :   1  — Attribute-based conditions cannot be expressed as LF permissions.
+  SECURITY_ZONE               :   1  — Ranger Security Zones have no equivalent in Lake Formation.
+  WILDCARD_PATTERN            :  14  — Wildcard patterns were not expanded (no AWS credentials); resources treated as-is.
+  UNSUPPORTED_SERVICE_TYPE    :   1  — No adapter registered for this Ranger service type; policies will be skipped.
+  UNSUPPORTED_ACTION          :   1  — One or more Ranger access types have no LF permission equivalent and will be dropped.
+  KNOWN_UNMAPPABLE_ACTION     :   6  — Access types with no Lake Formation equivalent by design; dropped, and not counted against convertibility. See the rollup below.
+  UNMAPPED_RESOURCE           :   2  — Resource paths cannot be mapped to LF data locations (HDFS/file:// not supported; see details below).
+  SCHEMA_VALIDATION_FAILURE   :   1  — A Cedar statement failed schema validation and was excluded from conversion.
+  CANNOT_VALIDATE_S3_LOCATION :  31  — No S3 Access Grants configuration provided. Cannot validate whether S3 locations are registered. Add s3AccessGrants config to enable validation.
+  EXCLUDES_PATTERN            :   1  — isExcludes=true ("all except") patterns have no Lake Formation equivalent; these policies are skipped.
+
+Unmapped resource paths (2) — convert to S3 URIs or ignore:
+  [1025] hdfs://acme-nn01:8020/staging/inbound/
+  [1025] hdfs://acme-nn01:8020/staging/inbound/
+
+Known-unmappable access types (informational — no Lake Formation equivalent, no effect on convertibility):
+  hive: repladmin          —       1 policy
+  hive: serviceadmin       —       1 policy
+  hive: index              —       1 policy
+  hive: lock               —       1 policy
+  trino: grant             —       1 policy
+  trino: revoke            —       1 policy
+
+Policies with gaps (20):
+  ...  (see README.md's "Sample Console Output" for a representative excerpt of this section;
+        full per-policy breakdown elided here for brevity)
+
+LF permission operations written to: demo/out/lf_operations.json
+Gap report written to: demo/out/gaps.json
 ```
 
 If your numbers differ, the JSON was regenerated with different settings — re-run
 `python3 demo/generate_demo_policies.py`.
+
+### New in this run: two policies added for the `KNOWN_UNMAPPABLE_ACTION` gap
+
+| Policy | Access types | Demonstrates |
+|---|---|---|
+| `curated-index-lock-maintenance` (Hive) | `select` + `index` + `lock` | A policy stays **fully convertible** despite carrying deliberately-unmapped access types — `index`/`lock` are reported as informational `KNOWN_UNMAPPABLE_ACTION` gaps and never demote it. |
+| `raw-unrecognised-access-type` (Hive, id=1024) | `select` + `notarealprivilege` (a bogus type no adapter recognises) | A genuine coverage gap still demotes the policy — reported as the actionable `UNSUPPORTED_ACTION`, distinct from the informational type above. |
 
 ## Suggested narrative
 
@@ -130,7 +181,8 @@ CUSTOM_CONDITION            :   1
 SECURITY_ZONE               :   1
 WILDCARD_PATTERN            :  14
 UNSUPPORTED_SERVICE_TYPE    :   1
-UNSUPPORTED_ACTION          :   4
+UNSUPPORTED_ACTION          :   1
+KNOWN_UNMAPPABLE_ACTION     :   6
 UNMAPPED_RESOURCE           :   2
 SCHEMA_VALIDATION_FAILURE   :   1
 CANNOT_VALIDATE_S3_LOCATION :  31
@@ -148,7 +200,8 @@ customer has to make:
 | 1019 `conditional-ip-restricted-read` | `CUSTOM_CONDITION` | Source-IP restriction must move to an IAM condition or network control. |
 | 1020 `zoned-clinical-trial-access` | `SECURITY_ZONE` | The grant converts, but the zone's isolation guarantee is lost. |
 | 1021 `refined-all-tables-except-returns` | `EXCLUDES_PATTERN` | `isExcludes=true` has no LF equivalent. Rewrite as an explicit allow list. |
-| 1022 / 2008 | `UNSUPPORTED_ACTION` | Hive `repladmin`/`serviceadmin`, Trino `GRANT`/`REVOKE`. Engine operations, not data permissions. |
+| `raw-unrecognised-access-type` (id=1024) | `UNSUPPORTED_ACTION` | Hive `notarealprivilege` — an access type no adapter recognises at all. A genuine coverage gap, so this one *does* demote the policy. |
+| `hive-replication-admin` / `curated-index-lock-maintenance` / trino `grant`/`revoke` policy | `KNOWN_UNMAPPABLE_ACTION` | Hive `repladmin`/`serviceadmin`/`index`/`lock`, Trino `GRANT`/`REVOKE`. Engine operations Lake Formation deliberately never models — informational, does not demote convertibility. See the console's known-unmappable rollup and `knownUnmappableActions` in `gaps.json` for exact per-access-type counts. |
 | 1023 `legacy-hdfs-staging-location` | `UNMAPPED_RESOURCE` | An `hdfs://` path. LF data locations are S3-only — a concrete migration task. |
 | 4001 / 4002 | `UNSUPPORTED_SERVICE_TYPE` | Ranger tag-based policies. LF-Tags are the eventual target, not wired up yet. |
 
@@ -160,6 +213,10 @@ The two large counts are both artifacts of running offline, not problems with th
 - **`CANNOT_VALIDATE_S3_LOCATION` (31)** — one per EMRFS S3 prefix. Without an
   `s3AccessGrants` config the tool cannot check whether the prefixes are registered
   locations. Informational.
+
+Note `KNOWN_UNMAPPABLE_ACTION` (6) is also informational — it never demotes a policy, unlike
+`UNSUPPORTED_ACTION` above it. It counts *distinct access types* in the collapsed `gaps.json`
+report, not raw occurrences; see the README's Gap Types / JSON Report Format sections.
 
 ### 6. Optional closer — the same file at scale
 
