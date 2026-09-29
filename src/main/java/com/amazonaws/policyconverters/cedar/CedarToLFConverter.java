@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -227,19 +228,110 @@ public class CedarToLFConverter {
                     .add(lfPermission);
         }
 
+        // Second pass: union column sets.
+        //
+        // Cedar models every column as its own entity, so an N-column Ranger policy arrives
+        // here as N permits, each parsing to an LFResource whose columnNames is a singleton.
+        // The merge map above keys on the whole LFResource — column set included — so it
+        // cannot combine them, and the result would be N single-column TABLE_WITH_COLUMNS
+        // grants where Lake Formation expresses the same intent as one grant listing all N
+        // columns. Union the columns of entries that agree on everything else.
+        //
+        // The permission set is part of the grouping key deliberately: merging a SELECT-only
+        // column with a SELECT+INSERT column would hand INSERT to the former. Likewise
+        // sourcePolicyId stays in the key so grants keep their per-policy attribution, and
+        // grantable and the row filter stay in it because they change the grant's meaning.
+        Map<Object, GrantSlot> slots = new LinkedHashMap<>();
         for (Map.Entry<MergeKey, EnumSet<LFPermission>> entry : mergeMap.entrySet()) {
             MergeKey k = entry.getKey();
+            EnumSet<LFPermission> permissions = entry.getValue();
+            LFResource resource = k.resource;
+
+            if (!isCoalescableColumnResource(resource)) {
+                slots.put(k, new GrantSlot(k.sourcePolicyId, k.grantable, permissions, resource, false));
+                continue;
+            }
+
+            ColumnMergeKey columnKey = new ColumnMergeKey(
+                    k.sourcePolicyId, resource.getCatalogId(), resource.getDatabaseName(),
+                    resource.getTableName(), resource.getRowFilterExpression(),
+                    k.grantable, permissions);
+            slots.computeIfAbsent(columnKey,
+                            x -> new GrantSlot(k.sourcePolicyId, k.grantable, permissions, resource, true))
+                    .columns.addAll(resource.getColumnNames());
+        }
+
+        for (GrantSlot slot : slots.values()) {
             operations.add(new LFPermissionOperation(
                     OperationType.GRANT,
-                    k.sourcePolicyId,
+                    slot.sourcePolicyId,
                     principal,
-                    k.resource,
-                    entry.getValue(),
-                    k.grantable
+                    slot.resource(),
+                    slot.permissions,
+                    slot.grantable
             ));
         }
 
         return operations;
+    }
+
+    /**
+     * Whether a resource is a named-column TABLE_WITH_COLUMNS target whose column set may be
+     * unioned with others on the same table.
+     *
+     * <p>A column set containing {@code "*"} is excluded: it is a wildcard rather than a named
+     * column, and unioning it with named columns would produce a meaningless mixed set.
+     */
+    private static boolean isCoalescableColumnResource(LFResource resource) {
+        return resource.getTableName() != null
+                && resource.getColumnNames() != null
+                && !resource.getColumnNames().isEmpty()
+                && !resource.getColumnNames().contains("*")
+                && resource.getDataLocationPath() == null
+                && !resource.isAllTables();
+    }
+
+    /**
+     * Grouping key for column sets that may be unioned into one TABLE_WITH_COLUMNS grant.
+     * Every field that changes the meaning of the resulting grant is part of the key.
+     */
+    private record ColumnMergeKey(
+            String sourcePolicyId,
+            String catalogId,
+            String databaseName,
+            String tableName,
+            String rowFilterExpression,
+            boolean grantable,
+            Set<LFPermission> permissions) {
+    }
+
+    /**
+     * An accumulating grant. {@code columns} is null for resources that pass through
+     * unchanged, and an accumulating set for column resources being unioned.
+     */
+    private static final class GrantSlot {
+        final String sourcePolicyId;
+        final boolean grantable;
+        final EnumSet<LFPermission> permissions;
+        final LFResource template;
+        final Set<String> columns;
+
+        GrantSlot(String sourcePolicyId, boolean grantable, EnumSet<LFPermission> permissions,
+                  LFResource template, boolean coalesceColumns) {
+            this.sourcePolicyId = sourcePolicyId;
+            this.grantable = grantable;
+            this.permissions = permissions;
+            this.template = template;
+            this.columns = coalesceColumns ? new LinkedHashSet<>() : null;
+        }
+
+        LFResource resource() {
+            if (columns == null) {
+                return template;
+            }
+            return new LFResource(template.getCatalogId(), template.getDatabaseName(),
+                    template.getTableName(), columns, template.getRowFilterExpression(), null);
+        }
     }
 
     private static final class MergeKey {

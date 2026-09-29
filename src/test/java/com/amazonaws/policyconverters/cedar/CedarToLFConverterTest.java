@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -612,5 +613,169 @@ class CedarToLFConverterTest {
         String table  = "arn:aws:glue:us-east-1:123:table/mydb/orders";
         String column = "arn:aws:glue:us-east-1:123:column/mydb2/orders/id";
         assertFalse(CedarToLFConverter.isAncestorResource(table, column));
+    }
+
+    // ----------------------------------------------------------------------------------
+    // Column coalescing
+    //
+    // Cedar models each column as its own entity, so a four-column Ranger policy arrives
+    // here as four permits. Lake Formation expresses the same intent as ONE
+    // TABLE_WITH_COLUMNS grant carrying all four column names, so the converter must
+    // union them rather than emit one grant per column.
+    // ----------------------------------------------------------------------------------
+
+    @Test
+    void columnsOnSameTableCoalesceIntoOneGrant() throws Exception {
+        String cedarText = """
+                @source("2004")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/Marketing",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/marketing/attribution/campaign_id"
+                );
+                @source("2004")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/Marketing",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/marketing/attribution/channel"
+                );
+                @source("2004")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/Marketing",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/marketing/attribution/conversions"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size(),
+                "Three columns of one table, same principal/permission, must coalesce "
+                        + "into a single TABLE_WITH_COLUMNS grant");
+        LFPermissionOperation op = ops.get(0);
+        assertEquals("marketing", op.getResource().getDatabaseName());
+        assertEquals("attribution", op.getResource().getTableName());
+        assertEquals(Set.of("campaign_id", "channel", "conversions"),
+                op.getResource().getColumnNames());
+        assertEquals(Set.of(LFPermission.SELECT), op.getPermissions());
+    }
+
+    @Test
+    void columnsWithDifferentPermissionsDoNotCoalesce() throws Exception {
+        // Coalescing columns whose permission sets differ would over-grant: merging a
+        // SELECT-only column with a SELECT+INSERT column would silently hand INSERT to
+        // the former. These must stay separate grants.
+        String cedarText = """
+                @source("7")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/Eng",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/db/tbl/read_only"
+                );
+                @source("7")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/Eng",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/db/tbl/writable"
+                );
+                @source("7")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/Eng",
+                    action == DataCatalog::Action::"INSERT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/db/tbl/writable"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(2, ops.size(),
+                "Columns with differing permission sets must not be merged");
+        LFPermissionOperation readOnly = ops.stream()
+                .filter(o -> o.getResource().getColumnNames().contains("read_only"))
+                .findFirst().orElseThrow();
+        assertEquals(Set.of("read_only"), readOnly.getResource().getColumnNames());
+        assertEquals(Set.of(LFPermission.SELECT), readOnly.getPermissions(),
+                "read_only must not acquire INSERT from the writable column");
+
+        LFPermissionOperation writable = ops.stream()
+                .filter(o -> o.getResource().getColumnNames().contains("writable"))
+                .findFirst().orElseThrow();
+        assertEquals(Set.of(LFPermission.SELECT, LFPermission.INSERT), writable.getPermissions());
+    }
+
+    @Test
+    void columnsOnDifferentTablesDoNotCoalesce() throws Exception {
+        String cedarText = """
+                @source("8")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/R",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/db/t1/c"
+                );
+                @source("8")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/R",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/db/t2/c"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(2, ops.size(), "Different tables must stay separate grants");
+    }
+
+    @Test
+    void columnsFromDifferentSourcePoliciesDoNotCoalesce() throws Exception {
+        // sourcePolicyId is retained on each operation for attribution in reports and the
+        // dead-letter, so grants from different Ranger policies stay distinct.
+        String cedarText = """
+                @source("10")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/R",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/db/tbl/a"
+                );
+                @source("11")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/R",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/db/tbl/b"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(2, ops.size(),
+                "Grants from different source policies must remain separately attributed");
+    }
+
+    @Test
+    void grantableAndNonGrantableColumnsDoNotCoalesce() throws Exception {
+        String cedarText = """
+                @source("12")
+                @grantable("true")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/R",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/db/tbl/granted"
+                );
+                @source("12")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/R",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/db/tbl/plain"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(2, ops.size(),
+                "Grantable and non-grantable columns must not be merged");
     }
 }
