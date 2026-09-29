@@ -94,6 +94,7 @@ public class AssessmentMain {
     private static int runServer(String[] args) {
         AssessmentConfig.Builder configBuilder = AssessmentConfig.builder();
         List<String> flagArgs = new ArrayList<>(Arrays.asList(args));
+        AwsConfig fileAwsConfig = null;
 
         // If first arg is a readable file, load it as a config file
         if (!flagArgs.isEmpty() && !flagArgs.get(0).startsWith("--")) {
@@ -101,7 +102,7 @@ public class AssessmentMain {
             if (Files.isReadable(Paths.get(possibleConfigPath))) {
                 flagArgs.remove(0);
                 try {
-                    applyConfigFile(possibleConfigPath, configBuilder);
+                    fileAwsConfig = applyConfigFile(possibleConfigPath, configBuilder);
                 } catch (IOException e) {
                     System.err.println("Failed to load config file: " + e.getMessage());
                     return 1;
@@ -166,7 +167,7 @@ public class AssessmentMain {
         }
 
         if (awsRegion != null || awsProfile != null) {
-            configBuilder.awsConfig(new AwsConfig(awsRegion, null, null, null, null, awsProfile));
+            configBuilder.awsConfig(mergeAwsConfig(fileAwsConfig, awsRegion, awsProfile));
         }
 
         AssessmentConfig config = configBuilder.build();
@@ -193,6 +194,7 @@ public class AssessmentMain {
     }
 
     private static int runFile(String[] args) {
+        AwsConfig fileAwsConfig = null;
         if (args.length == 0 || args[0].startsWith("--")) {
             System.err.println("'file' subcommand requires a path to a Ranger export JSON file");
             System.err.println(USAGE);
@@ -224,7 +226,7 @@ public class AssessmentMain {
                         return 1;
                     }
                     try {
-                        applyConfigFile(configPath, configBuilder);
+                        fileAwsConfig = applyConfigFile(configPath, configBuilder);
                     } catch (IOException e) {
                         System.err.println("Failed to load config file: " + e.getMessage());
                         return 1;
@@ -260,7 +262,7 @@ public class AssessmentMain {
         }
 
         if (awsRegion != null || awsProfile != null) {
-            configBuilder.awsConfig(new AwsConfig(awsRegion, null, null, null, null, awsProfile));
+            configBuilder.awsConfig(mergeAwsConfig(fileAwsConfig, awsRegion, awsProfile));
         }
 
         AssessmentConfig config = configBuilder.build();
@@ -276,7 +278,7 @@ public class AssessmentMain {
         }
     }
 
-    private static void applyConfigFile(String configFilePath, AssessmentConfig.Builder builder)
+    private static AwsConfig applyConfigFile(String configFilePath, AssessmentConfig.Builder builder)
             throws IOException {
         // Environment overrides are deliberately disabled here. The sync server wants them, but
         // an assessment must be reproducible: with System::getenv, an ambient AWS_REGION would
@@ -311,6 +313,31 @@ public class AssessmentMain {
                 && !syncConfig.getAwsConfig().getRegion().isBlank()) {
             builder.awsConfig(syncConfig.getAwsConfig());
         }
+        return syncConfig.getAwsConfig();
+    }
+
+    /**
+     * Combines the {@code awsConfig} a config file declared with the {@code --aws-region} and
+     * {@code --aws-profile} flags, letting the flags win only on the fields they actually supply.
+     *
+     * <p>These flags used to replace the whole block, which silently dropped every other field —
+     * most damagingly {@code catalogId}, which the service adapters string-concatenate into Glue
+     * ARNs. A null there produced ARNs containing the literal text {@code "null"} and a
+     * {@code catalogId} of {@code "null"} on every projected grant. Because the flags are the
+     * documented way to turn on Glue wildcard expansion, a catalogId in the config file could
+     * never take effect.
+     */
+    private static AwsConfig mergeAwsConfig(AwsConfig fromFile, String region, String profile) {
+        if (fromFile == null) {
+            return new AwsConfig(region, null, null, null, null, profile);
+        }
+        return new AwsConfig(
+                region != null ? region : fromFile.getRegion(),
+                fromFile.getCatalogId(),
+                fromFile.getAccessKey(),
+                fromFile.getSecretKey(),
+                fromFile.getRoleArn(),
+                profile != null ? profile : fromFile.getProfile());
     }
 
     private static String nextArg(List<String> args, int currentIndex, String flag) {

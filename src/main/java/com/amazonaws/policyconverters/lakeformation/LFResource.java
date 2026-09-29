@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
 
@@ -47,7 +47,7 @@ public class LFResource {
         this.databaseName = databaseName;
         this.tableName = tableName;
         this.columnNames = columnNames != null
-                ? Collections.unmodifiableSet(new HashSet<>(columnNames))
+                ? Collections.unmodifiableSet(new LinkedHashSet<>(columnNames))
                 : null;
         this.rowFilterExpression = rowFilterExpression;
         this.dataLocationPath = dataLocationPath;

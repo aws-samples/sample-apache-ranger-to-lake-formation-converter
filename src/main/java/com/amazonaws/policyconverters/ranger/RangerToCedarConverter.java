@@ -400,7 +400,7 @@ public class RangerToCedarConverter {
         List<String> statements = new ArrayList<>();
 
         // Resolve principals
-        List<String> principalArns = resolvePrincipals(item);
+        List<ResolvedPrincipal> principalArns = resolvePrincipals(item);
         if (principalArns.isEmpty()) {
             return statements;
         }
@@ -410,8 +410,8 @@ public class RangerToCedarConverter {
             // Gap already recorded at policy level; conditions are excluded from Cedar
         }
 
-        for (String principalArn : principalArns) {
-            String principalRef = adapter.buildPrincipalRef(principalArn);
+        for (ResolvedPrincipal principal : principalArns) {
+            String principalRef = adapter.buildPrincipalRef(principal.arn());
             for (ResourceCombination rc : resourceCombinations) {
                 Set<String> cedarActions = extractCedarActions(item, adapter, rc.resourceLevel,
                         knownUnmappableAccessTypes, unrecognizedAccessTypes);
@@ -422,6 +422,10 @@ public class RangerToCedarConverter {
                     // Annotations — prefix with service type for namespace isolation
                     sb.append("@source(\"").append(adapter.getServiceType())
                             .append(":").append(policyId).append("\")\n");
+                    // Carries the Ranger principal name through to the LF output so grants can
+                    // be validated without reverse-resolving an ARN.
+                    sb.append("@originalPrincipal(\"")
+                            .append(principal.originalName()).append("\")\n");
                     if ("denyException".equals(extraAnnotation)) {
                         sb.append("@denyException(\"true\")\n");
                     }
@@ -505,31 +509,43 @@ public class RangerToCedarConverter {
         return actions;
     }
 
-    private List<String> resolvePrincipals(RangerPolicyItem item) {
-        List<String> arns = new ArrayList<>();
+    /**
+     * A resolved principal: the AWS ARN Lake Formation will be given, paired with the Ranger
+     * name it came from. The Ranger name is carried through Cedar as an {@code @originalPrincipal}
+     * annotation so the converted output can be validated without reverse-resolving an ARN — an
+     * Identity Center ARN ends in an opaque UUID.
+     *
+     * <p>The name is kind-qualified ({@code user:}, {@code group:}, {@code role:}) because a
+     * Ranger deployment may use the same name for a user and a group.
+     */
+    private record ResolvedPrincipal(String arn, String originalName) {
+    }
+
+    private List<ResolvedPrincipal> resolvePrincipals(RangerPolicyItem item) {
+        List<ResolvedPrincipal> resolved = new ArrayList<>();
 
         if (item.getUsers() != null) {
             for (String user : item.getUsers()) {
-                Optional<String> arn = principalMapper.resolveUser(user);
-                arn.ifPresent(arns::add);
+                principalMapper.resolveUser(user)
+                        .ifPresent(arn -> resolved.add(new ResolvedPrincipal(arn, "user:" + user)));
             }
         }
 
         if (item.getGroups() != null) {
             for (String group : item.getGroups()) {
-                Optional<String> arn = principalMapper.resolveGroup(group);
-                arn.ifPresent(arns::add);
+                principalMapper.resolveGroup(group)
+                        .ifPresent(arn -> resolved.add(new ResolvedPrincipal(arn, "group:" + group)));
             }
         }
 
         if (item.getRoles() != null) {
             for (String role : item.getRoles()) {
-                Optional<String> arn = principalMapper.resolveRole(role);
-                arn.ifPresent(arns::add);
+                principalMapper.resolveRole(role)
+                        .ifPresent(arn -> resolved.add(new ResolvedPrincipal(arn, "role:" + role)));
             }
         }
 
-        return arns;
+        return resolved;
     }
 
     private String determineResourceLevel(Map<String, RangerPolicyResource> resources) {

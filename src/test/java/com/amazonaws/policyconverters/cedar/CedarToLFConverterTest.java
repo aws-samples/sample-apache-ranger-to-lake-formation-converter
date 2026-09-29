@@ -755,6 +755,111 @@ class CedarToLFConverterTest {
     }
 
     @Test
+    void originalPrincipalAnnotationIsCarriedOntoOperation() throws Exception {
+        String cedarText = """
+                @source("2004")
+                @originalPrincipal("user:quinn_marketing")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:identitystore::123456789012:user/c488d408-a091-7024",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/marketing/attribution/channel"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size());
+        assertEquals("user:quinn_marketing", ops.get(0).getOriginalPrincipal(),
+                "The Ranger principal name must survive onto the LF operation so output can "
+                        + "be validated without reverse-resolving the Identity Center UUID");
+    }
+
+    @Test
+    void absentOriginalPrincipalAnnotationLeavesFieldNull() throws Exception {
+        String cedarText = """
+                @source("1")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/R",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/db/tbl"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size());
+        assertNull(ops.get(0).getOriginalPrincipal());
+    }
+
+    @Test
+    void coalescedColumnsReportSingleOriginalPrincipalOnce() throws Exception {
+        // Three columns from one Ranger policy and principal coalesce into one grant, whose
+        // originalPrincipal must read as one name rather than the name repeated three times.
+        String cedarText = """
+                @source("2004")
+                @originalPrincipal("group:marketing_bi")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:identitystore::123456789012:group/84e81408",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/marketing/attribution/campaign_id"
+                );
+                @source("2004")
+                @originalPrincipal("group:marketing_bi")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:identitystore::123456789012:group/84e81408",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/marketing/attribution/channel"
+                );
+                @source("2004")
+                @originalPrincipal("group:marketing_bi")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:identitystore::123456789012:group/84e81408",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/marketing/attribution/conversions"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size());
+        assertEquals("group:marketing_bi", ops.get(0).getOriginalPrincipal());
+        assertEquals(Set.of("campaign_id", "channel", "conversions"),
+                ops.get(0).getResource().getColumnNames());
+    }
+
+    @Test
+    void severalRangerNamesResolvingToOneArnAreBothReported() throws Exception {
+        // A static mapping can point a user and a group at the same ARN. The grant is still
+        // one grant, so both names are reported rather than one silently winning.
+        String cedarText = """
+                @source("5")
+                @originalPrincipal("user:alice")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/Shared",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/db/tbl"
+                );
+                @source("5")
+                @originalPrincipal("group:admins")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/Shared",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/db/tbl"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size(), "Same ARN, resource and permission is still one grant");
+        // Sorted, not in statement order, so repeated runs produce comparable output.
+        assertEquals("group:admins, user:alice", ops.get(0).getOriginalPrincipal());
+    }
+
+    @Test
     void grantableAndNonGrantableColumnsDoNotCoalesce() throws Exception {
         String cedarText = """
                 @source("12")

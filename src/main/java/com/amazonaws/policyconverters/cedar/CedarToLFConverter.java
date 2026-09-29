@@ -23,6 +23,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.TreeSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -63,6 +64,8 @@ public class CedarToLFConverter {
             "@denyException\\(\"true\"\\)");
     private static final Pattern GRANTABLE_PATTERN = Pattern.compile(
             "@grantable\\(\"true\"\\)");
+    private static final Pattern ORIGINAL_PRINCIPAL_PATTERN = Pattern.compile(
+            "@originalPrincipal\\(\"([^\"]+)\"\\)");
     private static final Pattern ROW_FILTER_PATTERN = Pattern.compile(
             "resource\\.rowFilter\\s*==\\s*\"((?>[^\"\\\\]|\\\\.)*)\"");
 
@@ -169,7 +172,7 @@ public class CedarToLFConverter {
         }
 
         List<LFPermissionOperation> operations = new ArrayList<>();
-        Map<MergeKey, EnumSet<LFPermission>> mergeMap = new LinkedHashMap<>();
+        Map<MergeKey, PermissionAccumulator> mergeMap = new LinkedHashMap<>();
 
         for (ParsedStatement permit : permits) {
             ActionResourceKey key = new ActionResourceKey(permit.action, permit.resourceId);
@@ -224,8 +227,8 @@ public class CedarToLFConverter {
             // Permissions from the same source policy on the same resource are merged into
             // a single operation so one LF API call covers all permissions.
             MergeKey mergeKey = new MergeKey(permit.sourcePolicyId, lfResource, permit.grantable);
-            mergeMap.computeIfAbsent(mergeKey, k -> EnumSet.noneOf(LFPermission.class))
-                    .add(lfPermission);
+            mergeMap.computeIfAbsent(mergeKey, k -> new PermissionAccumulator())
+                    .add(lfPermission, permit.originalPrincipal);
         }
 
         // Second pass: union column sets.
@@ -242,29 +245,32 @@ public class CedarToLFConverter {
         // sourcePolicyId stays in the key so grants keep their per-policy attribution, and
         // grantable and the row filter stay in it because they change the grant's meaning.
         Map<Object, GrantSlot> slots = new LinkedHashMap<>();
-        for (Map.Entry<MergeKey, EnumSet<LFPermission>> entry : mergeMap.entrySet()) {
+        for (Map.Entry<MergeKey, PermissionAccumulator> entry : mergeMap.entrySet()) {
             MergeKey k = entry.getKey();
-            EnumSet<LFPermission> permissions = entry.getValue();
+            PermissionAccumulator acc = entry.getValue();
             LFResource resource = k.resource;
 
+            GrantSlot slot;
             if (!isCoalescableColumnResource(resource)) {
-                slots.put(k, new GrantSlot(k.sourcePolicyId, k.grantable, permissions, resource, false));
-                continue;
+                slot = new GrantSlot(k.sourcePolicyId, k.grantable, acc.permissions, resource, false);
+                slots.put(k, slot);
+            } else {
+                ColumnMergeKey columnKey = new ColumnMergeKey(
+                        k.sourcePolicyId, resource.getCatalogId(), resource.getDatabaseName(),
+                        resource.getTableName(), resource.getRowFilterExpression(),
+                        k.grantable, acc.permissions);
+                slot = slots.computeIfAbsent(columnKey,
+                        x -> new GrantSlot(k.sourcePolicyId, k.grantable, acc.permissions, resource, true));
+                slot.columns.addAll(resource.getColumnNames());
             }
-
-            ColumnMergeKey columnKey = new ColumnMergeKey(
-                    k.sourcePolicyId, resource.getCatalogId(), resource.getDatabaseName(),
-                    resource.getTableName(), resource.getRowFilterExpression(),
-                    k.grantable, permissions);
-            slots.computeIfAbsent(columnKey,
-                            x -> new GrantSlot(k.sourcePolicyId, k.grantable, permissions, resource, true))
-                    .columns.addAll(resource.getColumnNames());
+            slot.originalPrincipals.addAll(acc.originalPrincipals);
         }
 
         for (GrantSlot slot : slots.values()) {
             operations.add(new LFPermissionOperation(
                     OperationType.GRANT,
                     slot.sourcePolicyId,
+                    slot.originalPrincipal(),
                     principal,
                     slot.resource(),
                     slot.permissions,
@@ -305,6 +311,19 @@ public class CedarToLFConverter {
             Set<LFPermission> permissions) {
     }
 
+    /** Permissions merged for one (source policy, resource, grantable), with their provenance. */
+    private static final class PermissionAccumulator {
+        final EnumSet<LFPermission> permissions = EnumSet.noneOf(LFPermission.class);
+        final Set<String> originalPrincipals = new TreeSet<>();
+
+        void add(LFPermission permission, String originalPrincipal) {
+            permissions.add(permission);
+            if (originalPrincipal != null) {
+                originalPrincipals.add(originalPrincipal);
+            }
+        }
+    }
+
     /**
      * An accumulating grant. {@code columns} is null for resources that pass through
      * unchanged, and an accumulating set for column resources being unioned.
@@ -315,6 +334,7 @@ public class CedarToLFConverter {
         final EnumSet<LFPermission> permissions;
         final LFResource template;
         final Set<String> columns;
+        final Set<String> originalPrincipals = new TreeSet<>();
 
         GrantSlot(String sourcePolicyId, boolean grantable, EnumSet<LFPermission> permissions,
                   LFResource template, boolean coalesceColumns) {
@@ -322,7 +342,16 @@ public class CedarToLFConverter {
             this.grantable = grantable;
             this.permissions = permissions;
             this.template = template;
-            this.columns = coalesceColumns ? new LinkedHashSet<>() : null;
+            this.columns = coalesceColumns ? new TreeSet<>() : null;
+        }
+
+        /**
+         * The Ranger principal name(s) behind this grant. Normally one; comma-separated when
+         * several Ranger principals resolve to the same ARN, which a static mapping can do.
+         * Null when no statement carried an {@code @originalPrincipal} annotation.
+         */
+        String originalPrincipal() {
+            return originalPrincipals.isEmpty() ? null : String.join(", ", originalPrincipals);
         }
 
         LFResource resource() {
@@ -537,6 +566,11 @@ public class CedarToLFConverter {
         // Check for grantable annotation (delegateAdmin → LF permissionsWithGrantOption)
         boolean grantable = GRANTABLE_PATTERN.matcher(raw).find();
 
+        // Extract the Ranger principal name this statement came from (descriptive only)
+        Matcher originalPrincipalMatcher = ORIGINAL_PRINCIPAL_PATTERN.matcher(raw);
+        String originalPrincipal = originalPrincipalMatcher.find()
+                ? originalPrincipalMatcher.group(1) : null;
+
         // Extract row filter
         Matcher rowFilterMatcher = ROW_FILTER_PATTERN.matcher(raw);
         String rowFilter = null;
@@ -545,7 +579,8 @@ public class CedarToLFConverter {
         }
 
         return new ParsedStatement(effect, principal, action, resourceType,
-                resourceId, sourcePolicyId, isDenyException, rowFilter, grantable);
+                resourceId, sourcePolicyId, isDenyException, rowFilter, grantable,
+                originalPrincipal);
     }
 
     /**
@@ -571,6 +606,7 @@ public class CedarToLFConverter {
         final boolean isDenyException;
         final String rowFilter;
         final boolean grantable;    // from @grantable("true") annotation (delegateAdmin)
+        final String originalPrincipal;  // from @originalPrincipal(...), e.g. "user:alice"
 
         ParsedStatement(String effect, String principal, String action,
                         String resourceType, String resourceId, String sourcePolicyId,
@@ -582,6 +618,14 @@ public class CedarToLFConverter {
         ParsedStatement(String effect, String principal, String action,
                         String resourceType, String resourceId, String sourcePolicyId,
                         boolean isDenyException, String rowFilter, boolean grantable) {
+            this(effect, principal, action, resourceType, resourceId,
+                    sourcePolicyId, isDenyException, rowFilter, grantable, null);
+        }
+
+        ParsedStatement(String effect, String principal, String action,
+                        String resourceType, String resourceId, String sourcePolicyId,
+                        boolean isDenyException, String rowFilter, boolean grantable,
+                        String originalPrincipal) {
             this.effect = effect;
             this.principal = principal;
             this.action = action;
@@ -591,6 +635,7 @@ public class CedarToLFConverter {
             this.isDenyException = isDenyException;
             this.rowFilter = rowFilter;
             this.grantable = grantable;
+            this.originalPrincipal = originalPrincipal;
         }
     }
 

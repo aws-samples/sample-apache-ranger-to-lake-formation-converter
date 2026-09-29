@@ -1206,7 +1206,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         GrantGroupKey key = new GrantGroupKey(atom.principalArn(), atom.resource(), atom.grantable());
         GrantGroup group = groups.get(key);
         if (group == null) {
-            group = new GrantGroup(representative.getSourcePolicyId());
+            group = new GrantGroup(representative.getSourcePolicyId(),
+                    representative.getOriginalPrincipal());
             groups.put(key, group);
         }
         group.permissions.add(atom.permission());
@@ -1220,8 +1221,8 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
             GrantGroupKey key = entry.getKey();
             GrantGroup group = entry.getValue();
             operations.add(new LFPermissionOperation(
-                    type, group.sourcePolicyId, key.principalArn(), key.resource(),
-                    group.permissions, key.grantable()));
+                    type, group.sourcePolicyId, group.originalPrincipal, key.principalArn(),
+                    key.resource(), group.permissions, key.grantable()));
         }
         return operations;
     }
@@ -1391,10 +1392,12 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
     /** Mutable accumulator of permissions for a {@link GrantGroupKey} during re-materialization. */
     private static final class GrantGroup {
         private final String sourcePolicyId;
+        private final String originalPrincipal;
         private final EnumSet<LFPermission> permissions = EnumSet.noneOf(LFPermission.class);
 
-        GrantGroup(String sourcePolicyId) {
+        GrantGroup(String sourcePolicyId, String originalPrincipal) {
             this.sourcePolicyId = sourcePolicyId;
+            this.originalPrincipal = originalPrincipal;
         }
     }
 
