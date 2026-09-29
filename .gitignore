@@ -22,3 +22,7 @@ ignore/
 
 # Demo assessment outputs
 demo/out/
+
+# Python bytecode from the demo fixture generators
+__pycache__/
+*.pyc
