@@ -21,7 +21,7 @@
 # "null" on every projected grant.
 awsConfig:
   region: us-east-1
-  catalogId: "427250191192"
+  catalogId: "0123456789012"
 
 rangerServices:
   - serviceType: hive
@@ -33,7 +33,7 @@ rangerServices:
 principalMapping:
   type: IDENTITY_CENTER
   idcConfig:
-    identityStoreId: d-906661a2b9
+    identityStoreId: d-01234567
     region: us-east-1
-    accountId: "427250191192"
+    accountId: "0123456789012"
     cacheTtlMinutes: 60
