@@ -42,12 +42,15 @@ permit|forbid(
 
 | Pattern | Behavior |
 |---|---|
-| Bare `*` on table | `PolicyConverter.buildResourceOperations()` handles as `LFResource.allTablesResource()` → LF `TableWildcard` |
+| Bare `*` on table (optionally with `column=*`) | `expandResources()` short-circuits — never calls `CatalogResolver.expandTables()` — and builds a single table-level entity ref whose table name is the literal `*` (ARN `table/{db}/*`). `CedarToLFConverter.parseResourceIdentifier()` recognizes that ARN shape and returns `LFResource.allTablesResource()` → LF `TableWildcard`. One grant per database instead of one per concrete table. |
+| Bare `*` on table with a *specific* column | `expandResources()` records an `UNMAPPED_RESOURCE` gap and produces no combination — LF's `TableWildcard` is table-level only and cannot carry a column restriction, so promoting this would over-grant every column of every table. |
 | `prefix_*`, `db_?` | `CatalogResolver.expandDatabases/Tables/Columns()` queries Glue with paginated scan + regex |
 | `isExcludes=true` | Records `EXCLUDES_PATTERN` gap, skips entire policy |
 | Glue unavailable | Returns empty list; gap recorded |
 
-**Resource level selection:** `determineResourceLevel()` picks the deepest non-empty resource key (`sthreeresource > url > datalocation > column > table > database`). `promoteResourceLevel()` promotes column-level to table or database when all wildcard values are present.
+**Resource level selection:** `determineResourceLevel()` picks the deepest non-empty resource key (`sthreeresource > url > datalocation > column > table > database`). `promoteResourceLevel()` promotes column-level to table level whenever `column=*`, regardless of whether the table value is a specific name or the bare `*` wildcard — the table branch of `expandResources()` then decides whether that yields a per-table Glue expansion or a single `TableWildcard` combination.
+
+Note: `PolicyConverter.buildResourceOperations()` (the direct, Cedar-bypassing assessment path below) has its own independent `allTablesResource()` call, but it has no callers anywhere in `src/main` or the integration tests — it is dead code, unrelated to the Cedar-path wildcard handling described above.
 
 ### Deny/exception handling
 

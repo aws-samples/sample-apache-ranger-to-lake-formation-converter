@@ -673,11 +673,13 @@ Each service adapter translates Ranger access types to Lake Formation permission
 |---|---|---|
 | `column=specific` + `table=specific` | column | `DataCatalog::Column` → `TABLE_WITH_COLUMNS` |
 | `column=*` + `table=specific` | table | `DataCatalog::Table` |
-| `column=*` + `table=*` | database | `DataCatalog::Database` |
+| `column=*` + `table=*` | table (wildcard) | `DataCatalog::Table` (ARN `table/{db}/*`) → LF `TableWildcard` |
 | `table=specific` | table | `DataCatalog::Table` |
-| `table=*` | database | `DataCatalog::Database` |
+| `table=*` (no column key) | table (wildcard) | `DataCatalog::Table` (ARN `table/{db}/*`) → LF `TableWildcard` |
 | `database=specific` | database | `DataCatalog::Database` |
 | `url` or `datalocation` (any) | datalocation | `DataCatalog::DataLocation` |
+
+A bare `table=*` — with no column restriction, or with `column=*` alongside it — is never Glue-expanded and never promoted to database level. It maps directly to a single Lake Formation `TableWildcard` grant covering every table in the database: one grant instead of one per concrete table, and tables created later are covered natively and atomically rather than waiting for the next `wildcardRefreshIntervalSeconds` refresh cycle (see below).
 
 **Gap conditions:**
 
@@ -685,7 +687,7 @@ Each service adapter translates Ranger access types to Lake Formation permission
 |---|---|
 | `isExcludes=true` on table resource | GAP — no "all except" in LF; policy skipped (see Future Enhancements) |
 | `isExcludes=true` on column resource | GAP — LF supports `ColumnWildcard.ExcludedColumnNames` but column-level exclude is not yet implemented |
-| `column=specific` + `table=*` | GAP — no LF equivalent for column on wildcard table |
+| `column=specific` + `table=*` | GAP — Lake Formation's `TableWildcard` is table-level only and cannot carry a column restriction; granting it anyway would expose every column of every table in the database, so no grant is produced |
 | HDFS / `file://` / bare `/` paths | GAP — not convertible to LF data location |
 | `s3a://` or `s3n://` prefix | Normalized to `s3://` (happy path) |
 | Wildcard suffix on S3 URL (e.g., `s3://bucket/*`) | Suffix stripped → `s3://bucket/` (happy path) |
@@ -810,9 +812,9 @@ The checkpoint store tracks a per-service policy version map alongside the merge
 
 ## Wildcard Pattern Refresh
 
-When Ranger policies use glob patterns (e.g., `table_*`, `db_?`) to match resources by name, the system expands them against the Glue Data Catalog at conversion time. The bare `*` wildcard (ALL tables) is handled natively by Lake Formation's `TableWildcard`.
+When Ranger policies use glob patterns that match a subset of table names (e.g., `table_*`, `db_?`), the system expands them against the Glue Data Catalog at conversion time. The bare `*` wildcard (ALL tables in a database) is never expanded against Glue at all — it is handled natively by Lake Formation's `TableWildcard`, a single grant that covers every table in the database, including ones created later.
 
-For glob patterns that match a subset of resources, a periodic refresh scheduler re-evaluates them against the current catalog state. When new resources appear (or old ones disappear) that match existing patterns, the system computes a delta and applies the necessary grant/revoke operations.
+For partial glob patterns that match a subset of resources, a periodic refresh scheduler re-evaluates them against the current catalog state. When new resources appear (or old ones disappear) that match existing patterns, the system computes a delta and applies the necessary grant/revoke operations. A bare `*` wildcard does not participate in this refresh cycle — it needs no delta computation, since the `TableWildcard` grant already covers tables added or removed at any time.
 
 Configure via `wildcardRefreshIntervalSeconds` in the YAML config (set to `0` or omit to disable). The refresh cycle acquires a shared lock with the normal sync cycle to prevent concurrent updates.
 
