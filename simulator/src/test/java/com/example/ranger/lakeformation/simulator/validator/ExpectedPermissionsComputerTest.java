@@ -673,6 +673,105 @@ class ExpectedPermissionsComputerTest {
                 "Bare wildcard table pattern '*' should produce resourceId 'mydb.*'");
     }
 
+    /**
+     * Regression guard for the production sync-behavior change: a bare table='*' now maps to a
+     * single Lake Formation TableWildcard grant and must NOT consult the table expander (Glue) at
+     * all, even when a real (non-passthrough) expander would enumerate multiple concrete tables.
+     * Before the fix this produced one expected entry per concrete table, which would flag a
+     * permanent false under-grant against the new single-wildcard-grant sync behavior.
+     */
+    @Test
+    void bareWildcardTable_doesNotConsultExpander_producesSingleEntry() {
+        List<String> expanderCalls = new ArrayList<>();
+        ExpectedPermissionsComputer realisticComputer = new ExpectedPermissionsComputer(
+                PRINCIPAL_MAP,
+                (db, pattern) -> {
+                    expanderCalls.add(db + ":" + pattern);
+                    return List.of("orders", "customers", "events"); // simulate a real Glue catalog
+                });
+
+        JsonNode items = singleItemArray(buildItem("alice", "select", false));
+        JsonNode resources = buildTableResources("mydb", "*");
+        JsonNode policy = buildPolicy(true, "hive", 0, items, resources);
+
+        Set<SimulatorPermission> result = realisticComputer.compute(List.of(policy));
+
+        assertEquals(1, result.size(), "Bare table wildcard must produce exactly one expected entry, not one per table");
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("mydb.*", perm.resourceId());
+        assertTrue(expanderCalls.isEmpty(), "The table expander must not be called for a bare '*' pattern");
+    }
+
+    /**
+     * Complement: table='*' combined with column='*' also collapses to the single wildcard
+     * expectation (column='*' carries no additional restriction beyond the table wildcard).
+     */
+    @Test
+    void bareWildcardTableWithColumnWildcard_producesSingleEntry() {
+        List<String> expanderCalls = new ArrayList<>();
+        ExpectedPermissionsComputer realisticComputer = new ExpectedPermissionsComputer(
+                PRINCIPAL_MAP,
+                (db, pattern) -> {
+                    expanderCalls.add(db + ":" + pattern);
+                    return List.of("orders", "customers");
+                });
+
+        JsonNode items = singleItemArray(buildItem("alice", "select", false));
+        JsonNode resources = buildColumnResources("mydb", "*", "*");
+        JsonNode policy = buildPolicy(true, "hive", 0, items, resources);
+
+        Set<SimulatorPermission> result = realisticComputer.compute(List.of(policy));
+
+        assertEquals(1, result.size());
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("mydb.*", perm.resourceId());
+        assertTrue(expanderCalls.isEmpty(), "The table expander must not be called when table=* and column=*");
+    }
+
+    /**
+     * table='*' combined with a SPECIFIC column is the over-grant shape that production gaps
+     * (Lake Formation's TableWildcard cannot carry a column restriction). The oracle must expect
+     * ZERO grants for this shape, matching the sync service producing none.
+     */
+    @Test
+    void bareWildcardTableWithSpecificColumn_producesNoExpectedPermissions() {
+        JsonNode items = singleItemArray(buildItem("alice", "select", false));
+        JsonNode resources = buildColumnResources("mydb", "*", "mycol");
+        JsonNode policy = buildPolicy(true, "hive", 0, items, resources);
+
+        Set<SimulatorPermission> result = computer.compute(List.of(policy));
+
+        assertTrue(result.isEmpty(),
+                "table=* with a specific column is an over-grant shape gapped upstream; expect zero permissions");
+    }
+
+    /**
+     * A non-bare glob (e.g. 'tbl_*') must still go through the normal per-table expansion path —
+     * only the literal bare '*' pattern short-circuits to a single wildcard expectation.
+     */
+    @Test
+    void partialWildcardTable_stillExpandsPerConcreteTable() {
+        List<String> expanderCalls = new ArrayList<>();
+        ExpectedPermissionsComputer realisticComputer = new ExpectedPermissionsComputer(
+                PRINCIPAL_MAP,
+                (db, pattern) -> {
+                    expanderCalls.add(db + ":" + pattern);
+                    return List.of("tbl_orders", "tbl_customers");
+                });
+
+        JsonNode items = singleItemArray(buildItem("alice", "select", false));
+        JsonNode resources = buildTableResources("mydb", "tbl_*");
+        JsonNode policy = buildPolicy(true, "hive", 0, items, resources);
+
+        Set<SimulatorPermission> result = realisticComputer.compute(List.of(policy));
+
+        assertEquals(2, result.size(), "A partial glob should still expand to each concrete table");
+        assertEquals(List.of("mydb:tbl_*"), expanderCalls);
+        Set<String> resourceIds = new java.util.HashSet<>();
+        for (SimulatorPermission p : result) resourceIds.add(p.resourceId());
+        assertEquals(Set.of("mydb.tbl_orders", "mydb.tbl_customers"), resourceIds);
+    }
+
     // -----------------------------------------------------------------------
     // Test 11: column-level grant produces only SELECT
     // LF TABLE_WITH_COLUMNS only supports SELECT — all other permissions (INSERT, DELETE,

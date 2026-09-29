@@ -378,8 +378,25 @@ public class ExpectedPermissionsComputer {
         // TABLE_WITH_COLUMNS SELECT-only grant. A genuine specific-column grant stays TWC.
         List<String> tablePatterns = resourceValues(resources, "table");
         boolean columnIsWildcard = hasColumn && isAllWildcard(resourceValues(resources, "column"));
+        // Mirror production RangerToCedarConverter.expandResources: a bare table='*' (every value
+        // a wildcard) maps to a single Lake Formation TableWildcard grant instead of a per-table
+        // Glue expansion — the sync service now emits exactly one grant for this shape, so the
+        // table expander must not be consulted at all.
+        boolean bareTableWildcard = isAllWildcard(tablePatterns);
 
         for (String db : databases) {
+            if (bareTableWildcard) {
+                if (hasColumn && !columnIsWildcard) {
+                    // table='*' combined with a SPECIFIC column: Lake Formation's TableWildcard is
+                    // table-level only and cannot express a column restriction across it. Production
+                    // gaps this shape and produces no grant — the oracle must expect none either.
+                    continue;
+                }
+                // column='*' (or no column key at all) carries no restriction beyond the table
+                // wildcard itself → one TABLE-class expectation for the whole database.
+                specs.add(new ResourceSpec("TABLE", db + ".*", false));
+                continue;
+            }
             for (String tablePattern : tablePatterns) {
                 // column=* on a concrete table → promote to TABLE. column=* on table=* stays
                 // column-scoped (per-table expansion below yields TWC per concrete table).
