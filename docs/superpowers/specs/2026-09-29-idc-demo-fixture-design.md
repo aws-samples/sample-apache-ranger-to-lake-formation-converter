@@ -1,7 +1,7 @@
 # Identity Center Demo Fixture — Design
 
 **Date:** 2026-09-29
-**Status:** Approved
+**Status:** Implemented and verified
 
 ## Problem
 
@@ -115,18 +115,59 @@ Assessment configuration with `principalMapping.type: IDENTITY_CENTER`, the iden
 store ID, account `427250191192`, and `rangerServices` entries for `acme_hive` and
 `acme_trino` (the latter with `gdcCatalogName: awsdatacatalog`).
 
+## The management-account restriction
+
+An Identity Center **account** instance cannot be created from an AWS Organizations
+management account: `CreateInstance` rejects it with *"Organization management account is
+not allowed to perform the operation"*, and `AWS::SSO::Instance` fails the same way.
+Account `427250191192` was the management account of its own single-member organization
+`o-svmqjjhtv3`, so the first deployment rolled back on `IdcInstance`.
+
+The template therefore keeps `ExistingIdentityStoreId` (default empty) and a
+`CreateIdcInstance` condition, so it works both ways:
+
+- Empty parameter → the stack creates an account instance. Requires the account not to
+  manage an organization.
+- Parameter supplied → the stack uses an existing instance, which stays outside the
+  stack's lifecycle and so survives stack deletion.
+
+For this account the organization was deleted (single member, itself) on explicit
+instruction, making it standalone, after which the self-contained path worked.
+
+Note that the manually-enabled instance the deployment replaced was an *organization*
+instance, which only the console can create — there is no API for enabling one. Deleting
+such an instance is therefore not reversible from the CLI.
+
 ## Deployment and verification
 
-1. `aws sso-admin delete-instance` on `ssoins-7223f48d0c53652d`.
-2. `aws cloudformation create-stack` with the generated template.
-3. Read the created identity store ID from the stack outputs into
-   `idc-demo-config.yaml`.
-4. Run the assessment against the fixture with `--aws-profile hocanint+ranger-test1`.
+1. `aws sso-admin delete-instance` on any pre-existing instance.
+2. `aws organizations delete-organization` if the account manages one.
+3. Upload the template to S3 and `aws cloudformation create-stack --template-url`. The
+   template is ~74 KB, over the 51,200-byte limit for an inline `--template-body`.
+4. Read the `IdentityStoreId` output into `idc-demo-config.yaml`. The generator preserves
+   a substituted value across regenerations.
+5. Run the assessment against the fixture with `--aws-profile hocanint+ranger-test1`.
 
 Success criteria: every user and group in the fixture resolves to an
-`arn:aws:identitystore::427250191192:...` ARN; the only `unmappedPrincipal` count is the
-single deliberate Ranger role; wildcard patterns expand against the real catalog instead
-of being reported as `WILDCARD_PATTERN`.
+`arn:aws:identitystore::427250191192:...` ARN; the only unmapped principal is the single
+deliberate Ranger role; wildcard patterns expand against the real catalog instead of
+being reported as `WILDCARD_PATTERN`.
+
+### Result
+
+Stack `ranger-lf-idc-demo`, identity store `d-906661a2b9`, instance
+`ssoins-7223eab14ca16d88`. 24 users, 14 groups, 36 memberships, 7 databases, 45 tables.
+
+149 policies assessed (the 150th is disabled in Ranger, correctly contributing nothing),
+143 fully convertible, **322 projected grants, all 38 identities resolved, zero
+non-identitystore principals**. Four gaps, all deliberate: one `DENY_POLICY` and three
+`EXCLUDES_PATTERN`. No `WILDCARD_PATTERN` gaps — the wildcards expanded against the live
+catalog.
+
+One implementation correction worth recording: the config key is `idcConfig`, not
+`identityCenter`, and `region` is required. `PrincipalMappingConfig` deserializes
+`idcConfig` via `@JsonProperty`, and the wrong key produces an NPE on `getIdcConfig()`
+rather than a validation message.
 
 ## Deliberate omissions
 
