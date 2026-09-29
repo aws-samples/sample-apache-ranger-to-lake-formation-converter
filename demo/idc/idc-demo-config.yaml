@@ -25,7 +25,8 @@ rangerServices:
 
 principalMapping:
   type: IDENTITY_CENTER
-  identityCenter:
-    identityStoreId: IDENTITY_STORE_ID_PLACEHOLDER
+  idcConfig:
+    identityStoreId: d-906661a2b9
+    region: us-east-1
     accountId: "427250191192"
     cacheTtlMinutes: 60

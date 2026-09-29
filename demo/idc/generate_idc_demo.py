@@ -334,6 +334,16 @@ def hive_showcase():
         labels=["demo:column-excludes"]))
 
     p.append(policy(
+        SVC_HIVE, "idc-hr-employees-allowlist",
+        {"database": res("hr"), "table": res("employees"),
+         "column": res(["employee_id", "full_name", "department", "hire_date"])},
+        allow=[item(["select"], groups=["hr_readers"])],
+        description="The allowlist rewrite of idc-hr-employees-nonsensitive. Same "
+                    "intent, stated as columns to include rather than exclude, so it "
+                    "converts cleanly — this is the remediation for EXCLUDES_PATTERN.",
+        labels=["demo:excludes-remediation", "demo:column-level"]))
+
+    p.append(policy(
         SVC_HIVE, "idc-finance-domain-owner",
         {"database": res("finance")},
         allow=[item(["create", "alter", "drop"], groups=["finance_admins"],
@@ -408,6 +418,51 @@ def hive_showcase():
                     users=["tina_partner", "umar_partner"])],
         description="Tightly scoped partner access — two columns only.",
         labels=["demo:column-level", "idc:mixed-principals"]))
+
+    # Direct per-user grants. Most principals above are groups, which is how a real
+    # deployment looks — but every Identity Center user the template creates should be
+    # resolved by at least one policy, otherwise the demo creates identities the
+    # assessment never looks up.
+
+    p.append(policy(
+        SVC_HIVE, "idc-raw-layer-owners",
+        {"database": res("acme_raw")},
+        allow=[item(["create", "alter", "drop"],
+                    users=["bob_engineer", "ivan_engineer", "karl_engineer"],
+                    delegate_admin=True)],
+        description="Named raw-layer owners rather than a group — three GetUserId "
+                    "lookups, three grantable LF DATABASE grants.",
+        labels=["idc:user-principal", "demo:grantable"]))
+
+    p.append(policy(
+        SVC_HIVE, "idc-finance-gl-owner",
+        {"database": res("finance"), "table": res("gl_entries"), "column": res("*")},
+        allow=[item(["select", "update"], users=["laura_finance"])],
+        description="Single named owner of the general ledger.",
+        labels=["idc:user-principal"]))
+
+    p.append(policy(
+        SVC_HIVE, "idc-steward-pii-review",
+        {"database": res("acme_refined"), "table": res("customers"),
+         "column": res(["customer_id", "email", "ssn"])},
+        allow=[item(["select"], users=["erin_steward", "victor_steward"])],
+        description="Stewards review the PII columns directly, by name.",
+        labels=["idc:user-principal", "demo:column-level"]))
+
+    p.append(policy(
+        SVC_HIVE, "idc-platform-admin-hr-ops",
+        {"database": res("hr")},
+        allow=[item(["alter"], users=["wendy_admin"])],
+        description="Platform operator with schema-maintenance rights on HR.",
+        labels=["idc:user-principal", "demo:database-level"]))
+
+    p.append(policy(
+        SVC_HIVE, "idc-contractor-scoped-read",
+        {"database": res("acme_curated"), "table": res("daily_sales"),
+         "column": res(["sales_date", "region", "revenue_usd"])},
+        allow=[item(["select"], users=["dave_contractor"])],
+        description="Contractor limited to three columns of one curated table.",
+        labels=["idc:user-principal", "demo:column-level"]))
 
     p.append(policy(
         SVC_HIVE, "idc-role-grant-unmappable",
@@ -902,8 +957,9 @@ rangerServices:
 
 principalMapping:
   type: IDENTITY_CENTER
-  identityCenter:
+  idcConfig:
     identityStoreId: IDENTITY_STORE_ID_PLACEHOLDER
+    region: {REGION}
     accountId: "{ACCOUNT_ID}"
     cacheTtlMinutes: 60
 """
