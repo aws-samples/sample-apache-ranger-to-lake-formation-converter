@@ -21,8 +21,11 @@ Regenerate with:  python3 demo/generate_demo_policies.py
 """
 
 import json
-import uuid
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ranger_export import PolicyBuilder, export, item, res  # noqa: E402
 
 OUT_PATH = Path(__file__).parent / "Demo_Ranger_Policies.json"
 
@@ -74,7 +77,6 @@ LAKE = {
 # ID ranges are kept disjoint per service so a policy ID in the report immediately
 # tells you which Ranger service it came from.
 ID_BASE = {SVC_HIVE: 1000, SVC_TRINO: 2000, SVC_EMRFS: 3000, SVC_TAGS: 4000}
-_next_id = dict(ID_BASE)
 
 SERVICE_TYPE = {
     SVC_HIVE: "hive",
@@ -83,67 +85,8 @@ SERVICE_TYPE = {
     SVC_TAGS: "tag",
 }
 
-
-def _alloc_id(service):
-    _next_id[service] += 1
-    return _next_id[service]
-
-
-def res(values, excludes=False, recursive=False):
-    """A Ranger resource entry."""
-    return {
-        "values": values if isinstance(values, list) else [values],
-        "isExcludes": excludes,
-        "isRecursive": recursive,
-    }
-
-
-def item(accesses, users=None, groups=None, roles=None,
-         delegate_admin=False, conditions=None):
-    """A Ranger policy item (allow, deny, allowException or denyException)."""
-    return {
-        "accesses": [{"type": a, "isAllowed": True} for a in accesses],
-        "users": users or [],
-        "groups": groups or [],
-        "roles": roles or [],
-        "conditions": conditions or [],
-        "delegateAdmin": delegate_admin,
-    }
-
-
-def policy(service, name, resources, allow=None, description="", labels=None,
-           deny=None, allow_exceptions=None, deny_exceptions=None,
-           policy_type=0, data_mask=None, row_filter=None,
-           validity=None, conditions=None, zone="", enabled=True,
-           deny_all_else=False, priority=0):
-    """Assemble one Ranger policy in export format."""
-    pid = _alloc_id(service)
-    return {
-        "service": service,
-        "name": name,
-        "policyType": policy_type,
-        "policyPriority": priority,
-        "description": description,
-        "isAuditEnabled": True,
-        "resources": resources,
-        "policyItems": allow or [],
-        "denyPolicyItems": deny or [],
-        "allowExceptions": allow_exceptions or [],
-        "denyExceptions": deny_exceptions or [],
-        "dataMaskPolicyItems": data_mask or [],
-        "rowFilterPolicyItems": row_filter or [],
-        "serviceType": SERVICE_TYPE[service],
-        "options": {},
-        "validitySchedules": validity or [],
-        "policyLabels": labels or [],
-        "conditions": conditions or [],
-        "zoneName": zone,
-        "isDenyAllElse": deny_all_else,
-        "id": pid,
-        "guid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"acme/{service}/{name}")),
-        "isEnabled": enabled,
-        "version": 1,
-    }
+_builder = PolicyBuilder(SERVICE_TYPE, ID_BASE, guid_namespace="acme")
+policy = _builder.policy
 
 
 # ======================================================================================
@@ -789,20 +732,10 @@ def build():
     policies += emrfs_filler(26)
     policies += tag_policies()
 
-    return {
-        "metaDataInfo": {
-            "Host name": "ranger-admin.acme.internal",
-            "Exported by": "admin",
-            "Export time": "Sep 11, 2026 9:00:00 AM",
-            "Ranger apache version": "2.4.0",
-        },
-        "policies": policies,
-        "startIndex": 0,
-        "pageSize": len(policies),
-        "totalCount": len(policies),
-        "resultSize": len(policies),
-        "queryTimeMS": 41,
-    }
+    return export(policies,
+                  host_name="ranger-admin.acme.internal",
+                  exported_by="admin",
+                  export_time="Sep 11, 2026 9:00:00 AM")
 
 
 def main():
