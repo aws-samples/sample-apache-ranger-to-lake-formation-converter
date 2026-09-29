@@ -307,6 +307,32 @@ public class CedarToLFConverter {
                 columnNames = Collections.singleton(glueRef.getColumnName());
             }
 
+            if ("*".equals(tableName)) {
+                if (columnNames != null && !columnNames.contains("*")) {
+                    // A specific column alongside a table wildcard would silently over-grant every
+                    // column of every table in the database, since Lake Formation's TableWildcard
+                    // is table-level only and cannot carry a column restriction. This should have
+                    // been gapped upstream by RangerToCedarConverter; treat it defensively here too.
+                    LOG.warn("Table wildcard ARN '{}' has a specific column '{}' — refusing to "
+                                    + "convert to avoid an over-grant.", resourceId, columnNames);
+                    gapReporter.recordGap(new GapEntry(
+                            sourcePolicyId, null, GapType.UNMAPPED_RESOURCE,
+                            resourceId,
+                            "Resource '" + resourceId + "' combines a table wildcard ('*') with a "
+                                    + "specific column. Lake Formation's TableWildcard is table-level "
+                                    + "only and cannot express a column restriction across it.",
+                            "Restrict the table to specific table names, or grant all columns "
+                                    + "alongside the table wildcard."
+                    ));
+                    return null;
+                }
+                // Bare table wildcard (optionally with column=='*', which carries no additional
+                // restriction) → a single Lake Formation TableWildcard grant, not a per-table
+                // expansion. columnNames intentionally stays null: allTablesResource builds a
+                // TableResource, not TABLE_WITH_COLUMNS, so it must not carry a columnNames set.
+                return LFResource.allTablesResource(catalogId, databaseName);
+            }
+
             return new LFResource(catalogId, databaseName, tableName,
                     columnNames, rowFilter, null);
 

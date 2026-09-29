@@ -56,6 +56,71 @@ class CedarToLFConverterTest {
     }
 
     @Test
+    void tableWildcardArnProducesAllTablesResource() throws Exception {
+        String cedarText = """
+                @source("77")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/mydb/*"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size(), "Table wildcard ARN should produce 1 GRANT operation");
+        LFPermissionOperation op = ops.get(0);
+        assertTrue(op.getResource().isAllTables(), "Resource must be marked allTables");
+        assertNull(op.getResource().getTableName(), "tableName must be null for allTables resource");
+        assertNull(op.getResource().getColumnNames(), "columnNames must be null (not [\"*\"]) for allTables resource");
+        assertEquals("mydb", op.getResource().getDatabaseName());
+    }
+
+    @Test
+    void concreteTableArnProducesNonAllTablesResource() throws Exception {
+        String cedarText = """
+                @source("78")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Table::"arn:aws:glue:us-east-1:123456789012:table/mydb/orders"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(1, ops.size());
+        LFPermissionOperation op = ops.get(0);
+        assertFalse(op.getResource().isAllTables(), "Concrete table resource must not be marked allTables");
+        assertEquals("orders", op.getResource().getTableName());
+    }
+
+    @Test
+    void tableWildcardWithColumnArnIsDefensivelyGapped() throws Exception {
+        // This ARN shape (column present alongside a '*' table) should never be produced by
+        // RangerToCedarConverter after the fix below, but CedarToLFConverter must defend against
+        // it directly rather than silently granting every column of every table.
+        String cedarText = """
+                @source("79")
+                permit(
+                    principal == DataCatalog::Principal::"arn:aws:iam::123456789012:role/AnalystRole",
+                    action == DataCatalog::Action::"SELECT",
+                    resource == DataCatalog::Column::"arn:aws:glue:us-east-1:123456789012:column/mydb/*/mycol"
+                );
+                """;
+
+        CedarPolicySet policySet = CedarPolicySet.fromCedarString(cedarText);
+        List<LFPermissionOperation> ops = converter.convert(policySet);
+
+        assertEquals(0, ops.size(), "Table wildcard with a specific column must not produce a grant");
+        boolean hasUnmappedGap = gapReporter.getReport().getEntries().stream()
+                .anyMatch(g -> g.getGapType() == GapType.UNMAPPED_RESOURCE);
+        assertTrue(hasUnmappedGap, "Should record UNMAPPED_RESOURCE gap for table-wildcard+column shape");
+    }
+
+    @Test
     void permitPlusForbidRemovesGrant() throws Exception {
         String cedarText = """
                 @source("42")
