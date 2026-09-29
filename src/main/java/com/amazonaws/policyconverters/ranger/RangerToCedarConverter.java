@@ -569,18 +569,20 @@ public class RangerToCedarConverter {
         if ("column".equals(resourceLevel)) {
             List<String> colValues = getResourceValues(resources, "column");
             if (isAllWildcard(colValues)) {
-                List<String> tableValues = getResourceValues(resources, "table");
-                if (!isAllWildcard(tableValues)) {
-                    // col=* on a specific table → TABLE_WITH_COLUMNS (ColumnWildcard) at table level
-                    LOG.debug("promoteResourceLevel: column=* → promoted from 'column' to 'table'");
-                    return "table";
-                }
-                // col=* on table=* → stay at column level so expandResources expands table=* via
-                // Glue and produces TABLE_WITH_COLUMNS + ColumnWildcard per concrete table
-                LOG.debug("promoteResourceLevel: column=* and table=* → staying at 'column' for per-table expansion");
+                // col=* → promote to table level unconditionally, whether the table value is a
+                // specific name or the bare '*' wildcard. A specific table drives the normal
+                // per-table Glue expansion in expandResources' "table" branch. table=* combined
+                // with col=* now maps directly to a single Lake Formation TableWildcard grant
+                // (see expandResources) instead of being Glue-expanded into one
+                // TABLE_WITH_COLUMNS + ColumnWildcard per concrete table — the wildcard grant
+                // covers tables created later natively, and costs one grant instead of N.
+                LOG.debug("promoteResourceLevel: column=* → promoted from 'column' to 'table'");
+                return "table";
             }
         }
-        // table=* stays at table level — expandResources expands via Glue to concrete tables.
+        // table=* (with no column='*' promotion above, i.e. no column key at all, or specific
+        // columns handled as a gap in expandResources) stays at its determined level —
+        // expandResources decides whether to emit a TableWildcard or expand via Glue.
         // Promoting to database would produce a DATABASE grant which is a different LF resource.
         return resourceLevel;
     }
@@ -678,9 +680,21 @@ public class RangerToCedarConverter {
         }
 
         List<String> tablePatterns = getResourceValues(resources, "table");
+        boolean bareTableWildcard = isAllWildcard(tablePatterns);
 
         if ("table".equals(resourceLevel)) {
             for (String db : expandedDatabases) {
+                if (bareTableWildcard) {
+                    // table='*' with no column restriction (either no column key at all, or
+                    // column='*' promoted here by promoteResourceLevel) maps to a single Lake
+                    // Formation TableWildcard grant instead of a per-table Glue expansion: one
+                    // grant instead of N, and tables created later are covered natively and
+                    // atomically instead of waiting for the next wildcardRefreshIntervalSeconds
+                    // refresh cycle. No catalog call is made.
+                    CedarEntityRef ref = buildEntityRef(adapter, "table", db, "*", null, null);
+                    if (ref != null) combinations.add(new ResourceCombination(ref, resourceLevel));
+                    continue;
+                }
                 List<String> expandedTables = expandTablePatterns(tablePatterns, db, policyId);
                 for (String table : expandedTables) {
                     CedarEntityRef ref = buildEntityRef(adapter, "table", db, table, null, null);
@@ -690,9 +704,30 @@ public class RangerToCedarConverter {
             return combinations;
         }
 
-        // column level
+        // column level: reached only when the column resource holds specific (non-'*') column
+        // name(s) — col='*' is always promoted away by promoteResourceLevel, to either a concrete
+        // per-table expansion above or (when table is also '*') a TableWildcard combination above.
         List<String> columnPatterns = getResourceValues(resources, "column");
         for (String db : expandedDatabases) {
+            if (bareTableWildcard) {
+                // table='*' combined with specific column(s) would require Lake Formation to
+                // express a column restriction across a TableWildcard, which it cannot do — a
+                // TableWildcard grant is table-level only. Silently promoting this to a
+                // TableWildcard would grant every column of every table in the database. Record
+                // a gap naming the database and the requested columns and produce no grant.
+                gapReporter.recordGap(new GapEntry(
+                        policyId, null, GapType.UNMAPPED_RESOURCE,
+                        db + "/*/" + String.join(",", columnPatterns),
+                        "Policy restricts to specific column(s) (" + String.join(", ", columnPatterns)
+                                + ") while table='*' in database '" + db + "'. Lake Formation's "
+                                + "TableWildcard is table-level only and cannot express a column "
+                                + "restriction across it; granting it anyway would expose every "
+                                + "column of every table in the database.",
+                        "Either restrict to specific table name(s), or use column='*' alongside "
+                                + "table='*' to receive a single Lake Formation TableWildcard grant."
+                ));
+                continue;
+            }
             List<String> expandedTables = expandTablePatterns(tablePatterns, db, policyId);
             for (String table : expandedTables) {
                 List<String> expandedColumns = expandColumnPatterns(columnPatterns, db, table, policyId);

@@ -36,6 +36,8 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -433,26 +435,71 @@ class RangerToCedarConverterTest {
     }
 
     @Test
-    void hive_columnAndTableWildcard_expandsToTableLevelNotDatabase() {
-        // col=* + table=* must NOT promote to database level. It stays at column level so
-        // expandResources expands table=* via the catalog and produces TABLE_WITH_COLUMNS
-        // per concrete table. PassthroughResolver returns "*" as-is → WILDCARD_PATTERN gap.
+    void hive_columnAndTableWildcard_producesSingleTableWildcardResourceNoGlueCall() {
+        // col=* + table=* must NOT be Glue-expanded per concrete table. It must map directly to
+        // one Lake Formation TableWildcard grant: a single table-level entity ref whose table
+        // name is the literal '*', and the catalog resolver must never be consulted for tables.
+        CatalogResolver resolver = mock(CatalogResolver.class);
+        RangerToCedarConverter freshConverter = new RangerToCedarConverter(
+                Map.of("hive", new HiveServiceAdapter(new AwsContext("us-east-1", "123456789012", "123456789012"))),
+                new PassthroughPrincipalMapper(), resolver, gapReporter, new CedarSchemaProvider());
+
         RangerPolicy policy = buildHivePolicyWithAccess("mydb", "*", "*", "alter");
-        hiveConverter.convert(List.of(policy));
+        CedarPolicySet result = freshConverter.convert(List.of(policy));
+        String cedar = result.toCedarString();
+
+        assertTrue(cedar.contains("DataCatalog::Table::"), "Expected a table-level entity");
+        assertTrue(cedar.contains("table/mydb/*\""), "ARN must end in the literal table wildcard '/*'");
+        assertFalse(cedar.contains("DataCatalog::Column"), "Must not produce a column-level entity");
+
+        long tablePermits = java.util.regex.Pattern.compile("permit\\(").matcher(cedar).results().count();
+        assertEquals(1, tablePermits, "Exactly one grant should be produced for the wildcard, not one per table");
+
+        verify(resolver, never()).expandTables(anyString(), anyString());
+
         List<GapEntry> gaps = gapReporter.getReport().getEntries();
-        assertTrue(gaps.stream().anyMatch(g -> g.getGapType() == GapType.WILDCARD_PATTERN),
-                "Expected WILDCARD_PATTERN gap when table=* cannot be expanded");
+        assertFalse(gaps.stream().anyMatch(g -> g.getGapType() == GapType.WILDCARD_PATTERN),
+                "A bare table wildcard combined with column=* must not be reported as an unexpandable wildcard");
     }
 
     @Test
-    void hive_tableWildcardOnly_expandsToTableLevelNotDatabase() {
-        // table=* must NOT promote to database level. expandResources stays at table level
-        // and expands via the catalog. PassthroughResolver returns "*" as-is → WILDCARD_PATTERN gap.
+    void hive_tableWildcardOnly_noColumnKey_producesSingleTableWildcardResourceNoGlueCall() {
+        // table=* with no column resource key at all (e.g. a table-grant policy) must likewise
+        // map to a single TableWildcard grant rather than a per-table Glue expansion.
+        CatalogResolver resolver = mock(CatalogResolver.class);
+        RangerToCedarConverter freshConverter = new RangerToCedarConverter(
+                Map.of("hive", new HiveServiceAdapter(new AwsContext("us-east-1", "123456789012", "123456789012"))),
+                new PassthroughPrincipalMapper(), resolver, gapReporter, new CedarSchemaProvider());
+
         RangerPolicy policy = buildHivePolicyNoColumn("mydb", "*");
-        hiveConverter.convert(List.of(policy));
+        CedarPolicySet result = freshConverter.convert(List.of(policy));
+        String cedar = result.toCedarString();
+
+        assertTrue(cedar.contains("table/mydb/*\""), "ARN must end in the literal table wildcard '/*'");
+        verify(resolver, never()).expandTables(anyString(), anyString());
+
         List<GapEntry> gaps = gapReporter.getReport().getEntries();
-        assertTrue(gaps.stream().anyMatch(g -> g.getGapType() == GapType.WILDCARD_PATTERN),
-                "Expected WILDCARD_PATTERN gap when table=* cannot be expanded");
+        assertFalse(gaps.stream().anyMatch(g -> g.getGapType() == GapType.WILDCARD_PATTERN),
+                "A bare table wildcard must not be reported as an unexpandable wildcard");
+    }
+
+    @Test
+    void hive_tableWildcardWithSpecificColumns_recordsGapAndProducesNoGrant() {
+        // table=* with a SPECIFIC column must NOT become a table wildcard: Lake Formation cannot
+        // express a column restriction across a TableWildcard, so silently promoting this would
+        // grant every column of every table in the database — a silent over-grant. It must be
+        // gapped and produce zero statements instead.
+        RangerPolicy policy = buildHivePolicy("mydb", "*", "mycol");
+        CedarPolicySet result = hiveConverter.convert(List.of(policy));
+
+        assertEquals("", result.toCedarString().trim(), "No grant should be produced");
+
+        List<GapEntry> gaps = gapReporter.getReport().getEntries();
+        assertTrue(gaps.stream().anyMatch(g -> g.getGapType() == GapType.UNMAPPED_RESOURCE
+                        && g.getDetails() != null
+                        && g.getDetails().contains("mydb")
+                        && g.getDetails().contains("mycol")),
+                "Expected an UNMAPPED_RESOURCE gap naming the database and the requested column(s)");
     }
 
     @Test
