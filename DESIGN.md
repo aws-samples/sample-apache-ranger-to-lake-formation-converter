@@ -69,10 +69,46 @@ The `RangerLFServiceAdapter` maps Ranger access types to Cedar actions:
 | `alter` | ALTER | |
 | `read` | SELECT | Alias |
 | `write` | INSERT | Alias |
-| `all` | SELECT, INSERT, DELETE, ALTER, DROP, DESCRIBE | Expanded |
+| `all` | ALL | Passed through, not expanded — see [Why `all` maps to LF `ALL`](#why-all-maps-to-lf-all) |
 | `datalocation` | DATA_LOCATION_ACCESS | |
 | `data_location_access` | DATA_LOCATION_ACCESS | |
 
+#### Why `all` maps to LF `ALL`
+
+Ranger's `all` access type is declared in each service definition with an `impliedGrants` list
+naming every other privilege in that service. For example `conf/ranger-servicedef-hive.json`:
+
+```
+all → [select, update, create, drop, alter, index, lock,
+       read, write, repladmin, serviceadmin, refresh]
+```
+
+Two readings are possible, and they produce different conversions:
+
+- **Expand** `all` into the specific LF permissions it covers (`SELECT, INSERT, DELETE, ALTER,
+  DROP, DESCRIBE`). Exact and auditable, but a closed list.
+- **Pass through** to LF's single `ALL` permission ("Super"), which covers every permission on the
+  resource, including ones AWS adds later.
+
+**We pass through to `ALL`.** Three reasons:
+
+1. **Faithful expansion is impossible.** The `impliedGrants` lists include privileges Lake
+   Formation cannot express at all — Hive's `index`, `lock`, `repladmin`, `serviceadmin`,
+   `refresh`; Presto/Trino's `grant`, `revoke`, `impersonate`, `execute`. Expanding would silently
+   narrow `all` to the mappable subset, which is a worse distortion than passing it through.
+2. **Open-ended is the author's likely intent.** Someone writing `all` in Ranger means "everything
+   on this resource", not "these twelve named things and nothing added later".
+3. **The drift risk is acceptable.** `ALL` auto-inherits future LF permissions, so it can widen
+   without an explicit decision on our part. That is a real cost, accepted deliberately: Apache
+   Ranger is in low-maintenance mode, so the Ranger-side privilege sets are unlikely to churn, and
+   the alternative is a list that silently *under*-grants as LF grows.
+
+Consequence for validation: an independent oracle that expands `all` will disagree with the
+converter on every `all` policy. The oracle must pass through as well, or the disagreement is a
+false positive rather than a finding.
+
+Applies uniformly to `lakeformation`, `hive`, `presto` and `trino` adapters. `amazon-emr-spark` and
+`amazon-emr-emrfs` have no `all` access type.
 
 ## Dry-Run Mode
 
