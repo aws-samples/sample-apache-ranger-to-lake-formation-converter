@@ -785,17 +785,22 @@ class ExpectedPermissionsComputerTest {
     // -----------------------------------------------------------------------
 
     @Test
-    void columnLevelAllAccessType_producesAll_notZeroPermissions() {
+    void columnLevelAllAccessType_narrowsToSelect_matchingProduction() {
+        // LF rejects ALL on a TableWithColumns resource (InvalidInputException, verified against
+        // the live API), so the production adapters narrow a column-scoped "all" to SELECT. This
+        // oracle must expect the same value, or every such policy reports a spurious over-grant
+        // (oracle says ALL) paired with an under-grant (production granted SELECT).
         JsonNode items = singleItemArray(buildItem("alice", "all", false));
         JsonNode resources = buildColumnResources("mydb", "events", "salary");
         JsonNode policy = buildPolicy(true, "lakeformation", 0, items, resources);
 
         Set<SimulatorPermission> result = computer.compute(List.of(policy));
 
-        assertEquals(1, result.size(), "column-level 'all' should produce exactly 1 permission (ALL)");
+        assertEquals(1, result.size(), "column-level 'all' should produce exactly 1 permission");
         SimulatorPermission perm = result.iterator().next();
         assertEquals("TABLE_WITH_COLUMNS", perm.resourceType());
-        assertEquals("ALL", perm.permission(), "'all' passes through as ALL even at column scope");
+        assertEquals("SELECT", perm.permission(),
+                "column-scoped 'all' narrows to SELECT — ALL is invalid on TABLE_WITH_COLUMNS");
     }
 
     @Test

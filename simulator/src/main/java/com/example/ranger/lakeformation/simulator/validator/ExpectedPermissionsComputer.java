@@ -283,17 +283,17 @@ public class ExpectedPermissionsComputer {
         for (ResourceSpec spec : specs) {
             Set<String> finalPerms;
             if (spec.isColumn()) {
-                // Column-scope filter: SELECT and ALL are the only access-type results that
-                // survive here; INSERT/DELETE/ALTER/DROP/DESCRIBE on a column resource are still
-                // dropped (the sync service ignores them for column-scoped resources). ALL is
-                // included because "all" passes through as ALL (see lfMap/trinoMap above) and
-                // this oracle mirrors that access-type mapping unconditionally, including at
-                // column scope — the column-scope narrowing of ALL to SELECT is a separate,
-                // production-only fix (RangerServiceAdapter et al.) driven by a live Lake
-                // Formation API rejection of ALL on TableWithColumns, not by this mapping layer.
-                if (permissions.contains("ALL")) {
-                    finalPerms = Set.of("ALL");
-                } else if (permissions.contains("SELECT")) {
+                // Column scope collapses to SELECT, or to nothing.
+                //
+                // Lake Formation rejects ALL on a TableWithColumns resource outright
+                // (InvalidInputException, verified against the live API), so the production
+                // adapters narrow a column-scoped "all" to SELECT rather than dropping the grant.
+                // This oracle must expect the same, or every column-scoped "all" policy reports a
+                // spurious over- and under-grant pair.
+                //
+                // INSERT/DELETE/ALTER/DROP/DESCRIBE on a column resource remain dropped — LF has
+                // no column-granular form of them.
+                if (permissions.contains("ALL") || permissions.contains("SELECT")) {
                     finalPerms = Set.of("SELECT");
                 } else {
                     finalPerms = Set.of();
