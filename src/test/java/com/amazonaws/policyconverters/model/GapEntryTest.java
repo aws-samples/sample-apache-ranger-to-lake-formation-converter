@@ -95,6 +95,21 @@ class GapEntryTest {
     }
 
     @Test
+    void narrowedActionGapTypeRoundTripsThroughJson() throws Exception {
+        GapEntry entry = new GapEntry(
+                "42", "hive-analyst", GapEntry.GapType.NARROWED_ACTION,
+                null, "details", "recommendation", "hive", java.util.List.of("all"));
+
+        String json = mapper.writeValueAsString(entry);
+        GapEntry parsed = mapper.readValue(json, GapEntry.class);
+
+        assertEquals(entry, parsed);
+        assertEquals(GapEntry.GapType.NARROWED_ACTION, parsed.getGapType());
+        assertEquals("hive", parsed.getServiceType());
+        assertEquals(java.util.List.of("all"), parsed.getAccessTypes());
+    }
+
+    @Test
     void legacySixArgConstructorLeavesActionFieldsNullAndOutOfJson() throws Exception {
         GapEntry entry = new GapEntry(
                 "42", "mask-ssn", GapEntry.GapType.DATA_MASKING, "db/tbl", "d", "r");

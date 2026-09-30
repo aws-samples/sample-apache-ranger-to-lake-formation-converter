@@ -44,6 +44,19 @@ public class RangerToCedarConverter {
     private static final Logger LOG = LoggerFactory.getLogger(RangerToCedarConverter.class);
     private static final String DEFAULT_SERVICE_TYPE = "lakeformation";
 
+    /**
+     * The permission a narrowed access type is currently narrowed to. The only narrowing the
+     * adapters perform today is column-scoped "all" -> SELECT, so this is a single constant
+     * rather than a per-entry field; if a second narrowing case is added later this should
+     * become part of the accumulator instead of remaining a shared constant.
+     */
+    public static final String NARROWED_ACTION_TARGET = "SELECT";
+
+    /** Why the narrowing above happens — shared with the assessment rollup so the two layers
+     * do not duplicate (and risk diverging on) the explanation text. */
+    public static final String NARROWED_ACTION_REASON =
+            "Lake Formation accepts only SELECT on column-restricted (TABLE_WITH_COLUMNS) resources.";
+
     private final Map<String, SourcePolicyAdapter> adapterRegistry;
     private final PrincipalMapper principalMapper;
     private final CatalogResolver catalogResolver;
@@ -373,17 +386,17 @@ public class RangerToCedarConverter {
                     adapter.getServiceType(),
                     new ArrayList<>(unrecognizedAccessTypes)));
         }
-        // Separate gap for narrowed (not dropped) access types: the grant still lands, just with
-        // fewer permissions than requested, which needs different wording than "dropped" above.
+        // Separate gap type from KNOWN_UNMAPPABLE_ACTION: the grant still lands, just narrowed
+        // to a weaker permission, which is a different (and non-alarming) situation than an
+        // access type having no Lake Formation equivalent at all and being dropped entirely.
         if (!narrowedAccessTypes.isEmpty()) {
             gapReporter.recordGap(new GapEntry(
-                    policyId, policyName, GapType.KNOWN_UNMAPPABLE_ACTION, null,
+                    policyId, policyName, GapType.NARROWED_ACTION, null,
                     "Access type(s) " + String.join(", ", narrowedAccessTypes)
-                            + " on a column-restricted resource were narrowed to SELECT — Lake "
-                            + "Formation accepts only SELECT on TABLE_WITH_COLUMNS resources.",
-                    "No action required — Lake Formation rejects ALL on a column-restricted "
-                            + "grant, so the narrowing to SELECT is intentional and preserves as "
-                            + "much of the original grant as Lake Formation allows.",
+                            + " were narrowed to " + NARROWED_ACTION_TARGET
+                            + " on column-restricted resources — " + NARROWED_ACTION_REASON,
+                    "No action needed unless broader column-level access is required, in which "
+                            + "case grant at the table level instead of restricting to columns.",
                     adapter.getServiceType(),
                     new ArrayList<>(narrowedAccessTypes)));
         }

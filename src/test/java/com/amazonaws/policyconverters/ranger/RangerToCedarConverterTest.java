@@ -910,15 +910,15 @@ class RangerToCedarConverterTest {
                 "'grant' is deliberately unmapped, so it must not be actionable");
     }
 
-    // --- Column-scoped 'all' narrowing (§5): SELECT lands, one KNOWN_UNMAPPABLE_ACTION gap ---
+    // --- Column-scoped 'all' narrowing (§5): SELECT lands, one NARROWED_ACTION gap ---
 
     @Test
     void columnScopedAll_producesSelectStatementAndOneNarrowingGap() {
         // Lake Formation rejects ALL on a TableWithColumns resource (verified against the live
         // API). The adapter narrows the raw {ALL} mapping to {SELECT} for a column-scoped
-        // resource; this is reported as KNOWN_UNMAPPABLE_ACTION (informational, non-demoting)
-        // rather than silently dropped or conflated with the "has no LF equivalent" wording used
-        // for genuinely unmappable access types like Hive's "index".
+        // resource; this is reported as its own NARROWED_ACTION gap type (informational,
+        // non-demoting) rather than silently dropped or conflated with KNOWN_UNMAPPABLE_ACTION's
+        // "has no LF equivalent, dropped" wording, which does not apply here — the grant lands.
         RangerPolicy policy = buildHivePolicyWithAccess("mydb", "events", "salary", "all");
 
         CedarPolicySet result = hiveConverter.convert(List.of(policy));
@@ -930,8 +930,10 @@ class RangerToCedarConverterTest {
         assertFalse(cedarText.contains("\"ALL\""));
 
         List<GapEntry> gaps = gapReporter.getReport().getEntries();
+        assertTrue(gaps.stream().noneMatch(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION),
+                "narrowing must not be reported as KNOWN_UNMAPPABLE_ACTION — the grant is not dropped");
         List<GapEntry> narrowingGaps = gaps.stream()
-                .filter(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION)
+                .filter(g -> g.getGapType() == GapType.NARROWED_ACTION)
                 .collect(java.util.stream.Collectors.toList());
         assertEquals(1, narrowingGaps.size(), "exactly one narrowing gap, not conflated with others");
         assertTrue(narrowingGaps.get(0).getDetails().contains("narrowed"),
@@ -943,7 +945,8 @@ class RangerToCedarConverterTest {
     void columnScopedAll_narrowingGapIsSeparateFromGenuinelyUnmappableAccessTypeGap() {
         // A policy that has BOTH a column-scoped 'all' (narrowed) AND a genuinely unmappable
         // access type (e.g. Hive 'index', dropped entirely) must not conflate the two into one
-        // gap entry — they have different meanings and different remediation advice.
+        // gap entry, and must use different gap types — they have different meanings and
+        // different remediation advice.
         RangerPolicy policy = buildHivePolicyWithAccess("mydb", "events", "salary", "all");
         RangerPolicyItemAccess indexAccess = new RangerPolicyItemAccess();
         indexAccess.setType("index");
@@ -958,10 +961,13 @@ class RangerToCedarConverterTest {
         List<GapEntry> knownUnmappableGaps = gaps.stream()
                 .filter(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION)
                 .collect(java.util.stream.Collectors.toList());
-        assertEquals(2, knownUnmappableGaps.size(),
-                "the narrowing gap and the 'index' dropped-entirely gap must stay separate entries");
-        assertTrue(knownUnmappableGaps.stream().anyMatch(g -> g.getDetails().contains("narrowed")));
-        assertTrue(knownUnmappableGaps.stream().anyMatch(g -> g.getDetails().contains("dropped")));
+        List<GapEntry> narrowedGaps = gaps.stream()
+                .filter(g -> g.getGapType() == GapType.NARROWED_ACTION)
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals(1, knownUnmappableGaps.size(), "'index' is dropped entirely — its own gap");
+        assertEquals(1, narrowedGaps.size(), "'all' narrowing — a separate gap, separate type");
+        assertTrue(narrowedGaps.get(0).getDetails().contains("narrowed"));
+        assertTrue(knownUnmappableGaps.get(0).getDetails().contains("dropped"));
     }
 
     @Test
@@ -974,7 +980,7 @@ class RangerToCedarConverterTest {
 
         assertEquals(0, result.getPermitCount(), "column-scoped 'alter' must still produce no statements");
         assertTrue(gapReporter.getReport().getEntries().stream()
-                        .noneMatch(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION),
+                        .noneMatch(g -> g.getGapType() == GapType.NARROWED_ACTION),
                 "no narrowing gap should fire for an access type that was never ALL");
     }
 
