@@ -111,6 +111,47 @@ table. Sequence the commits so no intermediate commit regresses.
 Update the existing comment, which currently asserts "LF TABLE_WITH_COLUMNS only supports SELECT" —
 that is the claim being corrected.
 
+#### §4a — widen `isTwcPerm`, or §4 introduces a false over-grant
+
+`isTwcPerm` at `:486-490` currently requires the permission to be exactly `SELECT`:
+
+```java
+private static boolean isTwcPerm(SimulatorPermission p) {
+    return "TABLE_WITH_COLUMNS".equals(p.resourceType())
+            && "SELECT".equals(p.permission())
+            && !p.resourceId().endsWith(".*");
+}
+```
+
+Pass 3 (`:133-177`) uses that predicate, plus `"TABLE".equals(p.resourceType())`, to sort every
+permission into `twcMinId` or `tableMinId` before applying the TABLE/TWC coexistence rule — a rule
+the class comment states holds "regardless of which permissions are involved", mirroring
+`SyncService.detectAndGapTableTwcConflicts`.
+
+Once §4 lands, a column-scoped `all` produces `(TABLE_WITH_COLUMNS, ALL)`. That satisfies **neither**
+branch at `:140-147`, so it enters neither map, never reaches `conflictKeys`, and is silently exempt
+from conflict resolution. Concretely: if the same `(principal, table)` also has a TABLE-level grant
+from another policy — precisely what Pass 3 exists to resolve — the `ALL` entry survives no matter
+which policy id wins, where the equivalent `(TABLE_WITH_COLUMNS, SELECT)` entry would correctly be
+removed. That is a false **over**-grant, introduced by §4.
+
+Fix: drop the permission check so any non-wildcard `TABLE_WITH_COLUMNS` entry is TWC-class.
+
+```java
+private static boolean isTwcPerm(SimulatorPermission p) {
+    // Any permission, not just SELECT: a column-scoped `all` yields (TABLE_WITH_COLUMNS, ALL),
+    // and the TABLE/TWC coexistence rule is permission-independent.
+    return "TABLE_WITH_COLUMNS".equals(p.resourceType())
+            && !p.resourceId().endsWith(".*");
+}
+```
+
+This must land in the **same commit** as §4. §4 alone is a regression.
+
+Add a test: a column-scoped `all` policy coexisting with a TABLE-level grant on the same
+`(principal, table)` from a different policy id, asserting the conflict is resolved exactly as the
+`SELECT` equivalent would be.
+
 ### 5. Read `url` as a data-location key
 
 `extractResourceSpecs` reads `datalocation` at `:351-353` and emits
@@ -149,6 +190,7 @@ Unit tests in the simulator project, one per divergence:
 | **Column-scoped `all` policy** | yields `(TABLE_WITH_COLUMNS, ALL)`, not zero permissions — covers divergence #6 |
 | Column-scoped `insert`/`alter` policy | still yields **nothing** — confirms §4 widened the filter to `{SELECT, ALL}` only, and did not remove it |
 | **Trino `grant`, `revoke`, `execute`, `impersonate`** | contribute **no** permissions — guards the deliberate omission in §2 |
+| **Column-scoped `all` + TABLE grant on the same (principal, table)** | conflict resolved identically to the `SELECT` equivalent — covers §4a |
 
 Each test must be observed failing before the corresponding change, with two exceptions to label
 explicitly as regression guards rather than red-green tests:
@@ -188,7 +230,17 @@ a table we wrote from the same reading of the adapters.
 | File | Change |
 |---|---|
 | `simulator/src/main/java/.../validator/ExpectedPermissionsComputer.java` | All four changes |
-| `simulator/src/test/java/.../validator/ExpectedPermissionsComputerTest.java` | New tests |
+| `simulator/src/test/java/.../validator/ExpectedPermissionsComputerTest.java` | New tests, **and rewrite `columnLevelGrantProducesOnlySelect` (`:781-793`) in place** |
+
+### One existing test must be rewritten, not supplemented
+
+`ExpectedPermissionsComputerTest.columnLevelGrantProducesOnlySelect` (`:781-793`) is exactly the
+divergence-#6 shape: `service="lakeformation"`, access `"all"`, column-scoped. It asserts
+`assertEquals("SELECT", perm.permission())`, which becomes `ALL` after §1 and §4.
+
+Rewrite it in place — rename it, flip the assertion, and update the stale section comment at
+`:776-778` ("LF TABLE_WITH_COLUMNS only supports SELECT"). Do **not** add the new column-`all` test
+alongside it, or the suite ends up with two tests asserting opposite results for identical input.
 
 ## Follow-ups not in this spec
 
