@@ -75,6 +75,25 @@ class RangerServiceAdapterTest {
     }
 
     @Test
+    void allOnColumnResourceLevel_narrowsToSelect_notAllOrEmpty() {
+        // Verified against the live Lake Formation API (account 106567286946, us-west-2,
+        // 2026-09-30): a TableWithColumns grant carrying ALL is rejected with
+        // InvalidInputException; the same grant with SELECT succeeds. Filtering {ALL} through
+        // {SELECT} alone would yield empty (the adapter maps "all" -> {ALL} first, then filters),
+        // so this must be an explicit narrowing, not just a tightened filter set.
+        assertEquals(Set.of("SELECT"), adapter.mapAccessTypeToCedarActions("all", "column"));
+    }
+
+    @Test
+    void insertAndAlterOnColumnResourceLevel_stillYieldNothing() {
+        // The narrowing above must not have widened the column filter for other access types.
+        assertTrue(adapter.mapAccessTypeToCedarActions("update", "column").isEmpty(),
+                "update (-> INSERT) must still be filtered out at column level");
+        assertTrue(adapter.mapAccessTypeToCedarActions("alter", "column").isEmpty(),
+                "alter must still be filtered out at column level");
+    }
+
+    @Test
     void datalocationMapsToDATA_LOCATION_ACCESS() {
         assertEquals(Set.of("DATA_LOCATION_ACCESS"), adapter.mapAccessTypeToCedarActions("datalocation"));
     }

@@ -265,12 +265,17 @@ class PrestoServiceAdapterTest {
     }
 
     @Test
-    void allMapsToLfAllAtEveryResourceLevel() {
+    void allMapsToLfAllAtTableAndSchemaLevel_narrowsToSelectAtColumnLevel() {
         // 97 policies in the customer's Trino export grant "all". It was absent from
         // ACTION_MAPPING, so every one of them silently produced zero LF permissions.
+        //
+        // Rewritten in place: this test previously asserted "all" -> ALL at column level too.
+        // That was wrong — verified against the live Lake Formation API (account
+        // 106567286946, us-west-2, 2026-09-30), a TableWithColumns grant carrying ALL is
+        // rejected with InvalidInputException, while the same grant with SELECT succeeds.
         assertEquals(Set.of("ALL"), adapter.mapAccessTypeToCedarActions("all"));
         assertEquals(Set.of("ALL"), adapter.mapAccessTypeToCedarActions("all", "table"));
-        assertEquals(Set.of("ALL"), adapter.mapAccessTypeToCedarActions("all", "column"));
+        assertEquals(Set.of("SELECT"), adapter.mapAccessTypeToCedarActions("all", "column"));
         assertEquals(Set.of("ALL"), adapter.mapAccessTypeToCedarActions("all", "schema"));
     }
 

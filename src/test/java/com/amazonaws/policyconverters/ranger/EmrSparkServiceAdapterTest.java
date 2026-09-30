@@ -174,4 +174,18 @@ class EmrSparkServiceAdapterTest {
         assertEquals(Set.of("ALTER"),
                 adapter.mapAccessTypeToCedarActions("alter", "database"));
     }
+
+    @Test
+    void twoArg_columnLevel_all_narrowsToSelect_notAllOrEmpty() {
+        // Lake Formation rejects ALL on a TableWithColumns resource (verified against the live
+        // API). "all" maps to {ALL} first, so filtering through {SELECT} alone would yield
+        // empty; this must be an explicit narrowing.
+        assertEquals(Set.of("SELECT"), adapter.mapAccessTypeToCedarActions("all", "column"));
+    }
+
+    @Test
+    void twoArg_columnLevel_update_stillYieldsNothing() {
+        assertTrue(adapter.mapAccessTypeToCedarActions("update", "column").isEmpty(),
+                "update (-> INSERT) must still be filtered out at column level");
+    }
 }

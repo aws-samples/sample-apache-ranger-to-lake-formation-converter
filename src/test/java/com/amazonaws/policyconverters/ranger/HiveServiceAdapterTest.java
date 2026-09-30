@@ -3,6 +3,9 @@ package com.amazonaws.policyconverters.ranger;
 import com.amazonaws.policyconverters.lakeformation.AwsContext;
 import org.junit.jupiter.api.Test;
 
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -46,5 +49,19 @@ class HiveServiceAdapterTest {
     @Test
     void nullAccessTypeIsNotKnownUnmappable() {
         assertFalse(adapter.isKnownUnmappableAccessType(null));
+    }
+
+    @Test
+    void allOnColumnResourceLevel_narrowsToSelect_notAllOrEmpty() {
+        // Lake Formation rejects ALL on a TableWithColumns resource (verified against the live
+        // API). The adapter maps "all" -> {ALL} first, so filtering through {SELECT} alone would
+        // yield empty; this must be an explicit narrowing.
+        assertEquals(Set.of("SELECT"), adapter.mapAccessTypeToCedarActions("all", "column"));
+    }
+
+    @Test
+    void updateOnColumnResourceLevel_stillYieldsNothing() {
+        assertTrue(adapter.mapAccessTypeToCedarActions("update", "column").isEmpty(),
+                "update (-> INSERT) must still be filtered out at column level");
     }
 }
