@@ -283,9 +283,21 @@ public class ExpectedPermissionsComputer {
         for (ResourceSpec spec : specs) {
             Set<String> finalPerms;
             if (spec.isColumn()) {
-                // LF TABLE_WITH_COLUMNS only supports SELECT — strip everything else.
-                // INSERT/DELETE/ALTER etc. on a column resource are ignored by the sync service.
-                finalPerms = permissions.contains("SELECT") ? Set.of("SELECT") : Set.of();
+                // Column-scope filter: SELECT and ALL are the only access-type results that
+                // survive here; INSERT/DELETE/ALTER/DROP/DESCRIBE on a column resource are still
+                // dropped (the sync service ignores them for column-scoped resources). ALL is
+                // included because "all" passes through as ALL (see lfMap/trinoMap above) and
+                // this oracle mirrors that access-type mapping unconditionally, including at
+                // column scope — the column-scope narrowing of ALL to SELECT is a separate,
+                // production-only fix (RangerServiceAdapter et al.) driven by a live Lake
+                // Formation API rejection of ALL on TableWithColumns, not by this mapping layer.
+                if (permissions.contains("ALL")) {
+                    finalPerms = Set.of("ALL");
+                } else if (permissions.contains("SELECT")) {
+                    finalPerms = Set.of("SELECT");
+                } else {
+                    finalPerms = Set.of();
+                }
             } else {
                 // Filter to permissions valid at this resource level, mirroring the production
                 // service adapters (e.g. TrinoServiceAdapter.TABLE_VALID_ACTIONS /
@@ -347,7 +359,18 @@ public class ExpectedPermissionsComputer {
 
     private List<ResourceSpec> extractResourceSpecs(JsonNode resources, Set<String> permissions) {
         List<ResourceSpec> specs = new ArrayList<>();
-        // Data location
+        // Data location. "url" is read before "datalocation" to match production's
+        // determineResourceLevel (RangerToCedarConverter), which checks "url" first. No bundled
+        // servicedef declares both keys on the same policy, so the ordering cannot actually
+        // diverge between the two implementations in practice — matched anyway so the two do not
+        // differ for a reason nobody can later reconstruct. "url" is used by amazon-emr-trino.json
+        // and amazon-emr-spark.json; "datalocation" by lakeformation/hive.
+        if (hasNonEmptyResource(resources, "url")) {
+            for (String path : resourceValues(resources, "url")) {
+                specs.add(new ResourceSpec("DATA_LOCATION", path, false));
+            }
+            return specs;
+        }
         if (hasNonEmptyResource(resources, "datalocation")) {
             for (String path : resourceValues(resources, "datalocation")) {
                 specs.add(new ResourceSpec("DATA_LOCATION", path, false));
@@ -559,7 +582,13 @@ public class ExpectedPermissionsComputer {
         lfMap.put("create",               Set.of("CREATE_TABLE"));
         lfMap.put("read",                 Set.of("SELECT"));
         lfMap.put("write",                Set.of("INSERT"));
-        lfMap.put("all",                  Set.of("SELECT", "INSERT", "DELETE", "ALTER", "DROP", "DESCRIBE"));
+        // "all" -> LF ALL: passes through rather than expanding to a fixed subset, matching
+        // hiveMap below and the decision recorded in DESIGN.md ("Why 'all' maps to LF ALL").
+        // Ranger's impliedGrants for "all" include privileges LF cannot express at all (Hive's
+        // index/lock/repladmin/serviceadmin/refresh; Presto/Trino's grant/revoke/impersonate/
+        // execute), so a faithful expansion is impossible; ALL is the closer translation of
+        // "everything".
+        lfMap.put("all",                  Set.of("ALL"));
         lfMap.put("datalocation",         Set.of("DATA_LOCATION_ACCESS"));
         lfMap.put("data_location_access", Set.of("DATA_LOCATION_ACCESS"));
 
@@ -587,6 +616,14 @@ public class ExpectedPermissionsComputer {
         trinoMap.put("alter",  Set.of("ALTER"));
         trinoMap.put("use",    Set.of("DESCRIBE"));
         trinoMap.put("show",   Set.of("DESCRIBE"));
+        trinoMap.put("all",    Set.of("ALL"));
+        trinoMap.put("update", Set.of("INSERT"));
+        trinoMap.put("read",   Set.of("SELECT"));
+        trinoMap.put("write",  Set.of("INSERT"));
+        // Deliberately still absent: "grant", "revoke", "execute", "impersonate". These are
+        // declared known-unmappable by TrinoServiceAdapter/PrestoServiceAdapter. An access type
+        // missing from this map falls through accessMap.get(type) as null and contributes no
+        // permission, which is the required behaviour — do NOT "complete" the map with them.
 
         // Matches EmrSparkServiceAdapter.CATALOG_ACTION_MAPPING exactly.
         // "all" intentionally absent: it maps to LF ALL which ListPermissions returns
@@ -604,6 +641,11 @@ public class ExpectedPermissionsComputer {
         result.put("lakeformation",   Collections.unmodifiableMap(lfMap));
         result.put("hive",            Collections.unmodifiableMap(hiveMap));
         result.put("trino",           Collections.unmodifiableMap(trinoMap));
+        // PrestoServiceAdapter and TrinoServiceAdapter are line-for-line identical in their
+        // action mappings, so sharing one map is correct here and avoids two tables drifting
+        // apart. (Previously "presto" was unregistered entirely, which meant Presto policies
+        // fell back to lfMap wholesale — see divergence #4 in the design spec.)
+        result.put("presto",          Collections.unmodifiableMap(trinoMap));
         result.put("amazon-emr-spark", Collections.unmodifiableMap(emrSparkMap));
         return Collections.unmodifiableMap(result);
     }
