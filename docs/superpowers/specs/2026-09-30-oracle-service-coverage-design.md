@@ -225,6 +225,33 @@ here — the unit tests in this spec are what prove the mapping — but it shoul
 natural follow-on, otherwise this work is only covered by unit tests that assert the oracle matches
 a table we wrote from the same reading of the adapters.
 
+## Open question for implementation: Rule B and column-scoped `ALL`
+
+Widening `isTwcPerm` per §4a makes a `(TABLE_WITH_COLUMNS, ALL)` entry participate in Pass 3's
+**Rule B** (`:162-165`): "table-level SELECT subsumes the TWC → drop only the TWC."
+
+That rule is sound when the TWC permission is `SELECT` — a column subset of a table-wide `SELECT`
+grant is genuinely redundant. It is **not obviously sound** when the TWC permission is `ALL`, since
+`ALL` on specific columns is not subsumed by `SELECT` on the whole table.
+
+Whether this matters depends on a fact about Lake Formation that cannot be determined by reading
+this repo: does LF treat `(TABLE_WITH_COLUMNS, ALL)` as meaningfully broader than
+`(TABLE_WITH_COLUMNS, SELECT)`? Column-restricted resources plausibly only support read semantics,
+in which case the two are equivalent and Rule B is fine as-is — which may be exactly why the
+original code hardcoded `SELECT`.
+
+Two candidate resolutions:
+
+1. **Leave Rule B alone.** Assumes `ALL` and `SELECT` are equivalent on a column-restricted
+   resource. Simplest, and consistent with the pre-existing code's implicit assumption.
+2. **Restrict Rule B to `SELECT` TWC entries**, so a column-scoped `ALL` is resolved by Rule A
+   (lowest policy id wins) rather than being dropped as subsumed. More conservative — never drops a
+   permission on a subsumption argument that may not hold.
+
+**Do not decide this silently during implementation.** Resolve it explicitly, and if option 1 is
+chosen, record the assumption in a comment so the next reader knows it was considered rather than
+overlooked. Verifying against a real LF account would settle it definitively.
+
 ## Files
 
 | File | Change |
