@@ -32,16 +32,18 @@ Established by reading the current source, not assumed:
 | 3 | `read`, `write`, `update` on `trino` | absent from `trinoMap` | mapped to `SELECT`, `INSERT`, `INSERT` | False under-grants. `read`/`write` are real (used on `url` policies in `amazon-emr-trino.json`); `update` is declared by **neither** bundled Trino servicedef and is code-parity only |
 | 4 | `presto` service type | **not registered** at `:604-607` | `PrestoServiceAdapter` fully supported | Narrower than it looks: `accessMapForService` (`:536-546`) falls unregistered services back to `lfMap` wholesale, and `lfMap` happens to share most keys with `PrestoServiceAdapter`. So `select/insert/delete/create/drop/alter/read/write` already work **by coincidence**. What genuinely breaks: `use`/`show` (Presto maps both to `DESCRIBE`; `lfMap` has no such keys, so they return null and vanish), plus `all` inheriting divergence #1's wrong expansion |
 | 5 | `url` resource key | only `datalocation` is read (`:351-353`) | `url` → `DATA_LOCATION_ACCESS` | False under-grants on every `url` policy. Scope note: only `amazon-emr-trino.json` and `amazon-emr-spark.json` declare a `url` resource; the standalone `trino.json`/`presto.json` do not |
-| 6 | **`ALL` at column level** | `:285-288` hardcodes `permissions.contains("SELECT") ? Set.of("SELECT") : Set.of()` | All five adapters use `COLUMN_VALID_ACTIONS = Set.of("SELECT", "ALL")` and emit `(TABLE_WITH_COLUMNS, ALL)` | A column-scoped `all` policy yields **zero** oracle permissions while the converter grants `ALL`. Latent today; becomes reachable the moment §1/§2 make `all` map to `{ALL}` |
 
 Note that `hiveMap.put("all", Set.of("ALL"))` is **already correct** — the expansion problem is
 confined to `lfMap`.
 
-Divergence #6 was found during spec review. It is the only one that is *created* rather than merely
-exposed by this spec's other changes: today a column-level `all` produces the six-permission
-expansion, which contains `SELECT`, so the oracle emits `SELECT` and coincidentally half-agrees.
-Once `all` maps to `{ALL}`, `permissions.contains("SELECT")` is false and the oracle emits nothing.
-Fixing #1 and #2 without #6 would therefore make the oracle *worse* for column-scoped policies.
+**Divergence #6 was withdrawn.** An earlier revision claimed the oracle's SELECT-only column
+filter diverged from the adapters' `COLUMN_VALID_ACTIONS = {SELECT, ALL}`. Direct testing against
+the Lake Formation API (account 106567286946, us-west-2, 2026-09-30) showed the **adapters** are
+wrong, not the oracle: a `TableWithColumns` grant carrying `ALL` is rejected with
+`InvalidInputException: Permissions modification is invalid`, while the same grant with `SELECT`
+succeeds. Retested with the control revoked and on an untouched column — rejected identically all
+three times. The oracle's SELECT-only filter was correct all along, so §4/§4a are gone and a
+production fix (§6) takes their place.
 
 ## Design
 
@@ -83,76 +85,7 @@ result.put("presto", Collections.unmodifiableMap(trinoMap));
 mappings, so sharing one map is correct and avoids two tables drifting apart. Add a comment saying
 so, since sharing looks like an accident otherwise.
 
-### 4. Accept `ALL` at column level
-
-At `:285-288` the column branch reads:
-
-```java
-finalPerms = permissions.contains("SELECT") ? Set.of("SELECT") : Set.of();
-```
-
-Replace the hardcoded SELECT-only filter with the same `{SELECT, ALL}` set the production adapters
-use, so a column-scoped `all` policy yields `ALL` rather than nothing:
-
-```java
-// LF TABLE_WITH_COLUMNS accepts SELECT and ALL — mirrors COLUMN_VALID_ACTIONS in every
-// production adapter. INSERT/DELETE/ALTER on a column resource remain ignored.
-finalPerms = permissions.stream()
-        .filter(COLUMN_VALID_PERMISSIONS::contains)
-        .collect(Collectors.toUnmodifiableSet());
-```
-
-with `private static final Set<String> COLUMN_VALID_PERMISSIONS = Set.of("SELECT", "ALL");`.
-
-Note this is the one change that must land **together with** §1 and §2, not after: fixing `all`
-without fixing this makes column-scoped policies worse, for the reason given under the divergence
-table. Sequence the commits so no intermediate commit regresses.
-
-Update the existing comment, which currently asserts "LF TABLE_WITH_COLUMNS only supports SELECT" —
-that is the claim being corrected.
-
-#### §4a — widen `isTwcPerm`, or §4 introduces a false over-grant
-
-`isTwcPerm` at `:486-490` currently requires the permission to be exactly `SELECT`:
-
-```java
-private static boolean isTwcPerm(SimulatorPermission p) {
-    return "TABLE_WITH_COLUMNS".equals(p.resourceType())
-            && "SELECT".equals(p.permission())
-            && !p.resourceId().endsWith(".*");
-}
-```
-
-Pass 3 (`:133-177`) uses that predicate, plus `"TABLE".equals(p.resourceType())`, to sort every
-permission into `twcMinId` or `tableMinId` before applying the TABLE/TWC coexistence rule — a rule
-the class comment states holds "regardless of which permissions are involved", mirroring
-`SyncService.detectAndGapTableTwcConflicts`.
-
-Once §4 lands, a column-scoped `all` produces `(TABLE_WITH_COLUMNS, ALL)`. That satisfies **neither**
-branch at `:140-147`, so it enters neither map, never reaches `conflictKeys`, and is silently exempt
-from conflict resolution. Concretely: if the same `(principal, table)` also has a TABLE-level grant
-from another policy — precisely what Pass 3 exists to resolve — the `ALL` entry survives no matter
-which policy id wins, where the equivalent `(TABLE_WITH_COLUMNS, SELECT)` entry would correctly be
-removed. That is a false **over**-grant, introduced by §4.
-
-Fix: drop the permission check so any non-wildcard `TABLE_WITH_COLUMNS` entry is TWC-class.
-
-```java
-private static boolean isTwcPerm(SimulatorPermission p) {
-    // Any permission, not just SELECT: a column-scoped `all` yields (TABLE_WITH_COLUMNS, ALL),
-    // and the TABLE/TWC coexistence rule is permission-independent.
-    return "TABLE_WITH_COLUMNS".equals(p.resourceType())
-            && !p.resourceId().endsWith(".*");
-}
-```
-
-This must land in the **same commit** as §4. §4 alone is a regression.
-
-Add a test: a column-scoped `all` policy coexisting with a TABLE-level grant on the same
-`(principal, table)` from a different policy id, asserting the conflict is resolved exactly as the
-`SELECT` equivalent would be.
-
-### 5. Read `url` as a data-location key
+### 4. Read `url` as a data-location key
 
 `extractResourceSpecs` reads `datalocation` at `:351-353` and emits
 `new ResourceSpec("DATA_LOCATION", path, false)`. Extend it to treat `url` the same way, mirroring
@@ -167,6 +100,72 @@ One inconsistency to acknowledge rather than leave implicit: production's `deter
 existing `schema`→`database` fallback pattern checks the primary key first. Since no servicedef
 declares both, the orders cannot diverge in practice — but match production's `url`-first ordering
 anyway, so the two implementations do not differ for a reason nobody can later reconstruct.
+
+### 5. Production fix: narrow column-scoped `all` to `SELECT`
+
+Not an oracle change — a live converter defect found while verifying the withdrawn divergence #6.
+
+**Verified API behaviour** (account 106567286946, us-west-2, 2026-09-30):
+
+| Grant | Result |
+|---|---|
+| `TableWithColumns` + `SELECT` | accepted |
+| `TableWithColumns` + `ALL` | `InvalidInputException: Permissions modification is invalid` |
+| same, control revoked first | rejected identically |
+| same, on a column never granted | rejected identically |
+
+So `ALL` is invalid on a column-restricted resource. Two code comments already asserted this
+(`LakeFormationClient.java:259`, `SyncService.java:1018` — "TWC grants are SELECT-only"); the
+`COLUMN_VALID_ACTIONS = Set.of("SELECT", "ALL")` constant in all five adapters contradicted them.
+
+**Current behaviour, both under-grants, neither an escalation.** Nothing folds TWC permissions onto
+the TABLE resource: `losingOps` is a removal set filtered out at `SyncService:1072`, and
+`CedarToLFConverter`'s merge key includes both resource and permission set by design (`:243`).
+
+1. Column-scoped `all` alone → `(TWC, ALL)` → LF rejects → dead-letter. Policy grants nothing.
+2. Column-scoped `all` plus a TABLE `SELECT` from another policy → Rule B discards the whole TWC op
+   → policy grants nothing, silently, no dead-letter entry.
+
+**Fix — map, do not filter.** Changing `COLUMN_VALID_ACTIONS` to `Set.of("SELECT")` alone is
+**wrong**: the adapters map `all` → `{ALL}` first, so filtering `{ALL}` through `{SELECT}` yields
+*empty* and the policy still produces nothing. The column branch must map explicitly:
+
+```java
+if ("column".equals(resourceLevel)) {
+    Set<String> raw = mapAccessTypeToCedarActions(sourceAccessType);
+    if (raw.contains("ALL")) {
+        // LF rejects ALL on a column-restricted resource (verified against the API). Narrow to
+        // the one permission LF accepts here rather than dropping the grant entirely.
+        return Collections.singleton("SELECT");
+    }
+    return raw.stream().filter(COLUMN_VALID_ACTIONS::contains)
+              .collect(java.util.stream.Collectors.toSet());
+}
+```
+
+with `COLUMN_VALID_ACTIONS = Set.of("SELECT")`. Apply to all five adapters
+(`RangerServiceAdapter`, `HiveServiceAdapter`, `TrinoServiceAdapter`, `PrestoServiceAdapter`,
+`EmrSparkServiceAdapter`).
+
+This repairs both cases: case 1's grant now lands, and case 2's TWC entry becomes a genuine `SELECT`
+that a table-wide `SELECT` legitimately subsumes — making Rule B's stated justification true again.
+
+**Report the narrowing as `KNOWN_UNMAPPABLE_ACTION`.** Reuse the existing type rather than adding
+one: it is informational and non-demoting, which is the property that matters. Detect it in
+`RangerToCedarConverter.extractCedarActions` by comparing the raw and level-aware mappings — raw
+contains `ALL` while the level-aware result is `{SELECT}` means narrowing occurred. No adapter API
+change needed.
+
+Semantic stretch to acknowledge in the details text: the existing wording for this gap type says
+access types "have no Lake Formation equivalent and were dropped", which is not quite true here —
+`all` was *narrowed*, not dropped. Word this entry specifically, e.g. "Access type 'all' on a
+column-restricted resource was narrowed to SELECT — Lake Formation accepts only SELECT on
+TABLE_WITH_COLUMNS resources."
+
+**Priority note: unreachable in current data.** Scanned `Dev_Ranger_Hive_Policies.json`,
+`Dev_Ranger_Trino_Policies.json` and the 6,000-policy `Ranger_Policies_sample.json` — **zero**
+policies use specific column names at all, let alone with `all`. This is a latent correctness fix,
+not a live incident. It is on this branch because it came out of the same investigation.
 
 ### What this does not change
 
@@ -190,7 +189,9 @@ Unit tests in the simulator project, one per divergence:
 | **Column-scoped `all` policy** | yields `(TABLE_WITH_COLUMNS, ALL)`, not zero permissions — covers divergence #6 |
 | Column-scoped `insert`/`alter` policy | still yields **nothing** — confirms §4 widened the filter to `{SELECT, ALL}` only, and did not remove it |
 | **Trino `grant`, `revoke`, `execute`, `impersonate`** | contribute **no** permissions — guards the deliberate omission in §2 |
-| **Column-scoped `all` + TABLE grant on the same (principal, table)** | conflict resolved identically to the `SELECT` equivalent — covers §4a |
+| **Column-scoped `all` (adapter, §5)** | maps to `SELECT`, **not** empty — guards against the filter-only mistake |
+| Column-scoped `insert`/`alter` (adapter, §5) | still yield nothing — the filter was narrowed, not removed |
+| Column-scoped `all` end-to-end | produces `(TABLE_WITH_COLUMNS, SELECT)` and one `KNOWN_UNMAPPABLE_ACTION` gap recording the narrowing |
 
 Each test must be observed failing before the corresponding change, with two exceptions to label
 explicitly as regression guards rather than red-green tests:
@@ -225,38 +226,14 @@ here — the unit tests in this spec are what prove the mapping — but it shoul
 natural follow-on, otherwise this work is only covered by unit tests that assert the oracle matches
 a table we wrote from the same reading of the adapters.
 
-## Open question for implementation: Rule B and column-scoped `ALL`
-
-Widening `isTwcPerm` per §4a makes a `(TABLE_WITH_COLUMNS, ALL)` entry participate in Pass 3's
-**Rule B** (`:162-165`): "table-level SELECT subsumes the TWC → drop only the TWC."
-
-That rule is sound when the TWC permission is `SELECT` — a column subset of a table-wide `SELECT`
-grant is genuinely redundant. It is **not obviously sound** when the TWC permission is `ALL`, since
-`ALL` on specific columns is not subsumed by `SELECT` on the whole table.
-
-Whether this matters depends on a fact about Lake Formation that cannot be determined by reading
-this repo: does LF treat `(TABLE_WITH_COLUMNS, ALL)` as meaningfully broader than
-`(TABLE_WITH_COLUMNS, SELECT)`? Column-restricted resources plausibly only support read semantics,
-in which case the two are equivalent and Rule B is fine as-is — which may be exactly why the
-original code hardcoded `SELECT`.
-
-Two candidate resolutions:
-
-1. **Leave Rule B alone.** Assumes `ALL` and `SELECT` are equivalent on a column-restricted
-   resource. Simplest, and consistent with the pre-existing code's implicit assumption.
-2. **Restrict Rule B to `SELECT` TWC entries**, so a column-scoped `ALL` is resolved by Rule A
-   (lowest policy id wins) rather than being dropped as subsumed. More conservative — never drops a
-   permission on a subsumption argument that may not hold.
-
-**Do not decide this silently during implementation.** Resolve it explicitly, and if option 1 is
-chosen, record the assumption in a comment so the next reader knows it was considered rather than
-overlooked. Verifying against a real LF account would settle it definitively.
-
 ## Files
 
 | File | Change |
 |---|---|
-| `simulator/src/main/java/.../validator/ExpectedPermissionsComputer.java` | All four changes |
+| `simulator/src/main/java/.../validator/ExpectedPermissionsComputer.java` | §1–§4 (oracle) |
+| `src/main/java/.../ranger/{Ranger,Hive,Trino,Presto,EmrSpark}ServiceAdapter.java` | §5 column-level `all` → `SELECT` |
+| `src/main/java/.../ranger/RangerToCedarConverter.java` | §5 narrowing gap detection |
+| `src/test/java/.../ranger/*AdapterTest.java`, `RangerToCedarConverterTest.java` | §5 tests |
 | `simulator/src/test/java/.../validator/ExpectedPermissionsComputerTest.java` | New tests, **and rewrite `columnLevelGrantProducesOnlySelect` (`:781-793`) in place** |
 
 ### One existing test must be rewritten, not supplemented
