@@ -24,6 +24,7 @@ public class AssessmentResult {
     private final List<LFPermissionOperation> projectedOperations;
     private final List<PolicyGapSummary> policyGapSummaries;
     private final List<KnownUnmappableActionSummary> knownUnmappableActions;
+    private final List<NarrowedActionSummary> narrowedActions;
 
     @JsonCreator
     public AssessmentResult(
@@ -38,7 +39,8 @@ public class AssessmentResult {
             @JsonProperty("warnings") List<String> warnings) {
         this(totalPolicies, fullyConvertible, partiallyConvertible, notConvertible,
                 projectedGrantCount, gapReport, source, services, warnings,
-                Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyList(),
+                Collections.emptyList());
     }
 
     public AssessmentResult(
@@ -54,6 +56,25 @@ public class AssessmentResult {
             List<LFPermissionOperation> projectedOperations,
             List<PolicyGapSummary> policyGapSummaries,
             List<KnownUnmappableActionSummary> knownUnmappableActions) {
+        this(totalPolicies, fullyConvertible, partiallyConvertible, notConvertible,
+                projectedGrantCount, gapReport, source, services, warnings, projectedOperations,
+                policyGapSummaries, knownUnmappableActions, Collections.emptyList());
+    }
+
+    public AssessmentResult(
+            int totalPolicies,
+            int fullyConvertible,
+            int partiallyConvertible,
+            int notConvertible,
+            int projectedGrantCount,
+            GapReport gapReport,
+            String source,
+            List<AssessedService> services,
+            List<String> warnings,
+            List<LFPermissionOperation> projectedOperations,
+            List<PolicyGapSummary> policyGapSummaries,
+            List<KnownUnmappableActionSummary> knownUnmappableActions,
+            List<NarrowedActionSummary> narrowedActions) {
         this.totalPolicies = totalPolicies;
         this.fullyConvertible = fullyConvertible;
         this.partiallyConvertible = partiallyConvertible;
@@ -69,6 +90,8 @@ public class AssessmentResult {
                 ? Collections.unmodifiableList(policyGapSummaries) : Collections.emptyList();
         this.knownUnmappableActions = knownUnmappableActions != null
                 ? Collections.unmodifiableList(knownUnmappableActions) : Collections.emptyList();
+        this.narrowedActions = narrowedActions != null
+                ? Collections.unmodifiableList(narrowedActions) : Collections.emptyList();
     }
 
     public String getSource()                    { return source; }
@@ -93,5 +116,10 @@ public class AssessmentResult {
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     public List<KnownUnmappableActionSummary> getKnownUnmappableActions() {
         return knownUnmappableActions;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    public List<NarrowedActionSummary> getNarrowedActions() {
+        return narrowedActions;
     }
 }

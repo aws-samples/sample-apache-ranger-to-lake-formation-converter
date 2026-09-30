@@ -58,8 +58,12 @@ public class AssessmentReporter {
         GAP_EXPLANATIONS.put(GapEntry.GapType.UNSUPPORTED_ACTION,
                 "One or more Ranger access types have no LF permission equivalent and will be dropped.");
         GAP_EXPLANATIONS.put(GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION,
-                "Access types with no Lake Formation equivalent by design; dropped, and not counted "
-                        + "against convertibility. See the rollup below.");
+                "Access types with no Lake Formation equivalent by design; dropped entirely, and "
+                        + "not counted against convertibility. See the rollup below.");
+        GAP_EXPLANATIONS.put(GapEntry.GapType.NARROWED_ACTION,
+                "Access types that were mapped but narrowed to a weaker LF permission on "
+                        + "column-restricted resources; the grant still lands, and this is not "
+                        + "counted against convertibility. See the rollup below.");
         GAP_EXPLANATIONS.put(GapEntry.GapType.UNMAPPED_RESOURCE,
                 "Resource paths cannot be mapped to LF data locations (HDFS/file:// not supported; see details below).");
         GAP_EXPLANATIONS.put(GapEntry.GapType.SCHEMA_VALIDATION_FAILURE,
@@ -211,6 +215,20 @@ public class AssessmentReporter {
                 }
             }
 
+            List<NarrowedActionSummary> narrowed = result.getNarrowedActions();
+            if (!narrowed.isEmpty()) {
+                out.println();
+                out.println("Narrowed access types (informational — converted to the closest "
+                        + "permission Lake Formation can express):");
+                for (NarrowedActionSummary row : narrowed) {
+                    out.printf("  %-24s — %7d %s%n",
+                            row.getServiceType() + ": " + row.getAccessType() + " → " + row.getNarrowedTo(),
+                            row.getOccurrenceCount(),
+                            row.getOccurrenceCount() == 1 ? "policy" : "policies");
+                    out.println("     " + row.getReason());
+                }
+            }
+
             // Per-policy breakdown grouped by policy. Collapsed known-unmappable rollup entries
             // (policyId == null) are excluded — they are already shown in their own rollup
             // section above and must not create an "<unknown>" pseudo-policy here. Policy-scoped
@@ -218,7 +236,8 @@ public class AssessmentReporter {
             // console view matches the gaps file.
             Map<String, List<GapEntry>> byPolicy = new LinkedHashMap<>();
             for (GapEntry entry : result.getGapReport().getEntries()) {
-                if (entry.getGapType() == GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION
+                if ((entry.getGapType() == GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION
+                        || entry.getGapType() == GapEntry.GapType.NARROWED_ACTION)
                         && entry.getPolicyId() == null) {
                     continue;
                 }
@@ -252,7 +271,8 @@ public class AssessmentReporter {
         Path parent = outputPath.toAbsolutePath().getParent();
         if (parent != null) Files.createDirectories(parent);
         objectMapper.writeValue(outputPath.toFile(), new GapsFileOutput(
-                result.getPolicyGapSummaries(), result.getKnownUnmappableActions()));
+                result.getPolicyGapSummaries(), result.getKnownUnmappableActions(),
+                result.getNarrowedActions()));
         LOG.info("Gap report written to {}", outputPath.toAbsolutePath());
     }
 

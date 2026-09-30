@@ -408,4 +408,62 @@ class AssessmentRunnerTest {
                 .allMatch(g -> "7".equals(g.getPolicyId())),
                 "the reason must be the policy-scoped entry, not the collapsed one");
     }
+
+    // ---- helpers/tests for narrowed-action gap (column-scoped 'all' -> SELECT) ----
+
+    private RangerPolicy hivePolicyColumnScopedAll(long id, String name) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(id);
+        policy.setName(name);
+        policy.setService("hive");
+        policy.setIsEnabled(true);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        resources.put("database", new RangerPolicyResource("db1"));
+        resources.put("table", new RangerPolicyResource("table1"));
+        resources.put("column", new RangerPolicyResource("salary"));
+        policy.setResources(resources);
+
+        RangerPolicyItem item = new RangerPolicyItem();
+        item.setAccesses(List.of(access("all")));
+        item.setUsers(List.of("alice"));
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
+
+    @Test
+    void columnScopedAllNarrowingIsRolledUpAndFullyConvertible() {
+        AssessmentResult result = runAssessment(
+                hivePolicyColumnScopedAll(10L, "narrowed-a"),
+                hivePolicyColumnScopedAll(11L, "narrowed-b"));
+
+        // Fully convertible — the grant lands (narrowed to SELECT), narrowing is non-demoting.
+        assertEquals(2, result.getFullyConvertible());
+        assertEquals(0, result.getPartiallyConvertible());
+        assertEquals(0, result.getNotConvertible());
+
+        // Never reported as KNOWN_UNMAPPABLE_ACTION.
+        assertTrue(result.getGapReport().getEntries().stream()
+                        .noneMatch(g -> g.getGapType() == GapType.KNOWN_UNMAPPABLE_ACTION),
+                "narrowing must not be reported as KNOWN_UNMAPPABLE_ACTION");
+
+        // Rollup carries narrowedTo and reason.
+        List<NarrowedActionSummary> narrowed = result.getNarrowedActions();
+        assertEquals(1, narrowed.size());
+        NarrowedActionSummary row = narrowed.get(0);
+        assertEquals("hive", row.getServiceType());
+        assertEquals("all", row.getAccessType());
+        assertEquals(2, row.getOccurrenceCount());
+        assertEquals("SELECT", row.getNarrowedTo());
+        assertNotNull(row.getReason());
+        assertTrue(row.getReason().toLowerCase().contains("select"));
+
+        // A narrowed-only policy does not appear in the gaps file's per-policy array — it is
+        // fully convertible, and the rollup above is the operator's only trace of the narrowing.
+        assertTrue(result.getPolicyGapSummaries().isEmpty());
+
+        // Collapsed report entry is not policy-scoped.
+        assertTrue(result.getGapReport().getEntries().stream()
+                .filter(g -> g.getGapType() == GapType.NARROWED_ACTION)
+                .allMatch(g -> g.getPolicyId() == null));
+    }
 }

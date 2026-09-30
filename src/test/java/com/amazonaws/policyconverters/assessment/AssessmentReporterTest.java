@@ -198,6 +198,69 @@ class AssessmentReporterTest {
     }
 
     @Test
+    void printsNarrowedActionRollupAsItsOwnSection() {
+        AssessmentResult result = resultWithNarrowed(List.of(
+                new NarrowedActionSummary("hive", "all", 1, List.of("9001"), "SELECT",
+                        "Lake Formation accepts only SELECT on column-restricted "
+                                + "(TABLE_WITH_COLUMNS) resources.")));
+
+        String output = capture(result);
+
+        assertTrue(output.contains("Narrowed access types"));
+        assertTrue(output.contains("hive: all → SELECT"));
+        assertTrue(output.contains("1 policy"));
+        assertTrue(output.contains("Lake Formation accepts only SELECT"));
+    }
+
+    @Test
+    void narrowedActionRollupCountIsPluralizedCorrectly() {
+        String output = capture(resultWithNarrowed(List.of(
+                new NarrowedActionSummary("hive", "all", 1, List.of("1"), "SELECT", "reason"),
+                new NarrowedActionSummary("trino", "all", 4, List.of("2"), "SELECT", "reason"))));
+
+        assertTrue(output.contains("1 policy"), "singular count must read \"1 policy\"");
+        assertTrue(output.contains("4 policies"), "plural count must read \"policies\"");
+    }
+
+    @Test
+    void narrowedActionsAreNotListedInThePerPolicyBreakdown() {
+        AssessmentResult result = resultWithNarrowed(List.of(
+                new NarrowedActionSummary("hive", "all", 5, List.of("1"), "SELECT", "reason")));
+
+        String output = capture(result);
+
+        assertFalse(output.contains("Policies with gaps"),
+                "no actionable gaps means no per-policy breakdown");
+    }
+
+    @Test
+    void gapsFileIncludesNarrowedActionsKey(@TempDir Path tmp) throws Exception {
+        Path gapsPath = tmp.resolve("gaps.json");
+        AssessmentResult result = resultWithNarrowed(List.of(
+                new NarrowedActionSummary("hive", "all", 1, List.of("9001"), "SELECT", "reason")));
+
+        new AssessmentReporter().report(result, configWithGapsPath(gapsPath),
+                new PrintStream(new ByteArrayOutputStream()));
+
+        JsonNode root = new ObjectMapper().readTree(gapsPath.toFile());
+        assertEquals("all", root.get("narrowedActions").get(0).get("accessType").asText());
+        assertEquals("SELECT", root.get("narrowedActions").get(0).get("narrowedTo").asText());
+    }
+
+    @Test
+    void gapsFileOmitsNarrowedActionsKeyWhenThereAreNoNarrowedActions(@TempDir Path tmp)
+            throws Exception {
+        Path gapsPath = tmp.resolve("gaps.json");
+        AssessmentResult result = buildResult(5, 5, 0, 0, 10, List.of(), null, List.of());
+
+        new AssessmentReporter().report(result, configWithGapsPath(gapsPath),
+                new PrintStream(new ByteArrayOutputStream()));
+
+        JsonNode root = new ObjectMapper().readTree(gapsPath.toFile());
+        assertFalse(root.has("narrowedActions"));
+    }
+
+    @Test
     void gapsFileIsAnObjectWithPoliciesAndKnownUnmappableRollup(@TempDir Path tmp)
             throws Exception {
         Path gapsPath = tmp.resolve("gaps.json");
@@ -287,6 +350,25 @@ class AssessmentReporterTest {
         GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
         return new AssessmentResult(5, 5, 0, 0, 10, gapReport,
                 "ranger-admin:http://localhost:6080", List.of(), List.of(), List.of(), List.of(), rollup);
+    }
+
+    /**
+     * Builds an AssessmentResult whose collapsed gap report contains one NARROWED_ACTION entry
+     * per rollup row (policyId == null, as the real collapsed report produces them) alongside
+     * the rollup itself.
+     */
+    private AssessmentResult resultWithNarrowed(List<NarrowedActionSummary> rollup) {
+        List<GapEntry> entries = new java.util.ArrayList<>();
+        for (NarrowedActionSummary row : rollup) {
+            entries.add(new GapEntry(null, null, GapType.NARROWED_ACTION, null,
+                    row.getServiceType() + ": " + row.getAccessType() + " narrowed to "
+                            + row.getNarrowedTo() + " in " + row.getOccurrenceCount() + " policies",
+                    "no action needed", row.getServiceType(), List.of(row.getAccessType())));
+        }
+        GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
+        return new AssessmentResult(5, 5, 0, 0, 10, gapReport,
+                "ranger-admin:http://localhost:6080", List.of(), List.of(), List.of(), List.of(),
+                List.of(), rollup);
     }
 
     private String capture(AssessmentResult result) {
