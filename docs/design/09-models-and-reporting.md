@@ -16,21 +16,29 @@ Immutable record of a single unsupported Ranger feature.
 
 **Fields:** `policyId`, `policyName`, `gapType (GapEntry.GapType)`, `resourcePath`, `details`, `recommendation`, `serviceType`, `accessTypes (List<String>)`.
 
-`serviceType` and `accessTypes` are populated only for the two action-related gap types
-(`UNSUPPORTED_ACTION`, `KNOWN_UNMAPPABLE_ACTION`); null/absent (`@JsonInclude(NON_NULL)`) for the
-other fifteen. `accessTypes` replaces a former single `accessType` string — one entry is now
-built per `(policy, gapType)`, conflating every affected access type for that policy into one
-sorted list, rather than one entry per access type.
+`serviceType` and `accessTypes` are populated only for the three action-related gap types
+(`UNSUPPORTED_ACTION`, `KNOWN_UNMAPPABLE_ACTION`, `NARROWED_ACTION`); null/absent
+(`@JsonInclude(NON_NULL)`) for the other fifteen. `accessTypes` replaces a former single
+`accessType` string — one entry is now built per `(policy, gapType)`, conflating every affected
+access type for that policy into one sorted list, rather than one entry per access type.
 
-### `GapType` enum (17 values)
+### `GapType` enum (18 values)
 
-`DATA_MASKING`, `TAG_BASED_POLICY`, `DENY_POLICY`, `DENY_EXCEPTION`, `VALIDITY_SCHEDULE`, `CUSTOM_CONDITION`, `SECURITY_ZONE`, `DELEGATED_ADMIN`, `WILDCARD_PATTERN`, `UNSUPPORTED_SERVICE_TYPE`, `UNSUPPORTED_ACTION`, `KNOWN_UNMAPPABLE_ACTION`, `UNMAPPED_RESOURCE`, `SCHEMA_VALIDATION_FAILURE`, `UNREGISTERED_S3_LOCATION`, `CANNOT_VALIDATE_S3_LOCATION`, `EXCLUDES_PATTERN`.
+`DATA_MASKING`, `TAG_BASED_POLICY`, `DENY_POLICY`, `DENY_EXCEPTION`, `VALIDITY_SCHEDULE`, `CUSTOM_CONDITION`, `SECURITY_ZONE`, `DELEGATED_ADMIN`, `WILDCARD_PATTERN`, `UNSUPPORTED_SERVICE_TYPE`, `UNSUPPORTED_ACTION`, `KNOWN_UNMAPPABLE_ACTION`, `NARROWED_ACTION`, `UNMAPPED_RESOURCE`, `SCHEMA_VALIDATION_FAILURE`, `UNREGISTERED_S3_LOCATION`, `CANNOT_VALIDATE_S3_LOCATION`, `EXCLUDES_PATTERN`.
 
-`KNOWN_UNMAPPABLE_ACTION` is informational — never demotes a policy's convertibility
-classification. `UNSUPPORTED_ACTION` is now restricted to access types no adapter recognises at
-all (an adapter coverage gap); access types an adapter recognises but deliberately never maps
-(Lake Formation has no equivalent) go to `KNOWN_UNMAPPABLE_ACTION` instead, via
-`SourcePolicyAdapter.getKnownUnmappableAccessTypes()` / `isKnownUnmappableAccessType(String)`.
+`KNOWN_UNMAPPABLE_ACTION` and `NARROWED_ACTION` are both informational — neither demotes a
+policy's convertibility classification. `UNSUPPORTED_ACTION` is restricted to access types no
+adapter recognises at all (an adapter coverage gap); access types an adapter recognises but
+deliberately never maps (Lake Formation has no equivalent at all) go to `KNOWN_UNMAPPABLE_ACTION`
+instead, via `SourcePolicyAdapter.getKnownUnmappableAccessTypes()` /
+`isKnownUnmappableAccessType(String)`. `NARROWED_ACTION` is different again: the access type
+*is* mapped, but to a weaker LF permission than the raw mapping would produce at that resource
+level — currently, column-scoped `all` narrowed to `SELECT` because Lake Formation rejects `ALL`
+on a `TABLE_WITH_COLUMNS` resource (verified against the live API). `RangerToCedarConverter`
+detects this in `extractCedarActions()` by comparing the level-aware mapping against the raw
+(level-unaware) mapping for the same access type, and accumulates it in a separate
+`narrowedAccessTypes` set from `knownUnmappableAccessTypes` so the two are never conflated into
+one gap entry with contradictory wording (dropped vs. narrowed-but-landed).
 
 ---
 
@@ -53,6 +61,31 @@ entry per row (`policyId: null`), to keep the file bounded on large estates. Bec
 `GapReport.computeSummary` counts entries, `gapReport.summary`'s `KNOWN_UNMAPPABLE_ACTION` count
 after collapsing is the number of distinct `(serviceType, accessType)` pairs, not the occurrence
 count — that lives in `KnownUnmappableActionSummary.occurrenceCount`.
+
+---
+
+## `assessment/NarrowedActionSummary.java`
+
+Per-`(serviceType, accessType)` rollup of `NARROWED_ACTION` occurrences, built by
+`AssessmentRunner.buildNarrowedActionRollup()` and exposed via
+`AssessmentResult.getNarrowedActions()` (`@JsonInclude(NON_EMPTY)`). Structurally a sibling of
+`KnownUnmappableActionSummary` (deliberately not unified with it — see the follow-up spec) with
+two extra fields:
+
+**Fields:** `serviceType (String)`, `accessType (String)`, `occurrenceCount (int)`,
+`samplePolicyIds (List<String>)` (capped at `SAMPLE_LIMIT`, 10) — same semantics as
+`KnownUnmappableActionSummary` — plus `narrowedTo (String)`, the LF permission actually granted
+(currently always `"SELECT"`), and `reason (String)`, why the broader permission could not be
+granted (currently always the `TABLE_WITH_COLUMNS`/`ALL` explanation). Both values are read from
+`RangerToCedarConverter.NARROWED_ACTION_TARGET` / `NARROWED_ACTION_REASON` — public constants
+next to the emission site — rather than re-derived or hardcoded independently in the assessment
+layer, so the two layers cannot drift apart on the explanation text.
+
+This rollup exists specifically because a policy affected only by narrowing is fully convertible
+(narrowing is non-demoting) and therefore does not appear in the gaps file's per-policy
+`policies` array at all — the rollup is the operator's only trace of the narrowing for such a
+policy. `AssessmentRunner.collapseNarrowedActionEntries()` collapses per-policy `NARROWED_ACTION`
+entries the same way `collapseKnownUnmappableEntries()` does.
 
 ---
 

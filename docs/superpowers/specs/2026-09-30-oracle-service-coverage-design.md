@@ -150,17 +150,43 @@ with `COLUMN_VALID_ACTIONS = Set.of("SELECT")`. Apply to all five adapters
 This repairs both cases: case 1's grant now lands, and case 2's TWC entry becomes a genuine `SELECT`
 that a table-wide `SELECT` legitimately subsumes — making Rule B's stated justification true again.
 
-**Report the narrowing as `KNOWN_UNMAPPABLE_ACTION`.** Reuse the existing type rather than adding
-one: it is informational and non-demoting, which is the property that matters. Detect it in
-`RangerToCedarConverter.extractCedarActions` by comparing the raw and level-aware mappings — raw
-contains `ALL` while the level-aware result is `{SELECT}` means narrowing occurred. No adapter API
-change needed.
+**Correction (2026-09-30, follow-up):** the plan below — reusing `KNOWN_UNMAPPABLE_ACTION` — is
+what was actually built first (commits `cf92fbf`, `8ba7125`, `5bf4d41`, `be7dce7`), and it turned
+out to be the wrong call in practice. A dedicated `GapType.NARROWED_ACTION` was introduced
+immediately after (same day) to replace it. Keeping the original reasoning below for the record,
+followed by why it changed.
+
+**Original plan: report the narrowing as `KNOWN_UNMAPPABLE_ACTION`.** Reuse the existing type
+rather than adding one: it is informational and non-demoting, which is the property that
+matters. Detect it in `RangerToCedarConverter.extractCedarActions` by comparing the raw and
+level-aware mappings — raw contains `ALL` while the level-aware result is `{SELECT}` means
+narrowing occurred. No adapter API change needed.
 
 Semantic stretch to acknowledge in the details text: the existing wording for this gap type says
 access types "have no Lake Formation equivalent and were dropped", which is not quite true here —
 `all` was *narrowed*, not dropped. Word this entry specifically, e.g. "Access type 'all' on a
 column-restricted resource was narrowed to SELECT — Lake Formation accepts only SELECT on
 TABLE_WITH_COLUMNS resources."
+
+**Why this changed:** reuse worked at the `GapEntry` level but broke down one layer up. The
+assessment rollup (`KnownUnmappableActionSummary`, `AssessmentRunner.buildKnownUnmappableRollup`,
+the console's "Known-unmappable access types ... no Lake Formation equivalent" section header)
+only carries `(serviceType, accessType, occurrenceCount, samplePolicyIds)` — no field for *why*.
+Feeding a narrowed-but-landed access type into that rollup produced a console section whose own
+header ("no Lake Formation equivalent") contradicted the row directly under it (`hive: all`,
+narrowed not dropped), with no visible explanation of what actually happened. Worse, because
+narrowing is non-demoting and the grant lands, a policy affected only by narrowing is fully
+convertible and never appears in the gaps file's per-policy `policies` array — so the rollup was
+the *only* place the narrowing was ever visible, and that one place was actively misleading.
+
+The fix was a parallel `GapType.NARROWED_ACTION` with its own rollup, `NarrowedActionSummary`,
+carrying two fields `KnownUnmappableActionSummary` does not have: `narrowedTo` (the permission
+actually granted) and `reason` (why the broader permission was rejected). Both are read from
+`RangerToCedarConverter.NARROWED_ACTION_TARGET` / `NARROWED_ACTION_REASON` — constants beside the
+emission site — so the assessment layer never has to (re-)invent or hardcode the explanation
+independently of the code that knows it. `KnownUnmappableActionSummary` itself was deliberately
+left untouched rather than generalised into a shared shape with the new type — see
+`docs/design/09-models-and-reporting.md`.
 
 **Priority note: unreachable in current data.** Scanned `Dev_Ranger_Hive_Policies.json`,
 `Dev_Ranger_Trino_Policies.json` and the 6,000-policy `Ranger_Policies_sample.json` — **zero**
@@ -191,7 +217,7 @@ Unit tests in the simulator project, one per divergence:
 | **Trino `grant`, `revoke`, `execute`, `impersonate`** | contribute **no** permissions — guards the deliberate omission in §2 |
 | **Column-scoped `all` (adapter, §5)** | maps to `SELECT`, **not** empty — guards against the filter-only mistake |
 | Column-scoped `insert`/`alter` (adapter, §5) | still yield nothing — the filter was narrowed, not removed |
-| Column-scoped `all` end-to-end | produces `(TABLE_WITH_COLUMNS, SELECT)` and one `KNOWN_UNMAPPABLE_ACTION` gap recording the narrowing |
+| Column-scoped `all` end-to-end | produces `(TABLE_WITH_COLUMNS, SELECT)` and one `NARROWED_ACTION` gap recording the narrowing (originally `KNOWN_UNMAPPABLE_ACTION`; corrected in the same-day follow-up — see the note above) |
 
 Each test must be observed failing before the corresponding change, with two exceptions to label
 explicitly as regression guards rather than red-green tests:

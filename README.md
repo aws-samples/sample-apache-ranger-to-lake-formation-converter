@@ -1013,19 +1013,26 @@ java -jar target/assessment-jar-with-dependencies.jar \
 
 > **Breaking change:** as of this release, `--output-gaps-path` writes a JSON **object**, not a
 > bare array. Previously the file was `[ {PolicyGapSummary}, ... ]`. It is now
-> `{"policies": [...], "knownUnmappableActions": [...]}`. Nothing in this repository reads the
-> file back, so this only affects external tooling that parses it — update any such scripts to
-> read `.policies` instead of the top-level array.
+> `{"policies": [...], "knownUnmappableActions": [...], "narrowedActions": [...]}`. Nothing in
+> this repository reads the file back, so this only affects external tooling that parses it —
+> update any such scripts to read `.policies` instead of the top-level array.
 
 The `policies` array contains one entry per policy classified as `PARTIALLY_CONVERTIBLE` or
 `NOT_CONVERTIBLE`, each with a `gaps` array describing the specific unsupported features and
 recommendations. `WILDCARD_PATTERN` and `CANNOT_VALIDATE_S3_LOCATION` entries are excluded from
 each policy's `gaps` array so the file focuses on actionable items — a policy whose only gap was
-one of those two types can appear with an empty `gaps` array. `KNOWN_UNMAPPABLE_ACTION` entries
-*are* kept per-policy (they're informational but still worth surfacing per policy).
+one of those two types can appear with an empty `gaps` array. `KNOWN_UNMAPPABLE_ACTION` and
+`NARROWED_ACTION` entries *are* kept per-policy (they're informational but still worth surfacing
+per policy) — though in practice a policy affected *only* by narrowing is fully convertible and
+so will not appear in `policies` at all; the `narrowedActions` rollup is its only trace here.
 
-`knownUnmappableActions` is the per-`(serviceType, accessType)` rollup — see
-[Gap Types](#gap-types) below — and is omitted entirely when empty.
+`knownUnmappableActions` is the per-`(serviceType, accessType)` rollup for access types dropped
+entirely — see [Gap Types](#gap-types) below — and is omitted entirely when empty.
+
+`narrowedActions` is the equivalent rollup for access types that were mapped but narrowed to a
+weaker LF permission (e.g. column-scoped `all` → `SELECT`); each row also carries `narrowedTo`
+(the permission actually granted) and `reason` (why LF could not grant the broader permission).
+Also omitted entirely when empty.
 
 ```json
 {
@@ -1062,6 +1069,16 @@ one of those two types can appear with an empty `gaps` array. `KNOWN_UNMAPPABLE_
       "accessType": "index",
       "occurrenceCount": 1,
       "samplePolicyIds": ["1022"]
+    }
+  ],
+  "narrowedActions": [
+    {
+      "serviceType": "hive",
+      "accessType": "all",
+      "occurrenceCount": 1,
+      "samplePolicyIds": ["9001"],
+      "narrowedTo": "SELECT",
+      "reason": "Lake Formation accepts only SELECT on column-restricted (TABLE_WITH_COLUMNS) resources."
     }
   ]
 }
@@ -1269,7 +1286,7 @@ the number of policies or occurrences. The exact occurrence count per access typ
 
 | Category | Meaning |
 |----------|---------|
-| **Fully convertible** | Policy produces at least one projected LF grant and has zero *actionable* gap entries. Informational gap types — `WILDCARD_PATTERN`, `CANNOT_VALIDATE_S3_LOCATION`, `KNOWN_UNMAPPABLE_ACTION` — never demote a policy out of this bucket, even if it has one or more of them. |
+| **Fully convertible** | Policy produces at least one projected LF grant and has zero *actionable* gap entries. Informational gap types — `WILDCARD_PATTERN`, `CANNOT_VALIDATE_S3_LOCATION`, `KNOWN_UNMAPPABLE_ACTION`, `NARROWED_ACTION` — never demote a policy out of this bucket, even if it has one or more of them. |
 | **Partially convertible** | Policy produces at least one projected LF grant but also has one or more *actionable* gap entries (some features will be silently dropped) |
 | **Not convertible** | Policy produces zero projected LF grants (entirely skipped — all access types unmapped, no principal mappings, or tag/masking policy type) |
 
@@ -1295,7 +1312,8 @@ full JSON report's `gapReport.entries` always show it.)
 | `WILDCARD_PATTERN` | Resource pattern contains wildcards and could not be expanded (no AWS credentials). Informational — does not demote convertibility. |
 | `UNSUPPORTED_SERVICE_TYPE` | No adapter registered for this Ranger service type. In `server` subcommand mode, the entire policy is skipped. In `file` subcommand mode, one gap entry is recorded per skipped service (not per policy), and the `details` field includes the count of bypassed policies. |
 | `UNSUPPORTED_ACTION` | An access type **no adapter recognises at all** — a coverage gap in this tool (a new Ranger release, a custom access type). The action is dropped; other actions in the policy continue. This is actionable and demotes convertibility. A service adapter's deliberately-unmapped access types (Lake Formation genuinely has no equivalent) are reported as `KNOWN_UNMAPPABLE_ACTION` instead, not here. |
-| `KNOWN_UNMAPPABLE_ACTION` | An access type a service adapter recognises but deliberately never maps, because Lake Formation has no equivalent concept — e.g. Hive `index`/`lock`/`refresh`/`repladmin`/`serviceadmin`/`tempudfadmin`; Presto/Trino `grant`/`revoke`/`execute`/`impersonate`. Purely informational: it never demotes a policy's convertibility. Conflated per policy (one entry lists every affected access type for that policy) and, in the JSON report, collapsed further into one entry per `(serviceType, accessType)` — see [JSON Report Format](#json-report-format) and the `knownUnmappableActions` rollup. |
+| `KNOWN_UNMAPPABLE_ACTION` | An access type a service adapter recognises but deliberately never maps to anything, because Lake Formation has no equivalent concept at all — e.g. Hive `index`/`lock`/`refresh`/`repladmin`/`serviceadmin`/`tempudfadmin`; Presto/Trino `grant`/`revoke`/`execute`/`impersonate`. The access type is dropped entirely — no grant results from it. Purely informational: it never demotes a policy's convertibility. Conflated per policy (one entry lists every affected access type for that policy) and, in the JSON report, collapsed further into one entry per `(serviceType, accessType)` — see [JSON Report Format](#json-report-format) and the `knownUnmappableActions` rollup. Does **not** cover access types that were narrowed rather than dropped — see `NARROWED_ACTION` below. |
+| `NARROWED_ACTION` | An access type that Lake Formation **does** have an equivalent for, but only a weaker one at the resource level in play — currently, column-scoped `all` is narrowed to `SELECT` because Lake Formation rejects `ALL` on a `TABLE_WITH_COLUMNS` resource. The grant still lands; it is just narrower than the Ranger policy requested. Purely informational: it never demotes a policy's convertibility. A policy affected only by narrowing is fully convertible and will not appear in the gaps file's per-policy `policies` array — the `narrowedActions` rollup (which carries `narrowedTo` and `reason`) is the only trace of it. Conflated per policy and collapsed per `(serviceType, accessType)` the same way as `KNOWN_UNMAPPABLE_ACTION`. |
 | `UNMAPPED_RESOURCE` | Resource ID cannot be mapped to an LF resource. The resource is skipped. |
 | `SCHEMA_VALIDATION_FAILURE` | A Cedar statement failed schema validation and was excluded. Valid statements in the same policy are retained. |
 | `UNREGISTERED_S3_LOCATION` | An S3 prefix referenced by the policy is not covered by a registered Lake Formation data location. Reported by the assessment tool when S3 Access Grants validation is enabled. |
