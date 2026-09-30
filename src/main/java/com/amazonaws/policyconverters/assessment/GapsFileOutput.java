@@ -18,16 +18,27 @@ public class GapsFileOutput {
 
     private final List<PolicyGapSummary> policies;
     private final List<KnownUnmappableActionSummary> knownUnmappableActions;
+    private final List<NarrowedActionSummary> narrowedActions;
+
+    public GapsFileOutput(
+            List<PolicyGapSummary> policies,
+            List<KnownUnmappableActionSummary> knownUnmappableActions) {
+        this(policies, knownUnmappableActions, Collections.emptyList());
+    }
 
     @JsonCreator
     public GapsFileOutput(
             @JsonProperty("policies") List<PolicyGapSummary> policies,
             @JsonProperty("knownUnmappableActions")
-                    List<KnownUnmappableActionSummary> knownUnmappableActions) {
+                    List<KnownUnmappableActionSummary> knownUnmappableActions,
+            @JsonProperty("narrowedActions")
+                    List<NarrowedActionSummary> narrowedActions) {
         this.policies = policies != null
                 ? Collections.unmodifiableList(policies) : Collections.emptyList();
         this.knownUnmappableActions = knownUnmappableActions != null
                 ? Collections.unmodifiableList(knownUnmappableActions) : Collections.emptyList();
+        this.narrowedActions = narrowedActions != null
+                ? Collections.unmodifiableList(narrowedActions) : Collections.emptyList();
     }
 
     public List<PolicyGapSummary> getPolicies() { return policies; }
@@ -35,5 +46,10 @@ public class GapsFileOutput {
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     public List<KnownUnmappableActionSummary> getKnownUnmappableActions() {
         return knownUnmappableActions;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    public List<NarrowedActionSummary> getNarrowedActions() {
+        return narrowedActions;
     }
 }

@@ -189,7 +189,9 @@ public class AssessmentRunner {
 
         List<KnownUnmappableActionSummary> knownUnmappable =
                 buildKnownUnmappableRollup(rawGapReport);
+        List<NarrowedActionSummary> narrowed = buildNarrowedActionRollup(rawGapReport);
         GapReport gapReport = collapseKnownUnmappableEntries(rawGapReport, knownUnmappable);
+        gapReport = collapseNarrowedActionEntries(gapReport, narrowed);
 
         return new AssessmentResult(
                 allPolicies.size(),
@@ -203,7 +205,8 @@ public class AssessmentRunner {
                 warnings,
                 ops,
                 convertibility.policyGapSummaries,
-                knownUnmappable);
+                knownUnmappable,
+                narrowed);
     }
 
     /**
@@ -278,6 +281,76 @@ public class AssessmentRunner {
     }
 
     /**
+     * Rolls NARROWED_ACTION entries up to one row per (serviceType, accessType), ordered by
+     * descending occurrence count, mirroring {@link #buildKnownUnmappableRollup}. {@code
+     * narrowedTo} and {@code reason} are carried from the shared constants defined next to the
+     * emission site in {@link com.amazonaws.policyconverters.ranger.RangerToCedarConverter} —
+     * the converter knows why it narrowed, so the rollup does not re-derive or hardcode that
+     * text independently.
+     */
+    private static List<NarrowedActionSummary> buildNarrowedActionRollup(GapReport report) {
+        Map<String, int[]> counts = new LinkedHashMap<>();
+        Map<String, List<String>> samples = new LinkedHashMap<>();
+        Map<String, String[]> keyParts = new LinkedHashMap<>();
+
+        for (GapEntry entry : report.getEntries()) {
+            if (entry.getGapType() != GapType.NARROWED_ACTION) {
+                continue;
+            }
+            List<String> entryAccessTypes = entry.getAccessTypes();
+            if (entryAccessTypes == null) {
+                continue;
+            }
+            for (String accessType : entryAccessTypes) {
+                String key = entry.getServiceType() + " " + accessType;
+                keyParts.putIfAbsent(key, new String[]{entry.getServiceType(), accessType});
+                counts.computeIfAbsent(key, k -> new int[1])[0]++;
+                List<String> sample = samples.computeIfAbsent(key, k -> new ArrayList<>());
+                if (entry.getPolicyId() != null
+                        && sample.size() < NarrowedActionSummary.SAMPLE_LIMIT) {
+                    sample.add(entry.getPolicyId());
+                }
+            }
+        }
+
+        List<NarrowedActionSummary> rollup = new ArrayList<>();
+        for (Map.Entry<String, String[]> e : keyParts.entrySet()) {
+            rollup.add(new NarrowedActionSummary(
+                    e.getValue()[0], e.getValue()[1],
+                    counts.get(e.getKey())[0], samples.get(e.getKey()),
+                    RangerToCedarConverter.NARROWED_ACTION_TARGET,
+                    RangerToCedarConverter.NARROWED_ACTION_REASON));
+        }
+        rollup.sort(Comparator.comparingInt(NarrowedActionSummary::getOccurrenceCount).reversed());
+        return rollup;
+    }
+
+    /**
+     * Returns a copy of {@code report} with NARROWED_ACTION entries replaced by one collapsed
+     * entry per (serviceType, accessType), mirroring {@link #collapseKnownUnmappableEntries}.
+     */
+    private static GapReport collapseNarrowedActionEntries(
+            GapReport report, List<NarrowedActionSummary> rollup) {
+        List<GapEntry> collapsed = new ArrayList<>();
+        for (GapEntry entry : report.getEntries()) {
+            if (entry.getGapType() != GapType.NARROWED_ACTION) {
+                collapsed.add(entry);
+            }
+        }
+        for (NarrowedActionSummary row : rollup) {
+            collapsed.add(new GapEntry(
+                    null, null, GapType.NARROWED_ACTION, null,
+                    "Access type(s) " + row.getAccessType() + " were narrowed to "
+                            + row.getNarrowedTo() + " on column-restricted resources in "
+                            + row.getOccurrenceCount() + " policy item(s) — " + row.getReason(),
+                    "No action needed unless broader column-level access is required, in which "
+                            + "case grant at the table level instead of restricting to columns.",
+                    row.getServiceType(), List.of(row.getAccessType())));
+        }
+        return new GapReport(collapsed, GapReport.computeSummary(collapsed), report.getGeneratedAt());
+    }
+
+    /**
      * Converts the Cedar PolicySet to S3 Access Grants operations.
      * Overridable in tests to inject pre-built operations without the full Ranger pipeline.
      */
@@ -342,7 +415,8 @@ public class AssessmentRunner {
     private static final Set<GapEntry.GapType> NON_DEMOTING_GAP_TYPES = new HashSet<>(Arrays.asList(
             GapEntry.GapType.CANNOT_VALIDATE_S3_LOCATION,
             GapEntry.GapType.WILDCARD_PATTERN,
-            GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION
+            GapEntry.GapType.KNOWN_UNMAPPABLE_ACTION,
+            GapEntry.GapType.NARROWED_ACTION
     ));
 
     // Gap types omitted from the per-policy entries in the gaps output file entirely,
