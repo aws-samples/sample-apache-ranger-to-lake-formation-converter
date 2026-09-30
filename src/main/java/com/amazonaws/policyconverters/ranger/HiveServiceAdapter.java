@@ -115,7 +115,7 @@ public class HiveServiceAdapter implements SourcePolicyAdapter {
 
     private static final Set<String> TABLE_VALID_ACTIONS =
             Set.of("SELECT", "INSERT", "DELETE", "DESCRIBE", "ALTER", "DROP", "ALL");
-    private static final Set<String> COLUMN_VALID_ACTIONS = Set.of("SELECT", "ALL");
+    private static final Set<String> COLUMN_VALID_ACTIONS = Set.of("SELECT");
     private static final Set<String> DATABASE_VALID_ACTIONS =
             Set.of("CREATE_TABLE", "ALTER", "DROP", "DESCRIBE", "ALL");
 
@@ -127,6 +127,12 @@ public class HiveServiceAdapter implements SourcePolicyAdapter {
         }
         Set<String> actions = mapAccessTypeToCedarActions(sourceAccessType);
         if ("column".equals(resourceLevel)) {
+            if (actions.contains("ALL")) {
+                // LF rejects ALL on a column-restricted (TableWithColumns) resource — verified
+                // directly against the API. Narrow to the one permission LF accepts here rather
+                // than dropping the grant entirely.
+                return Collections.singleton("SELECT");
+            }
             return actions.stream()
                     .filter(COLUMN_VALID_ACTIONS::contains)
                     .collect(java.util.stream.Collectors.toSet());
