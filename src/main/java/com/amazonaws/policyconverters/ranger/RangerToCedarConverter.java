@@ -116,6 +116,12 @@ public class RangerToCedarConverter {
         // generation. Sorted for deterministic output.
         Set<String> knownUnmappableAccessTypes = new TreeSet<>();
         Set<String> unrecognizedAccessTypes = new TreeSet<>();
+        // Access types that were mapped but NARROWED at this resource level (currently: a
+        // column-scoped "all" narrowed from {ALL} to {SELECT} because Lake Formation rejects ALL
+        // on a TableWithColumns resource). Kept separate from knownUnmappableAccessTypes: that
+        // accumulator's gap wording says the access type "has no Lake Formation equivalent ...
+        // and were dropped", which is not true here — the grant still lands, just narrowed.
+        Set<String> narrowedAccessTypes = new TreeSet<>();
 
         // Look up adapter by service type
         String serviceType = policy.getService() != null ? policy.getService() : DEFAULT_SERVICE_TYPE;
@@ -300,7 +306,7 @@ public class RangerToCedarConverter {
             for (RangerPolicyItem item : allowItems) {
                 statements.addAll(generateStatements(
                         item, "permit", policyId, adapter, resourceCombinations, null,
-                        knownUnmappableAccessTypes, unrecognizedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes));
             }
         }
 
@@ -310,7 +316,7 @@ public class RangerToCedarConverter {
             for (RangerPolicyItem item : denyItems) {
                 statements.addAll(generateStatements(
                         item, "forbid", policyId, adapter, resourceCombinations, null,
-                        knownUnmappableAccessTypes, unrecognizedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes));
             }
         }
 
@@ -320,7 +326,7 @@ public class RangerToCedarConverter {
             for (RangerPolicyItem item : denyExceptionItems) {
                 statements.addAll(generateStatements(
                         item, "permit", policyId, adapter, resourceCombinations, "denyException",
-                        knownUnmappableAccessTypes, unrecognizedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes));
             }
         }
 
@@ -339,7 +345,7 @@ public class RangerToCedarConverter {
                 }
                 statements.addAll(generateStatements(
                         filterItem, "permit", policyId, adapter, resourceCombinations, filterExpr,
-                        knownUnmappableAccessTypes, unrecognizedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes));
             }
         }
 
@@ -367,6 +373,20 @@ public class RangerToCedarConverter {
                     adapter.getServiceType(),
                     new ArrayList<>(unrecognizedAccessTypes)));
         }
+        // Separate gap for narrowed (not dropped) access types: the grant still lands, just with
+        // fewer permissions than requested, which needs different wording than "dropped" above.
+        if (!narrowedAccessTypes.isEmpty()) {
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.KNOWN_UNMAPPABLE_ACTION, null,
+                    "Access type(s) " + String.join(", ", narrowedAccessTypes)
+                            + " on a column-restricted resource were narrowed to SELECT — Lake "
+                            + "Formation accepts only SELECT on TABLE_WITH_COLUMNS resources.",
+                    "No action required — Lake Formation rejects ALL on a column-restricted "
+                            + "grant, so the narrowing to SELECT is intentional and preserves as "
+                            + "much of the original grant as Lake Formation allows.",
+                    adapter.getServiceType(),
+                    new ArrayList<>(narrowedAccessTypes)));
+        }
 
         return statements;
     }
@@ -387,6 +407,10 @@ public class RangerToCedarConverter {
      * @param unrecognizedAccessTypes accumulator for access types no adapter recognises for this
      *                            policy; drained into one gap entry after all statement
      *                            generation for the policy completes
+     * @param narrowedAccessTypes accumulator for access types that were mapped but narrowed at
+     *                            this resource level (e.g. column-scoped "all" -> SELECT because
+     *                            Lake Formation rejects ALL on TableWithColumns); drained into a
+     *                            separate gap entry after all statement generation completes
      * @return list of Cedar statement strings
      */
     private List<String> generateStatements(RangerPolicyItem item,
@@ -396,7 +420,8 @@ public class RangerToCedarConverter {
                                             List<ResourceCombination> resourceCombinations,
                                             String extraAnnotation,
                                             Set<String> knownUnmappableAccessTypes,
-                                            Set<String> unrecognizedAccessTypes) {
+                                            Set<String> unrecognizedAccessTypes,
+                                            Set<String> narrowedAccessTypes) {
         List<String> statements = new ArrayList<>();
 
         // Resolve principals
@@ -414,7 +439,7 @@ public class RangerToCedarConverter {
             String principalRef = adapter.buildPrincipalRef(principal.arn());
             for (ResourceCombination rc : resourceCombinations) {
                 Set<String> cedarActions = extractCedarActions(item, adapter, rc.resourceLevel,
-                        knownUnmappableAccessTypes, unrecognizedAccessTypes);
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes);
                 if (cedarActions.isEmpty()) continue;
                 for (String action : cedarActions) {
                     StringBuilder sb = new StringBuilder();
@@ -462,7 +487,8 @@ public class RangerToCedarConverter {
     private Set<String> extractCedarActions(RangerPolicyItem item, SourcePolicyAdapter adapter,
                                              String resourceLevel,
                                              Set<String> knownUnmappableAccessTypes,
-                                             Set<String> unrecognizedAccessTypes) {
+                                             Set<String> unrecognizedAccessTypes,
+                                             Set<String> narrowedAccessTypes) {
         if (item.getAccesses() == null || item.getAccesses().isEmpty()) {
             return Collections.emptySet();
         }
@@ -502,6 +528,21 @@ public class RangerToCedarConverter {
                     // If rawMapped is non-empty the type is known but filtered at this resource
                     // level (e.g. SELECT filtered from database level) — intentional, no gap.
                 } else {
+                    // Detect narrowing: the level-aware mapping is non-empty but smaller than
+                    // what the type would map to with no resource-level restriction at all —
+                    // currently only a column-scoped "all", where the raw mapping is {ALL} but
+                    // Lake Formation rejects ALL on a TableWithColumns resource, so the adapter
+                    // narrows to {SELECT}. Distinguish this from ordinary resource-level
+                    // filtering (e.g. SELECT surviving unchanged at table level, or CREATE_TABLE
+                    // legitimately filtered to nothing at table level) by checking specifically
+                    // for the ALL -> non-ALL case, which is the only narrowing the adapters do.
+                    if ("column".equals(resourceLevel)) {
+                        Set<String> rawMapped = adapter.mapAccessTypeToCedarActions(accessType);
+                        if (rawMapped.contains("ALL") && !mapped.contains("ALL")) {
+                            String normalizedAccessType = accessType.trim().toLowerCase();
+                            narrowedAccessTypes.add(normalizedAccessType);
+                        }
+                    }
                     actions.addAll(mapped);
                 }
             }
