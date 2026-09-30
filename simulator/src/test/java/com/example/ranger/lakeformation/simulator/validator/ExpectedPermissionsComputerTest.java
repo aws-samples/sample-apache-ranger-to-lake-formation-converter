@@ -585,23 +585,25 @@ class ExpectedPermissionsComputerTest {
     }
 
     // -----------------------------------------------------------------------
-    // Test 6: "all" access expands to 6 permissions
+    // Test 6: "all" on lakeformation passes through as LF ALL (divergence #1).
+    // Rewritten in place: this test previously asserted the six-permission expansion, which
+    // was the oracle's own bug (RangerServiceAdapter emits ALL; conf/ranger-servicedef-lakeformation
+    // .json declares no "all" access type so this shape has no real-world exposure, but the oracle
+    // must still be internally consistent with hiveMap, which already used ALL).
     // -----------------------------------------------------------------------
 
     @Test
-    void allAccessExpandsToMultiplePermissions() {
+    void lfAllAccessType_expectsSingleAllPermission_notSixPermissionExpansion() {
         JsonNode items = singleItemArray(buildItem("alice", "all", false));
         JsonNode resources = buildTableResources("mydb", "events");
         JsonNode policy = buildPolicy(true, "lakeformation", 0, items, resources);
 
         Set<SimulatorPermission> result = computer.compute(List.of(policy));
 
-        Set<String> permissions = result.stream()
-                .map(SimulatorPermission::permission)
-                .collect(Collectors.toSet());
-        assertEquals(Set.of("SELECT", "INSERT", "DELETE", "ALTER", "DROP", "DESCRIBE"), permissions,
-                "all access should expand to 6 LF permissions");
-        assertEquals(6, result.size(), "Should have exactly 6 SimulatorPermission entries");
+        assertEquals(1, result.size(), "lakeformation 'all' must produce a single ALL permission, "
+                + "not the old six-permission expansion");
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("ALL", perm.permission());
     }
 
     // -----------------------------------------------------------------------
@@ -773,23 +775,43 @@ class ExpectedPermissionsComputerTest {
     }
 
     // -----------------------------------------------------------------------
-    // Test 11: column-level grant produces only SELECT
-    // LF TABLE_WITH_COLUMNS only supports SELECT — all other permissions (INSERT, DELETE,
-    // ALTER, DROP, DESCRIBE) are ignored by the sync service for column-scoped resources.
+    // Test 11: column-level 'all' grant produces ALL, not zero permissions (divergence #6,
+    // withdrawn as an oracle-vs-adapter mismatch after live API verification: TableWithColumns
+    // rejects LF ALL, so a production fix narrows column-scoped 'all' to SELECT — see
+    // RangerServiceAdapter et al. and RangerToCedarConverterTest for that narrowing and its
+    // KNOWN_UNMAPPABLE_ACTION gap). The oracle itself keeps passing 'all' through as ALL,
+    // matching the general all -> ALL decision (§1); INSERT/DELETE/ALTER/DROP/DESCRIBE are still
+    // dropped at column scope (see columnLevelInsertAndAlter_stillProduceNothing below).
     // -----------------------------------------------------------------------
 
     @Test
-    void columnLevelGrantProducesOnlySelect() {
+    void columnLevelAllAccessType_producesAll_notZeroPermissions() {
         JsonNode items = singleItemArray(buildItem("alice", "all", false));
         JsonNode resources = buildColumnResources("mydb", "events", "salary");
         JsonNode policy = buildPolicy(true, "lakeformation", 0, items, resources);
 
         Set<SimulatorPermission> result = computer.compute(List.of(policy));
 
-        assertEquals(1, result.size(), "column-level 'all' should produce exactly 1 permission (SELECT)");
+        assertEquals(1, result.size(), "column-level 'all' should produce exactly 1 permission (ALL)");
         SimulatorPermission perm = result.iterator().next();
         assertEquals("TABLE_WITH_COLUMNS", perm.resourceType());
-        assertEquals("SELECT", perm.permission(), "only SELECT is valid for TABLE_WITH_COLUMNS");
+        assertEquals("ALL", perm.permission(), "'all' passes through as ALL even at column scope");
+    }
+
+    @Test
+    void columnLevelInsertAndAlter_stillProduceNothing() {
+        // Widening the column filter to accept ALL (above) must not have removed the filter
+        // entirely: non-SELECT, non-ALL permissions are still dropped at column scope.
+        JsonNode itemsInsert = singleItemArray(buildItem("alice", "update", false)); // lfMap: update -> INSERT
+        JsonNode resources = buildColumnResources("mydb", "events", "salary");
+        JsonNode policyInsert = buildPolicy(true, "lakeformation", 0, itemsInsert, resources);
+        assertTrue(computer.compute(List.of(policyInsert)).isEmpty(),
+                "column-level INSERT-producing access type should still yield nothing");
+
+        JsonNode itemsAlter = singleItemArray(buildItem("alice", "alter", false));
+        JsonNode policyAlter = buildPolicy(true, "lakeformation", 0, itemsAlter, resources);
+        assertTrue(computer.compute(List.of(policyAlter)).isEmpty(),
+                "column-level ALTER should still yield nothing");
     }
 
     // -----------------------------------------------------------------------
@@ -896,6 +918,122 @@ class ExpectedPermissionsComputerTest {
         assertFalse(result.isEmpty(), "Trino schema key should produce permissions");
         assertTrue(result.stream().anyMatch(p -> p.resourceId().startsWith("analytics.")),
                 "Resource id should use the schema name as the database component");
+    }
+
+    @Test
+    void trinoAllAccessType_expectsSingleAllPermission() {
+        // Divergence #2: trinoMap previously had no "all" entry at all, so a Trino 'all' policy
+        // silently produced zero permissions — a false under-grant against TrinoServiceAdapter,
+        // which emits ALL.
+        String json = "{\"service\":\"trino\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"schema\":{\"values\":[\"mydb\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"all\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+        assertEquals(1, result.size(), "trino 'all' must produce a single ALL permission");
+        assertEquals("ALL", result.iterator().next().permission());
+    }
+
+    @Test
+    void trinoUpdateReadWrite_mapToInsertSelectInsert() {
+        // Divergence #3: update/read/write were absent from trinoMap. read/write are real
+        // (used on Trino "url" policies in amazon-emr-trino.json); update is code-parity only.
+        assertTrue(computeTrinoAccessOnTable("update").stream()
+                        .anyMatch(p -> "INSERT".equals(p.permission())),
+                "trino 'update' must map to INSERT");
+        assertTrue(computeTrinoAccessOnTable("read").stream()
+                        .anyMatch(p -> "SELECT".equals(p.permission())),
+                "trino 'read' must map to SELECT");
+        assertTrue(computeTrinoAccessOnTable("write").stream()
+                        .anyMatch(p -> "INSERT".equals(p.permission())),
+                "trino 'write' must map to INSERT");
+    }
+
+    @Test
+    void trinoGrantRevokeExecuteImpersonate_contributeNoPermissions() {
+        // Deliberately absent from trinoMap: these are declared known-unmappable by
+        // TrinoServiceAdapter. A future reader must not "complete" the map with them.
+        for (String type : List.of("grant", "revoke", "execute", "impersonate")) {
+            Set<SimulatorPermission> result = computeTrinoAccessOnTable(type);
+            assertTrue(result.isEmpty(), "trino '" + type + "' must contribute no permissions");
+        }
+    }
+
+    private Set<SimulatorPermission> computeTrinoAccessOnTable(String accessType) {
+        String json = "{\"service\":\"trino\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"schema\":{\"values\":[\"mydb\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"" + accessType + "\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        return compute(json);
+    }
+
+    // -----------------------------------------------------------------------
+    // Presto service tests (divergence #4: presto was unregistered, falling back to lfMap)
+    // -----------------------------------------------------------------------
+
+    @Test
+    void prestoPolicy_resolvesSameAsIdenticalTrinoPolicy() {
+        String prestoJson = "{\"service\":\"presto\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"schema\":{\"values\":[\"mydb\"],\"isExcludes\":false},"
+                + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"select\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        String trinoJson = prestoJson.replace("\"presto\"", "\"trino\"");
+
+        Set<SimulatorPermission> prestoResult = compute(prestoJson);
+        Set<SimulatorPermission> trinoResult = compute(trinoJson);
+
+        assertFalse(prestoResult.isEmpty());
+        assertEquals(trinoResult, prestoResult,
+                "presto and an identical trino policy must resolve to the same expectation");
+    }
+
+    @Test
+    void prestoUseAndShow_mapToDescribe() {
+        // The case that genuinely breaks today: PrestoServiceAdapter maps both 'use' and 'show'
+        // to DESCRIBE, but the lfMap fallback (used because presto was unregistered) has no such
+        // keys, so they returned null and vanished.
+        for (String type : List.of("use", "show")) {
+            String json = "{\"service\":\"presto\",\"isEnabled\":true,\"policyType\":0,"
+                    + "\"resources\":{\"schema\":{\"values\":[\"mydb\"],\"isExcludes\":false},"
+                    + "              \"table\":{\"values\":[\"t1\"],\"isExcludes\":false}},"
+                    + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                    + "  \"accesses\":[{\"type\":\"" + type + "\",\"isAllowed\":true}],"
+                    + "  \"delegateAdmin\":false}],"
+                    + "\"denyPolicyItems\":[]}";
+            Set<SimulatorPermission> actual = compute(json);
+            assertTrue(actual.stream().anyMatch(p -> "DESCRIBE".equals(p.permission())),
+                    "presto '" + type + "' must map to DESCRIBE");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // "url" resource key (divergence #5)
+    // -----------------------------------------------------------------------
+
+    @Test
+    void urlResourceKey_yieldsDataLocationAccess() {
+        String json = "{\"service\":\"lakeformation\",\"isEnabled\":true,\"policyType\":0,"
+                + "\"resources\":{\"url\":{\"values\":[\"s3://my-bucket/path/\"],\"isExcludes\":false}},"
+                + "\"policyItems\":[{\"users\":[\"alice\"],\"groups\":[],\"roles\":[],"
+                + "  \"accesses\":[{\"type\":\"datalocation\",\"isAllowed\":true}],"
+                + "  \"delegateAdmin\":false}],"
+                + "\"denyPolicyItems\":[]}";
+        Set<SimulatorPermission> result = compute(json);
+
+        assertEquals(1, result.size());
+        SimulatorPermission perm = result.iterator().next();
+        assertEquals("DATA_LOCATION", perm.resourceType());
+        assertEquals("s3://my-bucket/path/", perm.resourceId());
+        assertEquals("DATA_LOCATION_ACCESS", perm.permission());
     }
 
     // -----------------------------------------------------------------------
