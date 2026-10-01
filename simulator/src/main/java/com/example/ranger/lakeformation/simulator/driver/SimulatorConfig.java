@@ -18,6 +18,7 @@ public class SimulatorConfig {
     private static final String DEFAULT_STATUS_HOST = "localhost";
     private static final String DEFAULT_HIVE_SERVICE_NAME      = "hive";
     private static final String DEFAULT_TRINO_SERVICE_NAME     = "trino";
+    private static final String DEFAULT_PRESTO_SERVICE_NAME    = "presto";
     private static final String DEFAULT_EMRFS_SERVICE_NAME     = "amazon-emr-emrfs";
     private static final String DEFAULT_EMR_SPARK_SERVICE_NAME = "amazon-emr-spark";
     private static final String DEFAULT_TAG_SERVICE_NAME       = "cl_tag";
@@ -49,6 +50,7 @@ public class SimulatorConfig {
     private final Map<String, List<String>> databases;
     private final String hiveServiceName;
     private final String trinoServiceName;
+    private final String prestoServiceName;
     private final String emrfsServiceName;
     private final String emrSparkServiceName;
     private final String tagServiceName;
@@ -92,6 +94,7 @@ public class SimulatorConfig {
             @JsonProperty("reproductionBundleDir")   String  reproductionBundleDir,
             @JsonProperty("databases")               Map<String, List<String>> databases,
             @JsonProperty("trinoServiceName")        String  trinoServiceName,
+            @JsonProperty("prestoServiceName")       String  prestoServiceName,
             @JsonProperty("emrfsServiceName")        String  emrfsServiceName,
             @JsonProperty("emrSparkServiceName")     String  emrSparkServiceName,
             @JsonProperty("tagServiceName")          String  tagServiceName,
@@ -120,6 +123,7 @@ public class SimulatorConfig {
         this.databases = databases;
         this.hiveServiceName      = hiveServiceName      != null ? hiveServiceName      : DEFAULT_HIVE_SERVICE_NAME;
         this.trinoServiceName     = trinoServiceName     != null ? trinoServiceName     : DEFAULT_TRINO_SERVICE_NAME;
+        this.prestoServiceName    = prestoServiceName    != null ? prestoServiceName    : DEFAULT_PRESTO_SERVICE_NAME;
         this.emrfsServiceName     = emrfsServiceName     != null ? emrfsServiceName     : DEFAULT_EMRFS_SERVICE_NAME;
         this.emrSparkServiceName  = emrSparkServiceName  != null ? emrSparkServiceName  : DEFAULT_EMR_SPARK_SERVICE_NAME;
         this.tagServiceName       = tagServiceName       != null ? tagServiceName       : DEFAULT_TAG_SERVICE_NAME;
@@ -152,6 +156,7 @@ public class SimulatorConfig {
     public Map<String, List<String>> getDatabases() { return databases; }
     public String       getHiveServiceName()     { return hiveServiceName; }
     public String       getTrinoServiceName()    { return trinoServiceName; }
+    public String       getPrestoServiceName()   { return prestoServiceName; }
     public String       getEmrfsServiceName()    { return emrfsServiceName; }
     public String       getEmrSparkServiceName() { return emrSparkServiceName; }
     public String       getTagServiceName()      { return tagServiceName; }

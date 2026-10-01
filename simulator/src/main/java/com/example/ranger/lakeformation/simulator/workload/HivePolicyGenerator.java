@@ -13,9 +13,12 @@ public class HivePolicyGenerator {
     // create->CREATE_TABLE, drop->DROP, alter->ALTER, read->SELECT, write->INSERT).
     private static final List<String> TABLE_ACCESS_TYPES =
             List.of("select", "update", "create", "drop", "alter", "read", "write");
-    // Column-level policies: only "select" produces an LF grant (TABLE_WITH_COLUMNS SELECT).
-    // Other access types on a column resource are accepted by Ranger but produce no LF permission.
-    private static final List<String> COLUMN_ACCESS_TYPES = List.of("select");
+    // Column-level policies: "select" produces a TABLE_WITH_COLUMNS SELECT grant directly.
+    // "all" is also exercised here — HiveServiceAdapter narrows a column-scoped "all" to SELECT
+    // (LF rejects the ALL permission on a TABLE_WITH_COLUMNS resource) and the sync service
+    // records a NARROWED_ACTION gap for it. Other access types on a column resource are accepted
+    // by Ranger but produce no LF permission.
+    private static final List<String> COLUMN_ACCESS_TYPES = List.of("select", "all");
     private static final List<String> COLUMN_NAMES =
             List.of("id", "name", "value", "created_at", "status", "amount", "category", "region");
     private static final String UNMAPPED_PRINCIPAL = "ghost_user";
@@ -100,13 +103,15 @@ public class HivePolicyGenerator {
     /**
      * Gap 4: Generate a column-level allow policy.
      * Exercises TABLE_WITH_COLUMNS handling: DESCRIBE must be stripped from LF grants.
+     * Picks exactly one access type from {@link #COLUMN_ACCESS_TYPES} ("select" or "all") so
+     * each generated policy exercises one access type cleanly rather than mixing them.
      */
     public Map<String, Object> generateColumnPolicy(String policyId) {
         String db = randomFrom(databases);
         List<String> tables = databaseTables.getOrDefault(db, List.of());
         String table = tables.isEmpty() ? "*" : randomFrom(tables);
         String user = randomFrom(principalNames);
-        List<String> accesses = randomSubset(COLUMN_ACCESS_TYPES, 1 + random.nextInt(2));
+        List<String> accesses = randomSubset(COLUMN_ACCESS_TYPES, 1);
         List<String> columns = randomSubset(COLUMN_NAMES, 1 + random.nextInt(3));
 
         return buildPolicy(policyId, db, table, columns, List.of(user), accesses, false);

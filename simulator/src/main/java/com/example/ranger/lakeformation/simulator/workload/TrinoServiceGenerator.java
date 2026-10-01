@@ -11,7 +11,16 @@ import java.util.*;
  */
 public class TrinoServiceGenerator implements PolicyGenerator {
     private static final List<String> TRINO_ACCESS_TYPES =
-        List.of("select", "insert", "delete", "create", "drop", "alter", "use", "show");
+        // "all" is declared by conf/ranger-servicedef-trino.json (the servicedef this repo
+        // actually installs) and maps to LF ALL via TrinoServiceAdapter, but no generator emitted
+        // it before, so no live run exercised that mapping end-to-end.
+        //
+        // Deliberately NOT included: "read"/"write". TrinoServiceAdapter maps them, but the
+        // installed trino servicedef declares "read_sysinfo"/"write_sysinfo" instead — "read"/
+        // "write" and the "url" resource exist only in conf/ranger-servicedef-amazon-emr-trino.json,
+        // which declares the same servicedef name ("trino") and is never installed by any script.
+        // Emitting them here would author policies Ranger would reject.
+        List.of("select", "insert", "delete", "create", "drop", "alter", "use", "show", "all");
 
     private final Map<String, List<String>> databaseTables;
     private final List<String> databases;

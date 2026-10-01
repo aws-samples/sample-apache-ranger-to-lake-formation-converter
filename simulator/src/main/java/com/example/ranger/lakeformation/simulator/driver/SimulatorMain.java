@@ -99,6 +99,12 @@ public class SimulatorMain {
                 databaseTables, principals, config.getHiveServiceName(), rng);
         TrinoServiceGenerator trinoServiceGenerator = new TrinoServiceGenerator(
                 databaseTables, principals, config.getTrinoServiceName(), rng);
+        // Presto is Trino's predecessor Ranger service type; PrestoServiceAdapter maps access
+        // types identically to TrinoServiceAdapter. Before this generator existed, no workload
+        // authored Presto policies and no "presto" Ranger service instance was provisioned, so
+        // the entire Presto path was untested end-to-end.
+        PrestoServiceGenerator prestoServiceGenerator = new PrestoServiceGenerator(
+                databaseTables, principals, config.getPrestoServiceName(), rng);
         // Data-location policies are registered under the primary LF service name.
         DataLocationPolicyGenerator dataLocationGenerator = new DataLocationPolicyGenerator(
                 config.getS3Prefixes(), principals, config.getRangerServiceName(), rng);
@@ -118,7 +124,8 @@ public class SimulatorMain {
         //   emrspark-*-> amazon-emr-spark service
         //   datalocation/tag -> lakeformation / tag services
         //
-        // "hive-all"/lf-all omitted: the lakeformation Ranger service rejects "all" as an access type.
+        // "lf-all" omitted: the lakeformation Ranger service rejects "all" as an access type.
+        // ("hive-all" is wired below — the hive servicedef does accept "all".)
         List<GeneratorEntry> generators = List.of(
             // LakeFormation-vocabulary policies (target the lakeformation service directly)
             new GeneratorEntry("lf",              lfPolicyGenerator::generateTablePolicy,              15),
@@ -148,6 +155,11 @@ public class SimulatorMain {
             new GeneratorEntry("hive-deny-exc",   hivePolicyGenerator::generateDenyExceptionTablePolicy, 2),
             // Other services
             new GeneratorEntry("trino",           trinoServiceGenerator::generate,                     12),
+            // "url" (external_location) resource — previously no generator emitted this resource
+            // key for any service, so the oracle's "url"-before-"database" matching was unexercised.
+            // Presto — predecessor service type to Trino; previously no generator and no Ranger
+            // "presto" service instance existed, so this path was entirely untested.
+            new GeneratorEntry("presto",           prestoServiceGenerator::generate,                     3),
             new GeneratorEntry("datalocation",    dataLocationGenerator::generate,                      8),
             new GeneratorEntry("tag",             tagPolicyGenerator::generate,                          6),
             new GeneratorEntry("emrfs",           emrfsPolicyGenerator::generate,                        5),
@@ -199,9 +211,9 @@ public class SimulatorMain {
 
         // Scope the validator to the services the sync service actually converts to LF grants.
         // The sync service (server-config-simulator-test.yaml, rangerServices) processes
-        // lakeformation, hive, and trino on every cycle, so all three must be in the oracle's
-        // expected set — otherwise their correctly-synced grants look like over-grants and their
-        // pending grants look like under-grants. EMR Spark stays gated behind validateEmrSpark
+        // lakeformation, hive, trino, and presto on every cycle, so all four must be in the
+        // oracle's expected set — otherwise their correctly-synced grants look like over-grants and
+        // their pending grants look like under-grants. EMR Spark stays gated behind validateEmrSpark
         // because it is only synced when amazon-emr-spark is in the sync service's rangerServices
         // list. EMRFS (S3 Access Grants) is validated separately via S3AgPermissionsFetcher, and
         // tag policies produce no direct LF grants — both are intentionally excluded here.
@@ -209,6 +221,7 @@ public class SimulatorMain {
         managedServiceNames.add(config.getRangerServiceName().toLowerCase(java.util.Locale.ROOT));
         managedServiceNames.add(config.getHiveServiceName().toLowerCase(java.util.Locale.ROOT));
         managedServiceNames.add(config.getTrinoServiceName().toLowerCase(java.util.Locale.ROOT));
+        managedServiceNames.add(config.getPrestoServiceName().toLowerCase(java.util.Locale.ROOT));
         if (config.isValidateEmrSpark()) {
             managedServiceNames.add(config.getEmrSparkServiceName().toLowerCase(java.util.Locale.ROOT));
         }
@@ -350,6 +363,7 @@ public class SimulatorMain {
         names.add(config.getRangerServiceName());
         names.add(config.getHiveServiceName());
         names.add(config.getTrinoServiceName());
+        names.add(config.getPrestoServiceName());
         names.add(config.getEmrfsServiceName());
         names.add(config.getEmrSparkServiceName());
         names.add(config.getTagServiceName());

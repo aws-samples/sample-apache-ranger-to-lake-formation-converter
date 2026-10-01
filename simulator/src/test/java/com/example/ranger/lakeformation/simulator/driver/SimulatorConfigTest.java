@@ -15,7 +15,7 @@ class SimulatorConfigTest {
     void nullFieldsResolveToDefaults() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         assertEquals(60, config.getCycleIntervalSeconds());
         assertEquals("us-east-1", config.getAwsRegion());
@@ -50,7 +50,7 @@ class SimulatorConfigTest {
                 "my-host",
                 "/tmp/bundles",
                 null,
-                null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         assertEquals(120, config.getCycleIntervalSeconds());
         assertEquals("eu-west-1", config.getAwsRegion());
@@ -72,7 +72,7 @@ class SimulatorConfigTest {
         List<String> mutable = new ArrayList<>(List.of("arn:aws:iam::111:role/A"));
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, mutable, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         mutable.add("arn:aws:iam::222:role/B");
 
@@ -84,7 +84,7 @@ class SimulatorConfigTest {
     void toStringContainsRangerAdminUrl() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, "http://ranger-admin:6080", null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         assertTrue(config.toString().contains("rangerAdminUrl"),
                 "toString() should contain 'rangerAdminUrl' for logging diagnostics");
@@ -141,15 +141,23 @@ class SimulatorConfigTest {
     void trinoServiceNameDefaultsToTrino() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         assertEquals("trino", config.getTrinoServiceName());
+    }
+
+    @Test
+    void prestoServiceNameDefaultsToPresto() {
+        SimulatorConfig config = new SimulatorConfig(
+                null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+        assertEquals("presto", config.getPrestoServiceName());
     }
 
     @Test
     void emrfsServiceNameDefaultsToAmazonEmrEmrfs() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         // Default matches the amazon-emr-emrfs service instance name that the sync
         // service's RangerServiceConfig and provision-data-services.sh use.
         assertEquals("amazon-emr-emrfs", config.getEmrfsServiceName());
@@ -159,7 +167,7 @@ class SimulatorConfigTest {
     void emrSparkServiceNameDefaultsToAmazonEmrSpark() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         assertEquals("amazon-emr-spark", config.getEmrSparkServiceName());
     }
 
@@ -167,7 +175,7 @@ class SimulatorConfigTest {
     void tagServiceNameDefaultsToClTag() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         // Default matches the built-in Ranger tag service instance name (cl_tag).
         assertEquals("cl_tag", config.getTagServiceName());
     }
@@ -176,7 +184,7 @@ class SimulatorConfigTest {
     void s3PrefixesDefaultsToSamplePaths() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         assertNotNull(config.getS3Prefixes());
         assertFalse(config.getS3Prefixes().isEmpty());
     }
@@ -184,10 +192,10 @@ class SimulatorConfigTest {
     @Test
     void s3PrefixesIsDefensivelyCopied() {
         List<String> mutable = new ArrayList<>(List.of("s3://bucket/path/"));
-        // s3Prefixes is at position 19 (0-indexed: 18)
+        // s3Prefixes is at position 20 (0-indexed: 19)
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, mutable, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, mutable, null, null, null, null, null, null, null);
         mutable.add("s3://bucket/other/");
         assertEquals(1, config.getS3Prefixes().size(),
                 "Mutating original list must not affect s3Prefixes");
@@ -195,12 +203,15 @@ class SimulatorConfigTest {
 
     @Test
     void explicitServiceNamesOverrideDefaults() {
-        // positions: 15=trinoServiceName, 16=emrfsServiceName, 17=emrSparkServiceName, 18=tagServiceName
+        // positions: 15=trinoServiceName, 16=prestoServiceName, 17=emrfsServiceName,
+        // 18=emrSparkServiceName, 19=tagServiceName
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null,
-                "my-trino", "my-emrfs", "my-emrspark", "my-tag", null, null, null, null, null, null, null, null);
+                "my-trino", "my-presto", "my-emrfs", "my-emrspark", "my-tag",
+                null, null, null, null, null, null, null, null);
         assertEquals("my-trino",    config.getTrinoServiceName());
+        assertEquals("my-presto",   config.getPrestoServiceName());
         assertEquals("my-emrfs",    config.getEmrfsServiceName());
         assertEquals("my-emrspark", config.getEmrSparkServiceName());
         assertEquals("my-tag",      config.getTagServiceName());
@@ -210,10 +221,11 @@ class SimulatorConfigTest {
     void serviceNameDefaultsMatchProvisionedRangerServices() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         // Defaults must match the service instance names provision-data-services.sh installs.
         assertEquals("hive", config.getHiveServiceName());
         assertEquals("trino", config.getTrinoServiceName());
+        assertEquals("presto", config.getPrestoServiceName());
         assertEquals("amazon-emr-emrfs", config.getEmrfsServiceName());
         assertEquals("amazon-emr-spark", config.getEmrSparkServiceName());
         assertEquals("cl_tag", config.getTagServiceName());
@@ -231,7 +243,7 @@ class SimulatorConfigTest {
     void validateEmrSparkDefaultsFalse() {
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         assertFalse(config.isValidateEmrSpark(),
                 "validateEmrSpark should default to false");
     }
@@ -246,10 +258,10 @@ class SimulatorConfigTest {
 
     @Test
     void s3PrefixesEmptyListFallsBackToDefaults() {
-        // s3Prefixes is at position 19 (0-indexed: 18)
+        // s3Prefixes is at position 20 (0-indexed: 19)
         SimulatorConfig config = new SimulatorConfig(
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, List.of(), null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, List.of(), null, null, null, null, null, null, null);
         assertNotNull(config.getS3Prefixes());
         assertFalse(config.getS3Prefixes().isEmpty(),
                 "Empty s3Prefixes list should fall back to default sample paths");

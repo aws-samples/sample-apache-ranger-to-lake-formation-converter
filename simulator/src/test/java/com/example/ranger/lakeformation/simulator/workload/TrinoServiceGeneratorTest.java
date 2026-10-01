@@ -11,7 +11,7 @@ class TrinoServiceGeneratorTest {
     private static final List<String> PRINCIPALS = List.of("alice", "bob");
     private static final String TRINO_SERVICE = "trino";
     private static final Set<String> VALID_TRINO_TYPES =
-            Set.of("select", "insert", "delete", "create", "drop", "alter", "use", "show");
+            Set.of("select", "insert", "delete", "create", "drop", "alter", "use", "show", "all");
 
     private TrinoServiceGenerator gen(long seed) {
         return new TrinoServiceGenerator(DB_TABLES, PRINCIPALS, TRINO_SERVICE, new Random(seed));
@@ -100,5 +100,26 @@ class TrinoServiceGeneratorTest {
                         "Table '" + table + "' does not belong to schema '" + schema + "'");
             }
         }
+    }
+
+    @Test
+    void generate_canEmitAllAccessType() {
+        // "all" was added to the Trino vocabulary so a live run exercises the trino all -> LF ALL
+        // mapping end-to-end. Sample enough draws that the random subset is near-certain to
+        // include it, rather than relying on one lucky iteration.
+        boolean sawAll = false;
+        for (int i = 0; i < 400 && !sawAll; i++) {
+            Map<String, Object> policy = gen(i).generate("p" + i);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            for (Map<String, Object> item : items) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> accesses = (List<Map<String, Object>>) item.get("accesses");
+                for (Map<String, Object> access : accesses) {
+                    if ("all".equals(access.get("type"))) { sawAll = true; }
+                }
+            }
+        }
+        assertTrue(sawAll, "the Trino generator must be able to emit the 'all' access type");
     }
 }
