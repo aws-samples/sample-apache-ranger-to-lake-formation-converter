@@ -196,10 +196,12 @@ class HivePolicyGeneratorTest {
         }
     }
 
-    // Gap 4: generateColumnPolicy() always uses "select" — the only access type that
-    // produces an LF TABLE_WITH_COLUMNS grant; insert/delete on column resources are no-ops in LF.
+    // Gap 4: generateColumnPolicy() uses exactly one access type, either "select" (produces a
+    // TABLE_WITH_COLUMNS SELECT grant directly) or "all" (HiveServiceAdapter narrows it to SELECT
+    // for a column-scoped resource and the sync service records a NARROWED_ACTION gap).
     @Test
-    void generateColumnPolicy_usesSelectOnly() {
+    void generateColumnPolicy_usesSelectOrAllOnly() {
+        Set<String> seenTypes = new java.util.HashSet<>();
         for (int seed = 0; seed < 20; seed++) {
             Map<String, Object> policy = generator(seed).generateColumnPolicy("cp-" + seed);
             @SuppressWarnings("unchecked")
@@ -208,10 +210,31 @@ class HivePolicyGeneratorTest {
                 @SuppressWarnings("unchecked")
                 List<Map<String, Object>> accesses = (List<Map<String, Object>>) item.get("accesses");
                 assertEquals(1, accesses.size(), "column policy should have exactly one access entry");
-                assertEquals("select", accesses.get(0).get("type"),
-                        "column policy must use 'select' (the only access type producing an LF grant)");
+                String type = (String) accesses.get(0).get("type");
+                assertTrue(Set.of("select", "all").contains(type),
+                        "column policy access type must be 'select' or 'all', got: " + type);
+                seenTypes.add(type);
             }
         }
+        assertTrue(seenTypes.contains("select") && seenTypes.contains("all"),
+                "expected both 'select' and 'all' to appear across seeds 0-19, got: " + seenTypes);
+    }
+
+    // Gap 4 / column-scoped "all": generateColumnPolicy() can emit "all" as the sole access type.
+    @Test
+    void generateColumnPolicy_canEmitAll() {
+        boolean sawAll = false;
+        for (int seed = 0; seed < 50 && !sawAll; seed++) {
+            Map<String, Object> policy = generator(seed).generateColumnPolicy("cp-all-" + seed);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) policy.get("policyItems");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> accesses = (List<Map<String, Object>>) items.get(0).get("accesses");
+            if ("all".equals(accesses.get(0).get("type"))) {
+                sawAll = true;
+            }
+        }
+        assertTrue(sawAll, "expected generateColumnPolicy() to emit 'all' within 50 seeds");
     }
 
     // Gap 5: generateAllAccessTablePolicy() uses exactly "all" as the single access type

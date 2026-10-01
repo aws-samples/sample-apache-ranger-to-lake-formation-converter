@@ -5,6 +5,7 @@
 #
 # Services registered:
 #   trino        — Trino query engine (type: trino)
+#   presto       — Presto query engine (type: presto)
 #   emrfs        — EMR File System / S3 Access Grants (type: amazon-emr-emrfs)
 #
 # The lakeformation and cl_tag services are handled by the integration-test
@@ -158,7 +159,16 @@ install_servicedef "trino" "${REPO_ROOT}/conf/ranger-servicedef-trino.json"
 create_service "trino" "trino" "{}"
 
 # ---------------------------------------------------------------------------
-# 2. EMRFS (implClass stripped — plugin jar not present in Docker)
+# 2. Presto (implClass left intact — org.apache.ranger.services.presto.RangerServicePresto is a
+#    standard Apache Ranger plugin class, same family as RangerServiceTrino above, not a custom
+#    AWS class like the amazon-emr-* services below. It ships with the apache/ranger:2.4.0 admin
+#    image this stack runs, so it does not need the Docker-compatibility patch EMRFS/EMR-Spark need.)
+# ---------------------------------------------------------------------------
+install_servicedef "presto" "${REPO_ROOT}/conf/ranger-servicedef-presto.json"
+create_service "presto" "presto" "{}"
+
+# ---------------------------------------------------------------------------
+# 3. EMRFS (implClass stripped — plugin jar not present in Docker)
 # ---------------------------------------------------------------------------
 install_servicedef "amazon-emr-emrfs" \
   "${REPO_ROOT}/conf/ranger-servicedef-amazon-emr-emrfs.json" \

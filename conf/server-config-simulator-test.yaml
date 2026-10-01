@@ -52,6 +52,12 @@ rangerServices:
     # Trino policies are only processed when their catalog matches this name.
     # The simulator's Trino generator authors policies under catalog "hive".
     gdcCatalogName: "hive"
+  - serviceType: "presto"
+    serviceInstanceName: "presto"
+    # Same catalog-filtering requirement as trino above: PrestoServiceAdapter skips any policy
+    # whose catalog resource doesn't match this name, and the simulator's PrestoServiceGenerator
+    # authors policies under catalog "hive" to match.
+    gdcCatalogName: "hive"
   - serviceType: "amazon-emr-emrfs"
     serviceInstanceName: "amazon-emr-emrfs"
   - serviceType: "amazon-emr-spark"
