@@ -425,7 +425,7 @@ curl -s -u admin:rangerR0cks! http://localhost:6080/service/public/v2/api/servic
 
 ### Step 2.5 — Provision simulator Ranger services and Glue tables
 
-The simulator requires `trino`, `presto`, `emrfs`, and `amazon-emr-spark` Ranger service instances in addition to the `lakeformation` and `cl_tag` instances provisioned by the integration-test stack. Run both setup scripts once after the stack is healthy:
+The simulator requires `trino`, `presto`, `amazon-emr-emrfs`, and `amazon-emr-spark` Ranger service instances in addition to the `lakeformation` and `cl_tag` instances provisioned by the integration-test stack. Each instance name matches its service type — the sync service looks services up by instance name, so they must agree with `rangerServices` in `conf/server-config-simulator-test.yaml`. Run both setup scripts once after the stack is healthy:
 
 ```bash
 # Provision the Ranger service instances (requires Ranger Admin access)
@@ -441,7 +441,7 @@ Both scripts are idempotent — re-running them on an already-provisioned enviro
 ```bash
 curl -s -u admin:rangerR0cks! http://localhost:6080/service/public/v2/api/service \
   | python3 -c "import sys,json; print([s['name'] for s in json.load(sys.stdin)])"
-# → ['lakeformation', 'cl_tag', 'trino', 'presto', 'emrfs', 'amazon-emr-spark']
+# → ['lakeformation', 'cl_tag', 'trino', 'presto', 'amazon-emr-emrfs', 'amazon-emr-spark']
 ```
 
 > **Note:** `setup-ranger-services.sh` currently provisions `trino` and `presto` and `emrfs` only. The `amazon-emr-spark` service instance is provisioned by the integration-test stack's `setup-ranger-services.sh` script. If it is missing, create it manually:
