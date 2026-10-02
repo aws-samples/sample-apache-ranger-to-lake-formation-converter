@@ -366,6 +366,11 @@ public class RangerToCedarConverter {
         // whether any Cedar statements were produced above. A policy whose only access types
         // are unmapped yields zero statements and must still report its gap.
         if (!knownUnmappableAccessTypes.isEmpty()) {
+            // DEBUG: by-design outcome, already reported as an informational gap and rolled up in
+            // the assessment report. An operator-facing level would be noise.
+            LOG.debug("Policy {} ({}) uses access type(s) {} with no Lake Formation equivalent; "
+                            + "dropped by design.",
+                    policyId, policyName, String.join(", ", knownUnmappableAccessTypes));
             gapReporter.recordGap(new GapEntry(
                     policyId, policyName, GapType.KNOWN_UNMAPPABLE_ACTION, null,
                     "Access type(s) " + String.join(", ", knownUnmappableAccessTypes)
@@ -377,6 +382,16 @@ public class RangerToCedarConverter {
                     new ArrayList<>(knownUnmappableAccessTypes)));
         }
         if (!unrecognizedAccessTypes.isEmpty()) {
+            // The single operator-facing line for this policy. The adapters log each occurrence at
+            // DEBUG only: they are called once per access type per principal per resource (twice
+            // per call), which produced dozens of identical ERROR lines for one policy and churned
+            // the bounded rolling log file. Emitting here keeps the log and the gap entry on the
+            // same per-policy path so they cannot drift apart.
+            LOG.error("Policy {} ({}) uses access type(s) {} that service '{}' does not recognise — "
+                            + "they will be skipped and those permissions lost. This indicates a gap "
+                            + "in the adapter's access-type mapping.",
+                    policyId, policyName, String.join(", ", unrecognizedAccessTypes),
+                    adapter.getServiceType());
             gapReporter.recordGap(new GapEntry(
                     policyId, policyName, GapType.UNSUPPORTED_ACTION, null,
                     "Access type(s) " + String.join(", ", unrecognizedAccessTypes)
@@ -390,6 +405,10 @@ public class RangerToCedarConverter {
         // to a weaker permission, which is a different (and non-alarming) situation than an
         // access type having no Lake Formation equivalent at all and being dropped entirely.
         if (!narrowedAccessTypes.isEmpty()) {
+            LOG.debug("Policy {} ({}) narrowed access type(s) {} to {} on column-restricted "
+                            + "resources.",
+                    policyId, policyName, String.join(", ", narrowedAccessTypes),
+                    NARROWED_ACTION_TARGET);
             gapReporter.recordGap(new GapEntry(
                     policyId, policyName, GapType.NARROWED_ACTION, null,
                     "Access type(s) " + String.join(", ", narrowedAccessTypes)

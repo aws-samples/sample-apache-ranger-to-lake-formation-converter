@@ -43,7 +43,7 @@ public class EmrfsServiceAdapter implements SourcePolicyAdapter {
     @Override
     public Set<String> mapAccessTypeToCedarActions(String sourceAccessType) {
         if (sourceAccessType == null || sourceAccessType.trim().isEmpty()) {
-            LOG.error("Null or empty access type provided");
+            LOG.debug("Null or empty access type provided");
             return Collections.emptySet();
         }
         switch (sourceAccessType.trim()) {
@@ -56,7 +56,7 @@ public class EmrfsServiceAdapter implements SourcePolicyAdapter {
             case "DeleteObject":
                 return Set.of("s3:DeleteObject");
             default:
-                LOG.error("Unknown EMRFS access type: '{}' — this access type will be skipped, "
+                LOG.debug("Unknown EMRFS access type: '{}' — this access type will be skipped, "
                         + "affected policy items may lose permissions", sourceAccessType);
                 return Collections.emptySet();
         }

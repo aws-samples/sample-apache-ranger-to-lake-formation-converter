@@ -63,13 +63,13 @@ public class EmrSparkServiceAdapter implements SourcePolicyAdapter {
     @Override
     public Set<String> mapAccessTypeToCedarActions(String sourceAccessType) {
         if (sourceAccessType == null || sourceAccessType.trim().isEmpty()) {
-            LOG.error("Null or empty access type provided");
+            LOG.debug("Null or empty access type provided");
             return Collections.emptySet();
         }
         String normalized = sourceAccessType.trim().toLowerCase();
         Set<String> result = CATALOG_ACTION_MAPPING.get(normalized);
         if (result == null) {
-            LOG.error("Unknown EMR Spark access type: '{}' — this access type will be skipped, "
+            LOG.debug("Unknown EMR Spark access type: '{}' — this access type will be skipped, "
                     + "affected policy items may lose permissions", sourceAccessType);
             if (metricsEmitter != null) {
                 metricsEmitter.recordUnmappedAccessType(sourceAccessType);
