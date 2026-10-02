@@ -173,7 +173,26 @@ create_service "presto" "presto" "{}"
 install_servicedef "amazon-emr-emrfs" \
   "${REPO_ROOT}/conf/ranger-servicedef-amazon-emr-emrfs.json" \
   "true"
-create_service "emrfs" "amazon-emr-emrfs" "{}"
+# Instance name must equal the service type. SimulatorConfig's
+# DEFAULT_EMRFS_SERVICE_NAME, conf/server-config-simulator-test.yaml's
+# serviceInstanceName, and integration-test/scripts/provision-data-services.sh all
+# use "amazon-emr-emrfs"; this script previously created it as "emrfs", so the sync
+# service never found EMRFS policies and the simulator's EMRFS coverage was inert.
+create_service "amazon-emr-emrfs" "amazon-emr-emrfs" "{}"
+
+# ---------------------------------------------------------------------------
+# 4. EMR Spark (implClass stripped — plugin jar not present in Docker)
+#
+# The README has always listed amazon-emr-spark as provisioned by this script, but
+# it was never here. integration-test/scripts/provision-data-services.sh patches
+# implClass for exactly amazon-emr-emrfs and amazon-emr-spark, so Spark needs the
+# same stripping as EMRFS above (its implClass, RangerServiceSpark, is not on the
+# Ranger Admin classpath in the Docker image).
+# ---------------------------------------------------------------------------
+install_servicedef "amazon-emr-spark" \
+  "${REPO_ROOT}/conf/ranger-servicedef-amazon-emr-spark.json" \
+  "true"
+create_service "amazon-emr-spark" "amazon-emr-spark" "{}"
 
 echo ""
 echo "Simulator Ranger services provisioned successfully."
