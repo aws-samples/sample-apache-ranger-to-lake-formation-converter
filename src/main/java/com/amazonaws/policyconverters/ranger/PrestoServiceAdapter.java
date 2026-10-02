@@ -120,14 +120,14 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
     @Override
     public Set<String> mapAccessTypeToCedarActions(String sourceAccessType) {
         if (sourceAccessType == null || sourceAccessType.trim().isEmpty()) {
-            LOG.error("Null or empty access type provided");
+            LOG.debug("Null or empty access type provided");
             return Collections.emptySet();
         }
         String normalized = sourceAccessType.trim().toLowerCase();
 
         // Known unmapped types — log and return empty
         if (UNMAPPED_ACCESS_TYPES.contains(normalized)) {
-            LOG.warn("Presto access type '{}' has no Cedar mapping and will be skipped", sourceAccessType);
+            LOG.debug("Presto access type \'{}\' has no Cedar mapping and will be skipped", sourceAccessType);
             if (metricsEmitter != null) {
                 metricsEmitter.recordUnmappedAccessType(sourceAccessType);
             }
@@ -136,7 +136,7 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
 
         Set<String> result = ACTION_MAPPING.get(normalized);
         if (result == null) {
-            LOG.error("Unknown Presto access type: '{}' — this access type will be skipped, "
+            LOG.debug("Unknown Presto access type: '{}' — this access type will be skipped, "
                     + "affected policy items may lose permissions", sourceAccessType);
             if (metricsEmitter != null) {
                 metricsEmitter.recordUnmappedAccessType(sourceAccessType);
