@@ -99,9 +99,13 @@ class AccessTypeLogVolumeTest {
      * tables. Under the old adapter-level logging this shape produced ~18 identical lines.
      */
     private static RangerPolicy fanOutPolicy(String extraAccessType) {
+        return fanOutPolicy(4242L, extraAccessType);
+    }
+
+    private static RangerPolicy fanOutPolicy(long id, String extraAccessType) {
         RangerPolicy policy = new RangerPolicy();
-        policy.setId(4242L);
-        policy.setName("fan-out");
+        policy.setId(id);
+        policy.setName("fan-out-" + id);
         policy.setService("hive");
         policy.setIsEnabled(true);
         policy.setPolicyType(0);
@@ -130,26 +134,77 @@ class AccessTypeLogVolumeTest {
     }
 
     @Test
-    void unrecognizedAccessTypeLogsExactlyOneErrorPerPolicy() {
+    void unrecognizedAccessTypeLogsExactlyOneErrorPerCycle() {
         converter.convert(List.of(fanOutPolicy("brand_new_privilege")));
 
         assertEquals(1, count(Level.ERROR, "brand_new_privilege"),
-                "an unrecognised access type must produce exactly one ERROR for the policy, not "
-                        + "one per principal x resource. Events: " + appender.list);
+                "an unrecognised access type must produce exactly one ERROR, not one per "
+                        + "principal x resource. Events: " + appender.list);
     }
 
     @Test
-    void theErrorIdentifiesThePolicyAndService() {
-        converter.convert(List.of(fanOutPolicy("brand_new_privilege")));
+    void manyAffectedPoliciesStillLogOneErrorForTheWholeCycle() {
+        // The reason this is aggregated per cycle rather than per policy: the sync server
+        // re-converts every policy on every refresh (no version short-circuit), so an estate with
+        // 169 affected policies would emit ~487k identical ERROR lines a day at the 30s default.
+        List<RangerPolicy> policies = new ArrayList<>();
+        for (long id = 1; id <= 20; id++) {
+            policies.add(fanOutPolicy(id, "brand_new_privilege"));
+        }
+
+        converter.convert(policies);
+
+        assertEquals(1, count(Level.ERROR, "brand_new_privilege"),
+                "20 affected policies must still produce one ERROR for the cycle");
+    }
+
+    @Test
+    void theAggregatedErrorReportsCountsAndSamplePolicyIds() {
+        List<RangerPolicy> policies = new ArrayList<>();
+        for (long id = 1; id <= 20; id++) {
+            policies.add(fanOutPolicy(id, "brand_new_privilege"));
+        }
+
+        converter.convert(policies);
 
         String msg = appender.list.stream()
                 .filter(e -> e.getLevel() == Level.ERROR)
                 .map(ILoggingEvent::getFormattedMessage)
                 .findFirst().orElseThrow();
 
-        assertTrue(msg.contains("4242"), "must name the policy id: " + msg);
-        assertTrue(msg.contains("fan-out"), "must name the policy: " + msg);
-        assertTrue(msg.contains("hive"), "must name the service type: " + msg);
+        assertTrue(msg.contains("20 policies"), "must report the exact affected-policy count: " + msg);
+        assertTrue(msg.contains("hive:brand_new_privilege"),
+                "must name service and access type: " + msg);
+        assertTrue(msg.contains("e.g."), "must name sample policy ids: " + msg);
+    }
+
+    @Test
+    void distinctUnrecognizedTypesAreTalliedSeparately() {
+        converter.convert(List.of(
+                fanOutPolicy(1L, "brand_new_privilege"),
+                fanOutPolicy(2L, "another_new_privilege")));
+
+        assertEquals(1, appender.list.stream().filter(e -> e.getLevel() == Level.ERROR).count(),
+                "still one line for the cycle");
+        String msg = appender.list.stream()
+                .filter(e -> e.getLevel() == Level.ERROR)
+                .map(ILoggingEvent::getFormattedMessage)
+                .findFirst().orElseThrow();
+        assertTrue(msg.contains("2 unrecognised access type"), "must count both types: " + msg);
+        assertTrue(msg.contains("brand_new_privilege") && msg.contains("another_new_privilege"),
+                "must name both types: " + msg);
+    }
+
+    @Test
+    void repeatedConvertCallsEachLogAfresh() {
+        // The tally must be cycle-scoped, not an instance field: the sync server reuses one
+        // converter for the life of the process, so a field would make the signal vanish after
+        // the first cycle and never return.
+        converter.convert(List.of(fanOutPolicy("brand_new_privilege")));
+        converter.convert(List.of(fanOutPolicy("brand_new_privilege")));
+
+        assertEquals(2, count(Level.ERROR, "brand_new_privilege"),
+                "each conversion cycle must report the problem again");
     }
 
     @Test

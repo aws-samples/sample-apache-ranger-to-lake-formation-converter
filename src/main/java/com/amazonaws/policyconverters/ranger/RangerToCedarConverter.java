@@ -19,6 +19,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -108,16 +110,73 @@ public class RangerToCedarConverter {
 
         List<String> allStatements = new ArrayList<>();
 
+        // Cycle-scoped, keyed "serviceType:accessType". The sync server re-converts every policy
+        // on every refresh cycle (no version short-circuit exists), so logging per policy meant an
+        // estate with 169 affected policies emitted ~487k identical ERROR lines a day at the
+        // default 30s interval — enough to collapse the rolling log file's 7-day retention to
+        // about 5. One aggregated line per cycle keeps the "still broken" signal at 2,880 lines a
+        // day instead. A local, not a field: this converter is reused for the life of the process,
+        // so a field would accumulate across every cycle.
+        Map<String, UnrecognizedAccessTypeTally> unrecognizedThisCycle = new LinkedHashMap<>();
+
         for (RangerPolicy policy : policies) {
-            List<String> statements = convertSinglePolicy(policy);
+            List<String> statements = convertSinglePolicy(policy, unrecognizedThisCycle);
             allStatements.addAll(statements);
         }
+
+        logUnrecognizedAccessTypes(unrecognizedThisCycle);
 
         String cedarText = String.join("\n", allStatements);
         return parseAndValidate(cedarText, allStatements);
     }
 
-    private List<String> convertSinglePolicy(RangerPolicy policy) {
+    /** Per-cycle tally for one (serviceType, accessType) pair. */
+    private static final class UnrecognizedAccessTypeTally {
+        final String serviceType;
+        final String accessType;
+        final Set<String> policyIds = new LinkedHashSet<>();
+
+        UnrecognizedAccessTypeTally(String serviceType, String accessType) {
+            this.serviceType = serviceType;
+            this.accessType = accessType;
+        }
+    }
+
+    /** Upper bound on policy ids named in the aggregated log line; the counts stay exact. */
+    private static final int UNRECOGNIZED_SAMPLE_LIMIT = 5;
+
+    /**
+     * Emits the single operator-facing line for unrecognised access types seen in this conversion.
+     *
+     * <p>Deliberately one line per cycle rather than per policy. The detailed per-policy record
+     * lives in the gap report, which is what the assessment tool renders; this line exists so an
+     * operator running the sync server — where no assessment report is produced — still learns that
+     * permissions are being dropped.
+     */
+    private void logUnrecognizedAccessTypes(Map<String, UnrecognizedAccessTypeTally> tallies) {
+        if (tallies.isEmpty()) {
+            return;
+        }
+        Set<String> affectedPolicies = new LinkedHashSet<>();
+        List<String> parts = new ArrayList<>();
+        for (UnrecognizedAccessTypeTally t : tallies.values()) {
+            affectedPolicies.addAll(t.policyIds);
+            List<String> samples = t.policyIds.stream()
+                    .limit(UNRECOGNIZED_SAMPLE_LIMIT)
+                    .collect(java.util.stream.Collectors.toList());
+            parts.add(String.format("%s:%s (%d polic%s, e.g. %s)",
+                    t.serviceType, t.accessType, t.policyIds.size(),
+                    t.policyIds.size() == 1 ? "y" : "ies", String.join(", ", samples)));
+        }
+        LOG.error("{} unrecognised access type(s) across {} polic{} — those permissions are being "
+                        + "dropped. This indicates a gap in the adapter access-type mapping, not a "
+                        + "problem with the Ranger policies. {}",
+                tallies.size(), affectedPolicies.size(),
+                affectedPolicies.size() == 1 ? "y" : "ies", String.join("; ", parts));
+    }
+
+    private List<String> convertSinglePolicy(RangerPolicy policy,
+                                             Map<String, UnrecognizedAccessTypeTally> unrecognizedThisCycle) {
         if (Boolean.FALSE.equals(policy.getIsEnabled())) {
             return Collections.emptyList();
         }
@@ -387,11 +446,18 @@ public class RangerToCedarConverter {
             // per call), which produced dozens of identical ERROR lines for one policy and churned
             // the bounded rolling log file. Emitting here keeps the log and the gap entry on the
             // same per-policy path so they cannot drift apart.
-            LOG.error("Policy {} ({}) uses access type(s) {} that service '{}' does not recognise — "
-                            + "they will be skipped and those permissions lost. This indicates a gap "
-                            + "in the adapter's access-type mapping.",
-                    policyId, policyName, String.join(", ", unrecognizedAccessTypes),
-                    adapter.getServiceType());
+            // Contribute to the cycle tally instead of logging here; convert() emits one
+            // aggregated line once every policy has been processed.
+            // `adapter` is reassigned above by the default-service-type fallback, so it is not
+            // effectively final and cannot be captured by the lambda below.
+            final String adapterServiceType = adapter.getServiceType();
+            for (String accessType : unrecognizedAccessTypes) {
+                final String type = accessType;
+                unrecognizedThisCycle
+                        .computeIfAbsent(adapterServiceType + ":" + type,
+                                k -> new UnrecognizedAccessTypeTally(adapterServiceType, type))
+                        .policyIds.add(policyId);
+            }
             gapReporter.recordGap(new GapEntry(
                     policyId, policyName, GapType.UNSUPPORTED_ACTION, null,
                     "Access type(s) " + String.join(", ", unrecognizedAccessTypes)
