@@ -225,23 +225,26 @@ public class RangerTagService {
 
     private static RangerAdminRESTClient createAdminClient(String tagServiceName,
                                                             RangerConnectionConfig rangerConfig) {
+        // The prefix must be the same string here and in init(): RangerAdminRESTClient reads
+        // <propertyPrefix>.policy.rest.url. Passing "" while writing the keys under
+        // "ranger.plugin.<name>" made it look up ".policy.rest.url", find nothing, and throw
+        // "Ranger URL is null or empty" — which took the whole server down at startup.
+        String propertyPrefix = "ranger.plugin." + tagServiceName;
+
         Configuration conf = new Configuration(false);
-        conf.set("ranger.plugin." + tagServiceName + ".policy.rest.url",
-                rangerConfig.getRangerAdminUrl());
+        conf.set(propertyPrefix + ".policy.rest.url", rangerConfig.getRangerAdminUrl());
 
         if (rangerConfig.getUsername() != null && rangerConfig.getPassword() != null) {
-            conf.set("ranger.plugin." + tagServiceName + ".policy.rest.user",
-                    rangerConfig.getUsername());
-            conf.set("ranger.plugin." + tagServiceName + ".policy.rest.password",
-                    rangerConfig.getPassword());
+            conf.set(propertyPrefix + ".policy.rest.user", rangerConfig.getUsername());
+            conf.set(propertyPrefix + ".policy.rest.password", rangerConfig.getPassword());
         }
 
         if (rangerConfig.getKerberosKeytab() != null) {
-            conf.set("ranger.plugin." + tagServiceName + ".policy.rest.ssl.config.file", "");
+            conf.set(propertyPrefix + ".policy.rest.ssl.config.file", "");
         }
 
         RangerAdminRESTClient client = new RangerAdminRESTClient();
-        client.init(tagServiceName, "ranger-lf-tag-sync", "", conf);
+        client.init(tagServiceName, "ranger-lf-tag-sync", propertyPrefix, conf);
         return client;
     }
 }

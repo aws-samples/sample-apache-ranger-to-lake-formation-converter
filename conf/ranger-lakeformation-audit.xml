@@ -79,7 +79,7 @@
 
     <property>
         <name>xasecure.audit.destination.log4j</name>
-        <value>true</value>
+        <value>false</value>
         <description>
             Enable audit logging to Log4j. Useful for local development
             and debugging. Logs to the ranger.audit logger.
