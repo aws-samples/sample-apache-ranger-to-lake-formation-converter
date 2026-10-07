@@ -177,7 +177,9 @@ public class WorkloadOrchestrator {
             cumulative += entry.weight();
             if (roll < cumulative) return entry;
         }
-        return generators.getLast();
+        // get(size - 1) rather than List.getLast(), which is Java 21 and would break the
+        // Java 17 target.
+        return generators.get(generators.size() - 1);
     }
 
     private String randomFrom(List<String> list) {

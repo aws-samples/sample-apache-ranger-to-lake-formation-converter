@@ -13,8 +13,7 @@
     <description>Bridges Apache Ranger policies to AWS Lake Formation permissions</description>
 
     <properties>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
+        <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- Dependency versions -->
@@ -237,8 +236,11 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
-                    <source>17</source>
-                    <target>17</target>
+                    <!-- release, not source/target: source/target compiles against the build
+                         JDK's class library, so a JDK-newer-than-17 API can slip in, compile
+                         clean, and fail with NoSuchMethodError on a real JDK 17. release also
+                         constrains the API surface. -->
+                    <release>17</release>
                 </configuration>
             </plugin>
             <plugin>
@@ -401,8 +403,7 @@
                         <artifactId>maven-compiler-plugin</artifactId>
                         <version>3.11.0</version>
                         <configuration>
-                            <source>17</source>
-                            <target>17</target>
+                            <release>17</release>
                         </configuration>
                     </plugin>
 
