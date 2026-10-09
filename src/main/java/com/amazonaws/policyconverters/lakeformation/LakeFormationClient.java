@@ -344,6 +344,11 @@ public class LakeFormationClient {
         private final String dataLocationPath;
         private final String rowFilterExpression;
         private final boolean grantable;
+        // allTables must be part of the key. A table-wildcard resource carries a null
+        // tableName, so without this a TableWildcard grant and a database-level grant on the
+        // same (policy, principal, database) hash equal and merge into one entry, unioning
+        // their permissions onto whichever resource MergedOp happened to rebuild.
+        private final boolean allTables;
 
         ConsolidationKey(LFPermissionOperation op) {
             this.opType = op.getOperationType();
@@ -356,6 +361,7 @@ public class LakeFormationClient {
             this.dataLocationPath = r.getDataLocationPath();
             this.rowFilterExpression = r.getRowFilterExpression();
             this.grantable = op.isGrantable();
+            this.allTables = r.isAllTables();
         }
 
         @Override
@@ -364,6 +370,7 @@ public class LakeFormationClient {
             if (o == null || getClass() != o.getClass()) return false;
             ConsolidationKey that = (ConsolidationKey) o;
             return grantable == that.grantable
+                    && allTables == that.allTables
                     && opType == that.opType
                     && Objects.equals(sourcePolicyId, that.sourcePolicyId)
                     && Objects.equals(principalArn, that.principalArn)
@@ -377,7 +384,7 @@ public class LakeFormationClient {
         @Override
         public int hashCode() {
             return Objects.hash(opType, sourcePolicyId, principalArn, catalogId, databaseName,
-                    tableName, dataLocationPath, rowFilterExpression, grantable);
+                    tableName, dataLocationPath, rowFilterExpression, grantable, allTables);
         }
     }
 
@@ -394,6 +401,8 @@ public class LakeFormationClient {
         private final String dataLocationPath;
         private final String rowFilterExpression;
         private final boolean grantable;
+        private final boolean allTables;
+        private final String originalPrincipal;
         private final Set<String> columns = new HashSet<>();
         private final EnumSet<LFPermission> permissions = EnumSet.noneOf(LFPermission.class);
 
@@ -408,6 +417,12 @@ public class LakeFormationClient {
             this.dataLocationPath = r.getDataLocationPath();
             this.rowFilterExpression = r.getRowFilterExpression();
             this.grantable = op.isGrantable();
+            // Without these two, rebuilding the operation below silently downgrades a
+            // table-wildcard grant to a database-level one (tableName is null for a wildcard,
+            // so the flag is the only thing distinguishing them) and discards the Ranger
+            // principal name used for reporting.
+            this.allTables = r.isAllTables();
+            this.originalPrincipal = op.getOriginalPrincipal();
         }
 
         void merge(LFPermissionOperation op) {
@@ -421,9 +436,10 @@ public class LakeFormationClient {
             Set<String> cols = columns.isEmpty() ? null : columns;
             LFResource resource = new LFResource(
                     catalogId, databaseName, tableName, cols,
-                    rowFilterExpression, dataLocationPath);
+                    rowFilterExpression, dataLocationPath, allTables);
             return new LFPermissionOperation(
-                    opType, sourcePolicyId, principalArn, resource, permissions, grantable);
+                    opType, sourcePolicyId, originalPrincipal, principalArn, resource,
+                    permissions, grantable);
         }
     }
 
@@ -681,9 +697,16 @@ public class LakeFormationClient {
 
                 failedEntryIds.add(entryId);
                 LFPermissionOperation op = entryIdToOp.get(entryId);
-                LOG.error("Batch {} failed for entryId={}, policyId={}: {}",
+                // Include the resource and permissions: the error alone ("Permissions
+                // modification is invalid.") does not say which resource shape LF rejected, and
+                // a table-wildcard resource is otherwise indistinguishable from a database-level
+                // one in the logs. LFResource.toString() renders allTables explicitly.
+                LOG.error("Batch {} failed for entryId={}, policyId={}, resource={}, permissions={}, grantable={}: {}",
                         operationType, entryId,
-                        op != null ? op.getSourcePolicyId() : "unknown", errorMsg);
+                        op != null ? op.getSourcePolicyId() : "unknown",
+                        op != null ? op.getResource() : "unknown",
+                        op != null ? op.getPermissions() : "unknown",
+                        op != null && op.isGrantable(), errorMsg);
 
                 if (deadLetterLogger != null && op != null) {
                     deadLetterLogger.logFailedOperation(op, errorMsg, 0);
