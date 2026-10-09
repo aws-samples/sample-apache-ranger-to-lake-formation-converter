@@ -157,6 +157,15 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
      */
     private final Set<String> activeConflicts = ConcurrentHashMap.newKeySet();
 
+    /** Caps the gap de-duplication set so a long run cannot grow it without bound. */
+    private static final int MAX_LOGGED_GAP_KEYS = 10_000;
+
+    /**
+     * Gap keys already logged at WARN, so an unchanged policy set is not re-logged every cycle.
+     * Keyed by "(policyId|gapType|resourcePath)".
+     */
+    private final Set<String> loggedGaps = ConcurrentHashMap.newKeySet();
+
     // ---------------------------------------------------------------
     // Single-plugin constructors (backward compatible)
     // ---------------------------------------------------------------
@@ -1113,10 +1122,29 @@ public class SyncService implements RangerPlugin.PolicyUpdateListener {
         }
         LOG.info("SyncService: gap report contains {} unsupported feature(s), summary={}",
                 entries.size(), report.getSummary());
+        // Log each distinct gap once, not once per cycle. Gaps are a property of the policy set,
+        // so an unchanged policy set re-emitted them every refresh interval: an hour-long run
+        // produced a 25 GB log in which a single DENY_POLICY line appeared ~16000 times per 20 MB,
+        // burying everything else and risking disk exhaustion. Repeats go to DEBUG so they remain
+        // available when explicitly wanted. Mirrors the activeConflicts de-duplication used for
+        // TABLE/TWC conflicts.
         for (GapEntry entry : entries) {
-            LOG.warn("SyncService gap: policyId={}, type={}, resource={}, details={}",
-                    entry.getPolicyId(), entry.getGapType(),
-                    entry.getResourcePath(), entry.getDetails());
+            String gapKey = entry.getPolicyId() + "|" + entry.getGapType() + "|"
+                    + entry.getResourcePath();
+            if (loggedGaps.add(gapKey)) {
+                LOG.warn("SyncService gap: policyId={}, type={}, resource={}, details={}",
+                        entry.getPolicyId(), entry.getGapType(),
+                        entry.getResourcePath(), entry.getDetails());
+            } else {
+                LOG.debug("SyncService gap (repeat): policyId={}, type={}, resource={}",
+                        entry.getPolicyId(), entry.getGapType(), entry.getResourcePath());
+            }
+        }
+        // Bound the memory the de-duplication set can hold: the simulator churns policy ids
+        // indefinitely, so without this the set would grow without limit on a long run.
+        if (loggedGaps.size() > MAX_LOGGED_GAP_KEYS) {
+            LOG.info("Gap log de-duplication set exceeded {} keys; clearing it", MAX_LOGGED_GAP_KEYS);
+            loggedGaps.clear();
         }
     }
 

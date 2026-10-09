@@ -69,6 +69,16 @@ public class DeadLetterLogger {
             if (res.getTableName() != null) {
                 resource.put("table", res.getTableName());
             }
+            // allTables and dataLocationPath must be recorded: a table-wildcard resource has a
+            // null table name, so without these a TableWildcard grant and a database-level grant
+            // serialize identically as {"database": "..."} — which made 3000 failure records
+            // unable to identify their own resource shape.
+            if (res.isAllTables()) {
+                resource.put("allTables", true);
+            }
+            if (res.getDataLocationPath() != null) {
+                resource.put("dataLocation", res.getDataLocationPath());
+            }
             if (res.getColumnNames() != null && !res.getColumnNames().isEmpty()) {
                 ArrayNode cols = MAPPER.createArrayNode();
                 res.getColumnNames().forEach(cols::add);
@@ -116,6 +126,20 @@ public class DeadLetterLogger {
             if (res.getTableName() != null) {
                 resource.put("table", res.getTableName());
             }
+            if (res.isAllTables()) {
+                resource.put("allTables", true);
+            }
+            if (res.getDataLocationPath() != null) {
+                resource.put("dataLocation", res.getDataLocationPath());
+            }
+            if (res.getColumnNames() != null && !res.getColumnNames().isEmpty()) {
+                ArrayNode cols2 = MAPPER.createArrayNode();
+                res.getColumnNames().forEach(cols2::add);
+                resource.set("columns", cols2);
+            }
+            // Unambiguous rendering of the exact resource, for when the structured fields above
+            // still leave the shape in doubt.
+            resource.put("shape", res.toString());
             entry.set("resource", resource);
 
             entry.put("principal", op.getPrincipalArn());

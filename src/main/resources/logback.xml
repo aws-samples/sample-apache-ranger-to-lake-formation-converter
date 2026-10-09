@@ -36,21 +36,26 @@
 
     <!--
         Rolling file appender: bounded on-disk log for deployments that run the JAR directly
-        rather than capturing stdout. Rolls when the active file reaches maxFileSize OR the day
-        changes; keeps maxHistory days of gzipped archives; caps the whole set at totalSizeCap and
-        deletes the oldest archives past that cap — so it can never fill the disk. Consume this file
-        instead of redirecting stdout to a file (a shell "> app.log" redirect is NOT rotated and
-        grows unbounded, which is what filled disk in long runs).
+        rather than capturing stdout. Consume this file instead of redirecting stdout to a file
+        (a shell "> app.log" redirect is NOT rotated and grows unbounded — that is what filled
+        the disk with a 25 GB file during an hour-long simulator run).
+
+        A fixed window of 10 archives, not a time window. The previous
+        SizeAndTimeBasedRollingPolicy expressed maxHistory in DAYS, so a chatty run rolled many
+        times per day and every one of those files was retained inside the 7-day window —
+        258 files accumulated. maxIndex caps the file COUNT outright, so the worst case is
+        bounded at maxFileSize * (maxIndex + 1).
     -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOG_DIR}/ranger-lf-sync.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_DIR}/ranger-lf-sync.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
-            <maxFileSize>100MB</maxFileSize>
-            <maxHistory>7</maxHistory>
-            <totalSizeCap>1GB</totalSizeCap>
-            <cleanHistoryOnStart>true</cleanHistoryOnStart>
+        <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/ranger-lf-sync.%i.log.gz</fileNamePattern>
+            <minIndex>1</minIndex>
+            <maxIndex>10</maxIndex>
         </rollingPolicy>
+        <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+            <maxFileSize>50MB</maxFileSize>
+        </triggeringPolicy>
         <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
             <layout class="ch.qos.logback.contrib.json.classic.JsonLayout">
                 <jsonFormatter class="ch.qos.logback.contrib.jackson.JacksonJsonFormatter"/>
