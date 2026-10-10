@@ -98,6 +98,19 @@ public interface SourcePolicyAdapter {
     }
 
     /**
+     * Why this adapter declined {@code policy}, when {@link #shouldProcessPolicy} returned false.
+     *
+     * <p>A declined policy produces zero Lake Formation grants, so the assessment classifies it
+     * NOT_CONVERTIBLE. Without a reason the operator sees a policy that failed to convert and
+     * nothing explaining it. Returning a reason here lets the converter record a gap instead.
+     *
+     * <p>Empty by default, and only meaningful when {@code shouldProcessPolicy} returned false.
+     */
+    default Optional<String> describeSkip(RangerPolicy policy) {
+        return Optional.empty();
+    }
+
+    /**
      * Detect a service-specific resource key that this adapter recognises by name but that has
      * no Lake Formation equivalent at all — e.g. Trino/Presto {@code procedure}, {@code function},
      * {@code trinouser}, {@code sessionproperty}, {@code systemproperty}. Unlike an unmappable

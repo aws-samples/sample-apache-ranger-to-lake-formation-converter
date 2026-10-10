@@ -335,4 +335,58 @@ class TrinoServiceAdapterTest {
         assertFalse(adapter.isKnownUnmappableAccessType("totally_made_up"));
         assertTrue(adapter.mapAccessTypeToCedarActions("totally_made_up").isEmpty());
     }
+
+    @Test
+    void catalogListContainingTheGdcCatalogIsProcessed() {
+        // Regression: the check read values.get(0) only, so a policy naming another catalog first
+        // was skipped even though the configured GDC catalog was also listed.
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(9101L);
+        policy.setName("multi-catalog");
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource cat = new RangerPolicyResource();
+        cat.setValues(List.of("some_other_catalog", CATALOG));
+        resources.put("catalog", cat);
+        policy.setResources(resources);
+
+        assertTrue(adapter.shouldProcessPolicy(policy),
+                "a policy listing the configured GDC catalog anywhere in its catalog list is in scope");
+        assertTrue(adapter.describeSkip(policy).isEmpty(), "an in-scope policy has no skip reason");
+    }
+
+    @Test
+    void wildcardCatalogIsSkippedWithAFederatedCatalogExplanation() {
+        // catalog=* spans federated catalogs that have no Lake Formation representation, so it is
+        // deliberately NOT treated as the configured GDC catalog.
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(9102L);
+        policy.setName("wildcard-catalog");
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource cat = new RangerPolicyResource();
+        cat.setValues(List.of("*"));
+        resources.put("catalog", cat);
+        policy.setResources(resources);
+
+        assertFalse(adapter.shouldProcessPolicy(policy));
+        String reason = adapter.describeSkip(policy).orElseThrow();
+        assertTrue(reason.contains("all catalogs"), reason);
+        assertTrue(reason.contains("federated"), reason);
+    }
+
+    @Test
+    void mismatchedCatalogIsSkippedWithTheCatalogNamed() {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(9103L);
+        policy.setName("other-catalog");
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource cat = new RangerPolicyResource();
+        cat.setValues(List.of("system"));
+        resources.put("catalog", cat);
+        policy.setResources(resources);
+
+        assertFalse(adapter.shouldProcessPolicy(policy));
+        String reason = adapter.describeSkip(policy).orElseThrow();
+        assertTrue(reason.contains("system"), "must name the offending catalog: " + reason);
+        assertTrue(reason.contains(CATALOG), "must name the configured catalog: " + reason);
+    }
 }

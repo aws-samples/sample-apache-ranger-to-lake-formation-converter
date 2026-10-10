@@ -214,8 +214,20 @@ public class RangerToCedarConverter {
 
         // Check if the adapter wants to process this policy (e.g., GDC catalog filtering)
         if (!adapter.shouldProcessPolicy(policy)) {
-            LOG.debug("Adapter for service type '{}' skipped policy {} ({})",
-                    adapter.getServiceType(), policyId, policyName);
+            // A skipped policy yields zero grants, so the assessment calls it NOT_CONVERTIBLE.
+            // Record why, or the report shows an unexplained failure — the exact symptom that made
+            // a customer's 212 wildcard-catalog Trino policies look inexplicably unconvertible.
+            String reason = adapter.describeSkip(policy)
+                    .orElse("Policy was skipped by the " + adapter.getServiceType()
+                            + " adapter and produced no Lake Formation grants.");
+            LOG.debug("Adapter for service type '{}' skipped policy {} ({}): {}",
+                    adapter.getServiceType(), policyId, policyName, reason);
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.CATALOG_NOT_IN_SCOPE,
+                    buildResourcePath(policy),
+                    reason,
+                    "Confirm whether these policies are in scope for this migration. If they are, "
+                            + "scope them to the configured GDC catalog; if not, no action is needed."));
             return Collections.emptyList();
         }
 

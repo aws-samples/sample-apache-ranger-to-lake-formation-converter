@@ -205,13 +205,56 @@ public class PrestoServiceAdapter implements SourcePolicyAdapter {
         if (values == null || values.isEmpty()) {
             return true;
         }
-        String catalogValue = values.get(0);
-        if (gdcCatalogName.equals(catalogValue)) {
+        // Check every declared catalog, not just the first. A policy listing
+        // ["other", "<gdcCatalogName>"] is in scope; reading values.get(0) alone dropped it.
+        if (values.contains(gdcCatalogName)) {
             return true;
         }
-        LOG.debug("Skipping Presto policy '{}' (id={}) — catalog '{}' does not match configured GDC catalog '{}'",
-                policy.getName(), policy.getId(), catalogValue, gdcCatalogName);
+        LOG.debug("Skipping Presto policy '{}' (id={}) — catalog(s) {} do not include the configured "
+                        + "GDC catalog '{}'",
+                policy.getName(), policy.getId(), values, gdcCatalogName);
         return false;
+    }
+
+    /**
+     * Human-readable reason this adapter skipped {@code policy}, for the gap report.
+     *
+     * <p>Exists because {@link #shouldProcessPolicy} returns only a boolean, so the converter had
+     * no way to explain a skip. A skipped policy produces zero Lake Formation grants and used to
+     * be reported as NOT_CONVERTIBLE with no gap at all — the operator saw a policy that simply
+     * failed to convert, with nothing saying why.
+     */
+    @Override
+    public Optional<String> describeSkip(RangerPolicy policy) {
+        if (gdcCatalogName == null || gdcCatalogName.isBlank()) {
+            return Optional.empty();
+        }
+        Map<String, RangerPolicyResource> resources = policy.getResources();
+        if (resources == null) {
+            return Optional.empty();
+        }
+        RangerPolicyResource catalogResource = resources.get("catalog");
+        if (catalogResource == null || catalogResource.getValues() == null
+                || catalogResource.getValues().isEmpty()) {
+            return Optional.empty();
+        }
+        List<String> values = catalogResource.getValues();
+        if (values.contains(gdcCatalogName)) {
+            return Optional.empty();
+        }
+        if (values.contains("*")) {
+            // A wildcard catalog spans every catalog, including federated catalogs that have no
+            // Lake Formation representation. Converting it as though it named only the configured
+            // GDC catalog would assume scope the policy author never expressed, so the policy is
+            // skipped and surfaced for a human decision instead.
+            return Optional.of("Policy applies to all catalogs (catalog=*), which includes "
+                    + "federated catalogs that Lake Formation cannot represent. Only the configured "
+                    + "GDC catalog '" + gdcCatalogName + "' is convertible, so no grants were "
+                    + "produced. Scope the policy to a specific catalog to convert it.");
+        }
+        return Optional.of("Policy targets catalog(s) " + values + ", which do not include the "
+                + "configured GDC catalog '" + gdcCatalogName + "', so no grants were produced. "
+                + "Verify gdcCatalogName matches the catalog these policies are written against.");
     }
 
     /**

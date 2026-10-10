@@ -64,6 +64,10 @@ public class AssessmentReporter {
                 "Access types that were mapped but narrowed to a weaker LF permission on "
                         + "column-restricted resources; the grant still lands, and this is not "
                         + "counted against convertibility. See the rollup below.");
+        GAP_EXPLANATIONS.put(GapEntry.GapType.CATALOG_NOT_IN_SCOPE,
+                "Policy targets a catalog other than the configured gdcCatalogName (or all catalogs "
+                        + "via catalog=*, which spans federated catalogs LF cannot represent); no "
+                        + "grants were produced. See the per-policy details for the catalog(s).");
         GAP_EXPLANATIONS.put(GapEntry.GapType.UNMAPPED_RESOURCE,
                 "Resource paths cannot be mapped to LF data locations (HDFS/file:// not supported; see details below).");
         GAP_EXPLANATIONS.put(GapEntry.GapType.SCHEMA_VALIDATION_FAILURE,
