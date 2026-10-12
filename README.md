@@ -564,7 +564,37 @@ rangerServices:
 
 When `rangerServices` is omitted or empty, the server defaults to a single LakeFormation service for backward compatibility.
 
-Presto and Trino services require a `gdcCatalogName` property identifying which catalog maps to the Glue Data Catalog. Policies targeting other catalogs are silently skipped.
+Presto and Trino services require a `gdcCatalogName` property identifying which catalog maps to the Glue Data Catalog.
+
+#### Which catalog values are in scope
+
+A Presto/Trino policy's `catalog` resource is considered in scope when **any** of its values names the Glue Data Catalog this tool writes to:
+
+| Policy `catalog` value | In scope | Why |
+|---|---|---|
+| the configured `gdcCatalogName` | yes | whatever the Trino cluster calls the Glue catalog |
+| `awsdatacatalog` (any case) | yes | conventional alias for the account's root catalog |
+| the AWS account id, or the configured `catalogId` | yes | how the root catalog is named in Glue ARNs and LF grants |
+| `*` | yes — see below | |
+| anything else (`system`, `postgres`, a connector catalog) | no | reported as a `CATALOG_NOT_IN_SCOPE` gap |
+
+Every value is checked, not just the first, so a policy listing `["postgres", "awsdatacatalog"]` is in scope.
+
+**`catalog=*` resolves to the default (root) catalog.** This is a deliberate simplification. A Ranger
+wildcard means "every catalog this Trino cluster exposes", which can include connector catalogs
+(`postgres`, `memory`, `system`) that Lake Formation does not govern. Glue currently exposes only the
+account's root catalog to this tool — nothing enumerates catalogs, and Glue calls omit `catalogId` so
+they implicitly target the root — so granting on the root catalog is the faithful part of the
+translation and the remainder was never Lake-Formation-governable.
+
+This will need revisiting when Glue Data Catalog supports multiple user-defined catalogs: at that
+point `*` should resolve against the catalogs that actually exist rather than assuming the root, and
+a policy naming a catalog that does not exist *yet* arguably should be retained and granted if that
+catalog appears later. Tracked as a backlog item.
+
+A policy skipped for being out of scope produces zero Lake Formation grants and is classified
+`NOT_CONVERTIBLE`, with a `CATALOG_NOT_IN_SCOPE` gap naming the catalogs it targeted. Earlier
+versions skipped silently, which made such policies look inexplicably unconvertible.
 
 ### Environment Variable Overrides
 

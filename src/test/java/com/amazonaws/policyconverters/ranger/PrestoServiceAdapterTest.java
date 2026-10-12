@@ -328,39 +328,49 @@ class PrestoServiceAdapterTest {
         assertTrue(adapter.describeSkip(policy).isEmpty(), "an in-scope policy has no skip reason");
     }
 
-    @Test
-    void wildcardCatalogIsSkippedWithAFederatedCatalogExplanation() {
-        // catalog=* spans federated catalogs that have no Lake Formation representation, so it is
-        // deliberately NOT treated as the configured GDC catalog.
-        RangerPolicy policy = new RangerPolicy();
-        policy.setId(9102L);
-        policy.setName("wildcard-catalog");
-        Map<String, RangerPolicyResource> resources = new HashMap<>();
-        RangerPolicyResource cat = new RangerPolicyResource();
-        cat.setValues(List.of("*"));
-        resources.put("catalog", cat);
-        policy.setResources(resources);
 
-        assertFalse(adapter.shouldProcessPolicy(policy));
-        String reason = adapter.describeSkip(policy).orElseThrow();
-        assertTrue(reason.contains("all catalogs"), reason);
-        assertTrue(reason.contains("federated"), reason);
+
+    @Test
+    void wildcardCatalogResolvesToTheDefaultGdcCatalog() {
+        // catalog=* means "every catalog this Trino cluster exposes". Glue exposes only the
+        // account's root catalog to this tool, so the wildcard translates to it — a deliberate
+        // simplification documented in README.md and revisited when GDC supports multiple
+        // user-defined catalogs.
+        assertTrue(adapter.shouldProcessPolicy(catalogPolicy(9102L, "*")));
+        assertTrue(adapter.describeSkip(catalogPolicy(9102L, "*")).isEmpty(),
+                "a wildcard catalog is in scope, so there is no skip reason");
+    }
+
+    @Test
+    void awsDataCatalogAliasAndAccountIdBothResolveToTheDefaultCatalog() {
+        // awsdatacatalog is the conventional alias for the root catalog; the account id and
+        // configured catalog id are how that same catalog is named in Glue ARNs and LF grants.
+        assertTrue(adapter.shouldProcessPolicy(catalogPolicy(9104L, "awsdatacatalog")));
+        assertTrue(adapter.shouldProcessPolicy(catalogPolicy(9105L, "AWSDataCatalog")),
+                "the alias is matched case-insensitively");
+        assertTrue(adapter.shouldProcessPolicy(catalogPolicy(9106L, "123456789012")),
+                "the AWS account id names the root catalog");
     }
 
     @Test
     void mismatchedCatalogIsSkippedWithTheCatalogNamed() {
-        RangerPolicy policy = new RangerPolicy();
-        policy.setId(9103L);
-        policy.setName("other-catalog");
-        Map<String, RangerPolicyResource> resources = new HashMap<>();
-        RangerPolicyResource cat = new RangerPolicyResource();
-        cat.setValues(List.of("system"));
-        resources.put("catalog", cat);
-        policy.setResources(resources);
+        RangerPolicy policy = catalogPolicy(9103L, "system");
 
         assertFalse(adapter.shouldProcessPolicy(policy));
         String reason = adapter.describeSkip(policy).orElseThrow();
         assertTrue(reason.contains("system"), "must name the offending catalog: " + reason);
         assertTrue(reason.contains(CATALOG), "must name the configured catalog: " + reason);
+    }
+
+    private static RangerPolicy catalogPolicy(long id, String... catalogValues) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(id);
+        policy.setName("catalog-" + id);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource cat = new RangerPolicyResource();
+        cat.setValues(List.of(catalogValues));
+        resources.put("catalog", cat);
+        policy.setResources(resources);
+        return policy;
     }
 }
