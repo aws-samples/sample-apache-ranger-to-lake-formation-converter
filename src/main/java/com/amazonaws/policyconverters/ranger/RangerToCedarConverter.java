@@ -195,6 +195,11 @@ public class RangerToCedarConverter {
         // and were dropped", which is not true here — the grant still lands, just narrowed.
         Set<String> narrowedAccessTypes = new TreeSet<>();
 
+        // Principals this policy names that could not be resolved to an AWS identity, with why.
+        // Per policy, like the access-type accumulators above — a local, never a field, since the
+        // sync server reuses one converter for the life of the process.
+        Map<String, PrincipalMapper.UnresolvedCause> unresolvedPrincipals = new LinkedHashMap<>();
+
         // Look up adapter by service type
         String serviceType = policy.getService() != null ? policy.getService() : DEFAULT_SERVICE_TYPE;
         SourcePolicyAdapter adapter = adapterRegistry.get(serviceType);
@@ -214,8 +219,20 @@ public class RangerToCedarConverter {
 
         // Check if the adapter wants to process this policy (e.g., GDC catalog filtering)
         if (!adapter.shouldProcessPolicy(policy)) {
-            LOG.debug("Adapter for service type '{}' skipped policy {} ({})",
-                    adapter.getServiceType(), policyId, policyName);
+            // A skipped policy yields zero grants, so the assessment calls it NOT_CONVERTIBLE.
+            // Record why, or the report shows an unexplained failure — the exact symptom that made
+            // a customer's 212 wildcard-catalog Trino policies look inexplicably unconvertible.
+            String reason = adapter.describeSkip(policy)
+                    .orElse("Policy was skipped by the " + adapter.getServiceType()
+                            + " adapter and produced no Lake Formation grants.");
+            LOG.debug("Adapter for service type '{}' skipped policy {} ({}): {}",
+                    adapter.getServiceType(), policyId, policyName, reason);
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.CATALOG_NOT_IN_SCOPE,
+                    buildResourcePath(policy),
+                    reason,
+                    "Confirm whether these policies are in scope for this migration. If they are, "
+                            + "scope them to the configured GDC catalog; if not, no action is needed."));
             return Collections.emptyList();
         }
 
@@ -378,7 +395,8 @@ public class RangerToCedarConverter {
             for (RangerPolicyItem item : allowItems) {
                 statements.addAll(generateStatements(
                         item, "permit", policyId, adapter, resourceCombinations, null,
-                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes,
+                        unresolvedPrincipals));
             }
         }
 
@@ -388,7 +406,8 @@ public class RangerToCedarConverter {
             for (RangerPolicyItem item : denyItems) {
                 statements.addAll(generateStatements(
                         item, "forbid", policyId, adapter, resourceCombinations, null,
-                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes,
+                        unresolvedPrincipals));
             }
         }
 
@@ -398,7 +417,8 @@ public class RangerToCedarConverter {
             for (RangerPolicyItem item : denyExceptionItems) {
                 statements.addAll(generateStatements(
                         item, "permit", policyId, adapter, resourceCombinations, "denyException",
-                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes,
+                        unresolvedPrincipals));
             }
         }
 
@@ -417,7 +437,8 @@ public class RangerToCedarConverter {
                 }
                 statements.addAll(generateStatements(
                         filterItem, "permit", policyId, adapter, resourceCombinations, filterExpr,
-                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes));
+                        knownUnmappableAccessTypes, unrecognizedAccessTypes, narrowedAccessTypes,
+                        unresolvedPrincipals));
             }
         }
 
@@ -470,6 +491,28 @@ public class RangerToCedarConverter {
         // Separate gap type from KNOWN_UNMAPPABLE_ACTION: the grant still lands, just narrowed
         // to a weaker permission, which is a different (and non-alarming) situation than an
         // access type having no Lake Formation equivalent at all and being dropped entirely.
+        if (!unresolvedPrincipals.isEmpty()) {
+            // Actionable, and therefore demoting: a policy that drops some of its principals is
+            // partially convertible, and one that drops all of them produces no grants at all.
+            // The sync server behaves identically (it grants nothing for an unresolved principal
+            // and emits an UnmappedPrincipal metric) — this gap is the assessment's equivalent.
+            Map<PrincipalMapper.UnresolvedCause, List<String>> byCause = new LinkedHashMap<>();
+            unresolvedPrincipals.forEach((label, cause) ->
+                    byCause.computeIfAbsent(cause, k -> new ArrayList<>()).add(label));
+            List<String> parts = new ArrayList<>();
+            for (Map.Entry<PrincipalMapper.UnresolvedCause, List<String>> e : byCause.entrySet()) {
+                parts.add(e.getValue() + " (" + e.getKey().getDescription() + ")");
+            }
+            String recommendation = byCause.keySet().stream()
+                    .map(PrincipalMapper.UnresolvedCause::getRecommendation)
+                    .distinct()
+                    .collect(java.util.stream.Collectors.joining(" "));
+            gapReporter.recordGap(new GapEntry(
+                    policyId, policyName, GapType.UNRESOLVED_PRINCIPAL, null,
+                    "Principal(s) could not be resolved to an AWS identity, so no grants were "
+                            + "produced for them: " + String.join(", ", parts) + ".",
+                    recommendation));
+        }
         if (!narrowedAccessTypes.isEmpty()) {
             LOG.debug("Policy {} ({}) narrowed access type(s) {} to {} on column-restricted "
                             + "resources.",
@@ -519,11 +562,12 @@ public class RangerToCedarConverter {
                                             String extraAnnotation,
                                             Set<String> knownUnmappableAccessTypes,
                                             Set<String> unrecognizedAccessTypes,
-                                            Set<String> narrowedAccessTypes) {
+                                            Set<String> narrowedAccessTypes,
+                                            Map<String, PrincipalMapper.UnresolvedCause> unresolvedPrincipals) {
         List<String> statements = new ArrayList<>();
 
         // Resolve principals
-        List<ResolvedPrincipal> principalArns = resolvePrincipals(item);
+        List<ResolvedPrincipal> principalArns = resolvePrincipals(item, unresolvedPrincipals);
         if (principalArns.isEmpty()) {
             return statements;
         }
@@ -660,31 +704,41 @@ public class RangerToCedarConverter {
     private record ResolvedPrincipal(String arn, String originalName) {
     }
 
-    private List<ResolvedPrincipal> resolvePrincipals(RangerPolicyItem item) {
+    /**
+     * Resolves an item's principals, recording any that could not be resolved.
+     *
+     * <p>Unresolved principals used to be discarded by {@code Optional.ifPresent}, with no gap, no
+     * log and no record of any kind. If every principal in an item failed, the item produced no
+     * statements and the policy was reported NOT_CONVERTIBLE with nothing explaining why.
+     *
+     * @param unresolved collector, keyed "type:name", recording why each principal failed
+     */
+    private List<ResolvedPrincipal> resolvePrincipals(
+            RangerPolicyItem item, Map<String, PrincipalMapper.UnresolvedCause> unresolved) {
         List<ResolvedPrincipal> resolved = new ArrayList<>();
-
-        if (item.getUsers() != null) {
-            for (String user : item.getUsers()) {
-                principalMapper.resolveUser(user)
-                        .ifPresent(arn -> resolved.add(new ResolvedPrincipal(arn, "user:" + user)));
-            }
-        }
-
-        if (item.getGroups() != null) {
-            for (String group : item.getGroups()) {
-                principalMapper.resolveGroup(group)
-                        .ifPresent(arn -> resolved.add(new ResolvedPrincipal(arn, "group:" + group)));
-            }
-        }
-
-        if (item.getRoles() != null) {
-            for (String role : item.getRoles()) {
-                principalMapper.resolveRole(role)
-                        .ifPresent(arn -> resolved.add(new ResolvedPrincipal(arn, "role:" + role)));
-            }
-        }
-
+        collect(PrincipalMapper.PrincipalType.USER, item.getUsers(), resolved, unresolved);
+        collect(PrincipalMapper.PrincipalType.GROUP, item.getGroups(), resolved, unresolved);
+        collect(PrincipalMapper.PrincipalType.ROLE, item.getRoles(), resolved, unresolved);
         return resolved;
+    }
+
+    private void collect(PrincipalMapper.PrincipalType type, List<String> names,
+                         List<ResolvedPrincipal> resolved,
+                         Map<String, PrincipalMapper.UnresolvedCause> unresolved) {
+        if (names == null) {
+            return;
+        }
+        for (String name : names) {
+            String label = type.label() + ":" + name;
+            PrincipalMapper.Resolution r = principalMapper.resolve(type, name);
+            if (r.isResolved()) {
+                resolved.add(new ResolvedPrincipal(r.arn().get(), label));
+            } else {
+                // putIfAbsent: the first cause seen for a principal wins, so a later cheap
+                // NO_MAPPING cannot mask an earlier LOOKUP_FAILED for the same name.
+                unresolved.putIfAbsent(label, r.cause());
+            }
+        }
     }
 
     private String determineResourceLevel(Map<String, RangerPolicyResource> resources) {

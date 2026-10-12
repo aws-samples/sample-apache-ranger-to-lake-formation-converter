@@ -193,4 +193,108 @@ class IdentityCenterPrincipalMapperTest {
 
         verify(identityStoreClient, times(2)).getUserId(any(GetUserIdRequest.class));
     }
+
+    // ---------------------------------------------------------------------------------
+    // resolve(type, name) — cause reporting.
+    //
+    // These are the branches that matter most in practice: a customer running the
+    // assessment against Identity Center needs to know whether a principal is genuinely
+    // absent (stale Ranger policy) or whether the lookup failed (their grant counts are
+    // unreliable). Both previously collapsed into an empty Optional.
+    // ---------------------------------------------------------------------------------
+
+    @Test
+    void resolve_userNotInDirectory_reportsNotFound() {
+        when(identityStoreClient.getUserId(any(GetUserIdRequest.class)))
+                .thenThrow(ResourceNotFoundException.builder().message("nope").build());
+
+        PrincipalMapper.Resolution r =
+                mapper().resolve(PrincipalMapper.PrincipalType.USER, "departed_user");
+
+        assertFalse(r.isResolved());
+        assertEquals(PrincipalMapper.UnresolvedCause.NOT_FOUND, r.cause(),
+                "a confirmed absence is a stale policy, not a tool failure");
+    }
+
+    @Test
+    void resolve_userLookupFails_reportsLookupFailed() {
+        // Throttling, a missing identitystore:GetUserId permission, or a wrong identityStoreId
+        // all surface as SdkException. The assessment cannot determine access in this case, so
+        // its numbers are untrustworthy — which is a different message to the operator.
+        when(identityStoreClient.getUserId(any(GetUserIdRequest.class)))
+                .thenThrow(SdkException.builder().message("throttled").build());
+
+        PrincipalMapper.Resolution r =
+                mapper().resolve(PrincipalMapper.PrincipalType.USER, "alice");
+
+        assertFalse(r.isResolved());
+        assertEquals(PrincipalMapper.UnresolvedCause.LOOKUP_FAILED, r.cause(),
+                "a failed lookup must not be reported as a confirmed absence");
+    }
+
+    @Test
+    void resolve_groupNotInDirectory_reportsNotFound() {
+        when(identityStoreClient.getGroupId(any(GetGroupIdRequest.class)))
+                .thenThrow(ResourceNotFoundException.builder().message("nope").build());
+
+        PrincipalMapper.Resolution r =
+                mapper().resolve(PrincipalMapper.PrincipalType.GROUP, "departed_group");
+
+        assertFalse(r.isResolved());
+        assertEquals(PrincipalMapper.UnresolvedCause.NOT_FOUND, r.cause());
+    }
+
+    @Test
+    void resolve_groupLookupFails_reportsLookupFailed() {
+        when(identityStoreClient.getGroupId(any(GetGroupIdRequest.class)))
+                .thenThrow(SdkException.builder().message("access denied").build());
+
+        PrincipalMapper.Resolution r =
+                mapper().resolve(PrincipalMapper.PrincipalType.GROUP, "analysts");
+
+        assertFalse(r.isResolved());
+        assertEquals(PrincipalMapper.UnresolvedCause.LOOKUP_FAILED, r.cause());
+    }
+
+    @Test
+    void resolve_role_reportsNoMappingBecauseIdcHasNoRoleConcept() {
+        // Identity Center has no role concept, so the directory is never queried. NOT_FOUND
+        // would imply we asked and it was absent; the remedy is a static or composite mapper,
+        // which is what NO_MAPPING advises.
+        PrincipalMapper.Resolution r =
+                mapper().resolve(PrincipalMapper.PrincipalType.ROLE, "admin_role");
+
+        assertFalse(r.isResolved());
+        assertEquals(PrincipalMapper.UnresolvedCause.NO_MAPPING, r.cause());
+    }
+
+    @Test
+    void resolve_happyPath_returnsArnAndNoCause() {
+        when(identityStoreClient.getUserId(any(GetUserIdRequest.class)))
+                .thenReturn(GetUserIdResponse.builder().userId("u-123").build());
+
+        PrincipalMapper.Resolution r =
+                mapper().resolve(PrincipalMapper.PrincipalType.USER, "alice");
+
+        assertTrue(r.isResolved());
+        assertTrue(r.arn().orElseThrow().contains("u-123"));
+    }
+
+    @Test
+    void resolve_causeDoesNotLeakFromAnEarlierFailure() {
+        // The cause travels via a ThreadLocal side channel rather than the return value, so the
+        // risk is a stale value being read after a later success. Resolve a failing principal,
+        // then a succeeding one, on the same mapper instance.
+        IdentityCenterPrincipalMapper m = mapper();
+        when(identityStoreClient.getUserId(any(GetUserIdRequest.class)))
+                .thenThrow(SdkException.builder().message("boom").build())
+                .thenReturn(GetUserIdResponse.builder().userId("u-456").build());
+
+        PrincipalMapper.Resolution failed = m.resolve(PrincipalMapper.PrincipalType.USER, "bad");
+        PrincipalMapper.Resolution ok = m.resolve(PrincipalMapper.PrincipalType.USER, "good");
+
+        assertEquals(PrincipalMapper.UnresolvedCause.LOOKUP_FAILED, failed.cause());
+        assertTrue(ok.isResolved(), "the later success must not be contaminated");
+        assertNull(ok.cause(), "a resolved principal carries no cause");
+    }
 }

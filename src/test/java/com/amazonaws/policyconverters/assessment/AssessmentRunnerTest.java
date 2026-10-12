@@ -466,4 +466,87 @@ class AssessmentRunnerTest {
                 .filter(g -> g.getGapType() == GapType.NARROWED_ACTION)
                 .allMatch(g -> g.getPolicyId() == null));
     }
+
+    // ---------------------------------------------------------------------------------
+    // Unresolved principals. `minimalConfig()` maps only "alice", so any other principal
+    // is unresolvable — which is the condition under test.
+    // ---------------------------------------------------------------------------------
+
+    @Test
+    void unresolvedPrincipalRollupSurvivesTheGapTextRoundTrip() {
+        // ROUND-TRIP GUARD. The rollup recovers principals and causes by parsing the gap text
+        // built in RangerToCedarConverter (see buildUnresolvedPrincipalRollup's javadoc). If
+        // either side's format drifts, the rollup silently yields nothing — no exception. This
+        // test fails loudly instead. Do NOT fix a failure here by editing the regex; carry the
+        // data structurally instead.
+        RangerPolicy policy = lfTablePolicyForUser(7701L, "no-such-user");
+
+        AssessmentResult result = new AssessmentRunner()
+                .run(minimalConfig(), stubSource("lakeformation", "lakeformation", List.of(policy)));
+
+        List<UnresolvedPrincipalSummary> rollup = result.getUnresolvedPrincipals();
+        assertEquals(1, rollup.size(), "the unresolved principal must survive into the rollup");
+        UnresolvedPrincipalSummary row = rollup.get(0);
+        assertEquals("user:no-such-user", row.getPrincipal(),
+                "principal label must round-trip through the gap text intact");
+        assertEquals("NO_MAPPING", row.getCause(),
+                "the static mapper reports NO_MAPPING; a drifted format would lose this");
+        assertEquals(1, row.getPolicyCount());
+        assertEquals(List.of("7701"), row.getSamplePolicyIds());
+    }
+
+    @Test
+    void policyWithNoResolvablePrincipalsIsNotConvertibleWithAReason() {
+        RangerPolicy policy = lfTablePolicyForUser(7702L, "no-such-user");
+
+        AssessmentResult result = new AssessmentRunner()
+                .run(minimalConfig(), stubSource("lakeformation", "lakeformation", List.of(policy)));
+
+        assertEquals(1, result.getNotConvertible());
+        PolicyGapSummary summary = result.getPolicyGapSummaries().stream()
+                .filter(g -> "7702".equals(g.getPolicyId())).findFirst().orElseThrow();
+        assertTrue(summary.getGaps().stream()
+                        .anyMatch(g -> g.getGapType() == GapType.UNRESOLVED_PRINCIPAL),
+                "a policy that resolved no principals must say so");
+    }
+
+    @Test
+    void policyWithSomeResolvablePrincipalsIsPartiallyConvertible() {
+        // alice resolves, no-such-user does not: grants are produced, but not all of them.
+        RangerPolicy policy = lfTablePolicyForUser(7703L, "alice", "no-such-user");
+
+        AssessmentResult result = new AssessmentRunner()
+                .run(minimalConfig(), stubSource("lakeformation", "lakeformation", List.of(policy)));
+
+        assertEquals(1, result.getPartiallyConvertible(),
+                "some principals mapped and some not is partially convertible, not fully");
+        assertEquals(0, result.getFullyConvertible());
+        assertTrue(result.getProjectedGrantCount() > 0, "alice's grant should still be projected");
+    }
+
+    private RangerPolicy lfTablePolicyForUser(long id, String... users) {
+        RangerPolicy policy = new RangerPolicy();
+        policy.setId(id);
+        policy.setName("policy-" + id);
+        policy.setService("lakeformation");
+        policy.setIsEnabled(true);
+        policy.setPolicyType(0);
+        Map<String, RangerPolicyResource> resources = new HashMap<>();
+        RangerPolicyResource db = new RangerPolicyResource();
+        db.setValues(List.of("analytics"));
+        resources.put("database", db);
+        RangerPolicyResource tbl = new RangerPolicyResource();
+        tbl.setValues(List.of("events"));
+        resources.put("table", tbl);
+        policy.setResources(resources);
+
+        RangerPolicy.RangerPolicyItem item = new RangerPolicy.RangerPolicyItem();
+        item.setUsers(List.of(users));
+        RangerPolicy.RangerPolicyItemAccess access = new RangerPolicy.RangerPolicyItemAccess();
+        access.setType("select");
+        access.setIsAllowed(true);
+        item.setAccesses(List.of(access));
+        policy.setPolicyItems(List.of(item));
+        return policy;
+    }
 }

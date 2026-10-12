@@ -74,6 +74,9 @@ public class TrinoServiceAdapter implements SourcePolicyAdapter {
      * Distinct from an unrecognised access type, which signals a coverage gap in this adapter and
      * stays actionable.
      */
+    /** Conventional alias for the account's root Glue Data Catalog. */
+    private static final String AWS_DATA_CATALOG_ALIAS = "awsdatacatalog";
+
     private static final Set<String> UNMAPPED_ACCESS_TYPES =
             Set.of("grant", "revoke", "execute", "impersonate");
 
@@ -205,13 +208,46 @@ public class TrinoServiceAdapter implements SourcePolicyAdapter {
         if (values == null || values.isEmpty()) {
             return true;
         }
-        String catalogValue = values.get(0);
-        if (gdcCatalogName.equals(catalogValue)) {
+        // Check every declared catalog, not just the first: a policy naming another catalog
+        // first but also naming an in-scope one was being dropped.
+        if (values.stream().anyMatch(this::namesDefaultGdcCatalog)) {
             return true;
         }
-        LOG.debug("Skipping Trino policy '{}' (id={}) — catalog '{}' does not match configured GDC catalog '{}'",
-                policy.getName(), policy.getId(), catalogValue, gdcCatalogName);
+        LOG.debug("Skipping Trino policy '{}' (id={}) — catalog(s) {} do not include the configured "
+                        + "GDC catalog '{}'",
+                policy.getName(), policy.getId(), values, gdcCatalogName);
         return false;
+    }
+
+    /**
+     * Human-readable reason this adapter skipped {@code policy}, for the gap report.
+     *
+     * <p>Exists because {@link #shouldProcessPolicy} returns only a boolean, so the converter had
+     * no way to explain a skip. A skipped policy produces zero Lake Formation grants and used to
+     * be reported as NOT_CONVERTIBLE with no gap at all — the operator saw a policy that simply
+     * failed to convert, with nothing saying why.
+     */
+    @Override
+    public Optional<String> describeSkip(RangerPolicy policy) {
+        if (gdcCatalogName == null || gdcCatalogName.isBlank()) {
+            return Optional.empty();
+        }
+        Map<String, RangerPolicyResource> resources = policy.getResources();
+        if (resources == null) {
+            return Optional.empty();
+        }
+        RangerPolicyResource catalogResource = resources.get("catalog");
+        if (catalogResource == null || catalogResource.getValues() == null
+                || catalogResource.getValues().isEmpty()) {
+            return Optional.empty();
+        }
+        List<String> values = catalogResource.getValues();
+        if (values.stream().anyMatch(this::namesDefaultGdcCatalog)) {
+            return Optional.empty();
+        }
+        return Optional.of("Policy targets catalog(s) " + values + ", which do not include the "
+                + "configured GDC catalog '" + gdcCatalogName + "', so no grants were produced. "
+                + "Verify gdcCatalogName matches the catalog these policies are written against.");
     }
 
     /**
@@ -359,5 +395,44 @@ public class TrinoServiceAdapter implements SourcePolicyAdapter {
             throw new IllegalArgumentException("Resource key '" + key + "' has no values");
         }
         return values.get(0);
+    }
+
+    /**
+     * Whether {@code catalogValue} from a Ranger policy names the Glue Data Catalog this converter
+     * writes to.
+     *
+     * <p>Several strings refer to the same catalog:
+     * <ul>
+     *   <li>the configured {@code gdcCatalogName} — whatever the Trino cluster calls it;</li>
+     *   <li>{@code awsdatacatalog} — the conventional alias for the account's root catalog;</li>
+     *   <li>the AWS account id, and the configured catalog id, which are how the root catalog is
+     *       identified in Glue ARNs and Lake Formation grants;</li>
+     *   <li>{@code *} — see below.</li>
+     * </ul>
+     *
+     * <p><b>On {@code catalog=*}.</b> It is translated to the default (root) catalog, deliberately
+     * and as a simplification. A Ranger wildcard means "every catalog this Trino cluster exposes",
+     * which can include connector catalogs (postgres, memory, system) that Lake Formation does not
+     * govern. Glue today exposes only the account's root catalog to this tool — nothing here
+     * enumerates catalogs, and every Glue call omits {@code catalogId} so it implicitly targets the
+     * root. Granting on the root catalog is therefore the faithful part of the translation, and the
+     * rest was never Lake-Formation-governable.
+     *
+     * <p>This needs revisiting when Glue Data Catalog ships support for multiple user-defined
+     * catalogs: at that point {@code *} should resolve against the catalogs that actually exist
+     * rather than assuming the root. Tracked in the backlog; documented in README.md.
+     */
+    private boolean namesDefaultGdcCatalog(String catalogValue) {
+        if (catalogValue == null) {
+            return false;
+        }
+        String v = catalogValue.trim();
+        if (v.equals("*") || v.equalsIgnoreCase(AWS_DATA_CATALOG_ALIAS)) {
+            return true;
+        }
+        if (gdcCatalogName != null && gdcCatalogName.equals(v)) {
+            return true;
+        }
+        return v.equals(awsContext.getAccountId()) || v.equals(awsContext.getCatalogId());
     }
 }
