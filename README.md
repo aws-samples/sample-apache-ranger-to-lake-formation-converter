@@ -1312,11 +1312,54 @@ the number of policies or occurrences. The exact occurrence count per access typ
 `knownUnmappableActions[].occurrenceCount`, with up to 10 sample policy IDs in
 `samplePolicyIds`.
 
+### Unmappable principals
+
+A Ranger policy names users, groups and roles; each must be mapped to an AWS identity before a Lake
+Formation grant can be issued. When a principal cannot be mapped, no grant is produced for it — by
+the sync server as well as the assessment tool — so the assessment reports it rather than failing.
+
+Every unmappable principal is listed once at the end of the report with its cause, the number of
+policies naming it, and sample policy ids:
+
+```
+Unmappable principals (3) — no grants were produced for these:
+  directory lookup failed (1)
+     → The assessment could not determine this principal's identity, so its grant counts are
+       unreliable. Check the log for the underlying error and re-run.
+    group:analysts                     14 policies, e.g. 1476, 1483, 1487
+  no mapping configured (1)
+     → Add the principal to principalMapping (or enable a mapper that can resolve it) and re-run;
+       real access is otherwise under-reported.
+    user:svc-etl                        8 policies, e.g. 1473, 1477, 1479
+  not found in directory (1)
+     → Stale Ranger policy — consider pruning it, or re-create the principal.
+    user:departed_dev                   2 policies, e.g. 1519, 1574
+```
+
+The three causes need different responses, which is why they are reported separately rather than as
+one "unmapped" count:
+
+| Cause | Meaning | What to do |
+|---|---|---|
+| `NOT_FOUND` | the directory was queried and confirmed the principal does not exist | stale Ranger policy — prune it, or re-create the principal |
+| `NO_MAPPING` | no mapping is configured, so the principal was never looked up | add it to `principalMapping` and re-run; **real access is otherwise under-reported** |
+| `LOOKUP_FAILED` | the directory lookup itself failed — throttling, a missing `identitystore:GetUserId` permission, a wrong `identityStoreId` | **the grant counts in this report are unreliable**; fix the cause and re-run |
+
+Causes are ordered worst-first, so `LOOKUP_FAILED` appears above `NO_MAPPING`, which appears above
+`NOT_FOUND`. Only the Identity Center mapper distinguishes all three; the static and passthrough
+mappers report `NO_MAPPING`, which is correct for them since they only consult local configuration.
+
+Note that `NO_MAPPING` and `LOOKUP_FAILED` are *not* "fix your Ranger policies" findings — they mean
+the assessment itself is incomplete, and the convertibility percentages should not be trusted until
+they are resolved.
+
+The rollup also appears in the `--output-gaps-path` file under `unresolvedPrincipals`.
+
 ### Convertibility Classification
 
 | Category | Meaning |
 |----------|---------|
-| **Fully convertible** | Policy produces at least one projected LF grant and has zero *actionable* gap entries. Informational gap types — `WILDCARD_PATTERN`, `CANNOT_VALIDATE_S3_LOCATION`, `KNOWN_UNMAPPABLE_ACTION`, `NARROWED_ACTION` — never demote a policy out of this bucket, even if it has one or more of them. |
+| **Fully convertible** | Policy produces at least one projected LF grant and has zero *actionable* gap entries. Informational gap types — `WILDCARD_PATTERN`, `CANNOT_VALIDATE_S3_LOCATION`, `KNOWN_UNMAPPABLE_ACTION`, `NARROWED_ACTION` — never demote a policy out of this bucket, even if it has one or more of them. `CATALOG_NOT_IN_SCOPE` and `UNRESOLVED_PRINCIPAL` **are** actionable and do demote. |
 | **Partially convertible** | Policy produces at least one projected LF grant but also has one or more *actionable* gap entries (some features will be silently dropped) |
 | **Not convertible** | Policy produces zero projected LF grants (entirely skipped — all access types unmapped, no principal mappings, or tag/masking policy type) |
 
@@ -1345,6 +1388,8 @@ full JSON report's `gapReport.entries` always show it.)
 | `KNOWN_UNMAPPABLE_ACTION` | An access type a service adapter recognises but deliberately never maps to anything, because Lake Formation has no equivalent concept at all — e.g. Hive `index`/`lock`/`refresh`/`repladmin`/`serviceadmin`/`tempudfadmin`; Presto/Trino `grant`/`revoke`/`execute`/`impersonate`. The access type is dropped entirely — no grant results from it. Purely informational: it never demotes a policy's convertibility. Conflated per policy (one entry lists every affected access type for that policy) and, in the JSON report, collapsed further into one entry per `(serviceType, accessType)` — see [JSON Report Format](#json-report-format) and the `knownUnmappableActions` rollup. Does **not** cover access types that were narrowed rather than dropped — see `NARROWED_ACTION` below. |
 | `NARROWED_ACTION` | An access type that Lake Formation **does** have an equivalent for, but only a weaker one at the resource level in play — currently, column-scoped `all` is narrowed to `SELECT` because Lake Formation rejects `ALL` on a `TABLE_WITH_COLUMNS` resource. The grant still lands; it is just narrower than the Ranger policy requested. Purely informational: it never demotes a policy's convertibility. A policy affected only by narrowing is fully convertible and will not appear in the gaps file's per-policy `policies` array — the `narrowedActions` rollup (which carries `narrowedTo` and `reason`) is the only trace of it. Conflated per policy and collapsed per `(serviceType, accessType)` the same way as `KNOWN_UNMAPPABLE_ACTION`. |
 | `UNMAPPED_RESOURCE` | Resource ID cannot be mapped to an LF resource. The resource is skipped. |
+| `CATALOG_NOT_IN_SCOPE` | A Presto/Trino policy names a catalog that is not the Glue Data Catalog this tool writes to, so it produced no grants. Note `catalog=*`, `awsdatacatalog`, the AWS account id and the configured `catalogId` all resolve to the account's root catalog and are **in scope** — see [Which catalog values are in scope](#which-catalog-values-are-in-scope). Actionable: the policy is reported `NOT_CONVERTIBLE` with the catalogs it named. Before this existed such policies were skipped silently at DEBUG, which made them look inexplicably unconvertible. |
+| `UNRESOLVED_PRINCIPAL` | One or more principals named by the policy could not be mapped to an AWS identity, so no grants were produced for them. Actionable and therefore demoting: a policy where *some* principals resolve is `PARTIALLY_CONVERTIBLE`; one where *none* resolve is `NOT_CONVERTIBLE`. This matches the sync server, which also grants nothing for an unresolved principal and emits an `UnmappedPrincipal` metric. Conflated per policy, and rolled up across the report by principal — see [Unmappable principals](#unmappable-principals). |
 | `SCHEMA_VALIDATION_FAILURE` | A Cedar statement failed schema validation and was excluded. Valid statements in the same policy are retained. |
 | `UNREGISTERED_S3_LOCATION` | An S3 prefix referenced by the policy is not covered by a registered Lake Formation data location. Reported by the assessment tool when S3 Access Grants validation is enabled. |
 | `CANNOT_VALIDATE_S3_LOCATION` | S3 location validation was requested but no S3 Access Grants configuration is present. Reported by the assessment tool. Informational — does not demote convertibility. |
