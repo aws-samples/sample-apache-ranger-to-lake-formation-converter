@@ -368,7 +368,7 @@ class AssessmentReporterTest {
         GapReport gapReport = new GapReport(entries, GapReport.computeSummary(entries), "2024-01-01T00:00:00Z");
         return new AssessmentResult(5, 5, 0, 0, 10, gapReport,
                 "ranger-admin:http://localhost:6080", List.of(), List.of(), List.of(), List.of(),
-                List.of(), rollup);
+                List.of(), rollup, List.of());
     }
 
     private String capture(AssessmentResult result) {

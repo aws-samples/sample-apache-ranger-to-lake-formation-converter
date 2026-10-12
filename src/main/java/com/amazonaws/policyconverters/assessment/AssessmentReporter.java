@@ -69,6 +69,10 @@ public class AssessmentReporter {
                         + "grants were produced. Note catalog=* and awsdatacatalog both resolve to "
                         + "the account's root catalog and are in scope. See the per-policy details "
                         + "for the catalog(s) named.");
+        GAP_EXPLANATIONS.put(GapEntry.GapType.UNRESOLVED_PRINCIPAL,
+                "Principals could not be mapped to an AWS identity, so no grants were produced for "
+                        + "them. The sync server behaves the same way. See the breakdown below for "
+                        + "which principals and why.");
         GAP_EXPLANATIONS.put(GapEntry.GapType.UNMAPPED_RESOURCE,
                 "Resource paths cannot be mapped to LF data locations (HDFS/file:// not supported; see details below).");
         GAP_EXPLANATIONS.put(GapEntry.GapType.SCHEMA_VALIDATION_FAILURE,
@@ -199,6 +203,27 @@ public class AssessmentReporter {
                     String path = e.getResourcePath() != null ? e.getResourcePath() : "(unknown)";
                     String policy = e.getPolicyId() != null ? e.getPolicyId() : "?";
                     out.printf("  [%s] %s%n", policy, path);
+                }
+            }
+
+            List<UnresolvedPrincipalSummary> unresolved = result.getUnresolvedPrincipals();
+            if (!unresolved.isEmpty()) {
+                out.println();
+                out.printf("Unmappable principals (%d) — no grants were produced for these:%n",
+                        unresolved.size());
+                String lastCause = null;
+                for (UnresolvedPrincipalSummary row : unresolved) {
+                    if (!row.getCause().equals(lastCause)) {
+                        long n = unresolved.stream()
+                                .filter(r -> r.getCause().equals(row.getCause())).count();
+                        out.printf("  %s (%d)%n", row.getCauseDescription(), n);
+                        out.printf("     → %s%n", row.getRecommendation());
+                        lastCause = row.getCause();
+                    }
+                    out.printf("    %-34s %d polic%s, e.g. %s%n",
+                            row.getPrincipal(), row.getPolicyCount(),
+                            row.getPolicyCount() == 1 ? "y" : "ies",
+                            String.join(", ", row.getSamplePolicyIds()));
                 }
             }
 

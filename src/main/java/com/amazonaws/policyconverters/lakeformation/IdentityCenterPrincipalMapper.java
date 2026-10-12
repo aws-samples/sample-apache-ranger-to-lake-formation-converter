@@ -31,6 +31,35 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class IdentityCenterPrincipalMapper implements PrincipalMapper {
 
+    /**
+     * Cause of the most recent failed resolution on this thread.
+     *
+     * <p>A side channel rather than a changed return type, so {@code resolveUser}/{@code
+     * resolveGroup}/{@code resolveRole} keep their published signatures and the other three
+     * mapper implementations need no changes. Thread-local because a mapper instance is shared:
+     * the sync server and the assessment both reuse one. It is written only on the failure paths
+     * below and read immediately afterwards by {@link #resolve}, so no value outlives the call
+     * that produced it.
+     */
+    private final ThreadLocal<UnresolvedCause> lastCause = new ThreadLocal<>();
+
+    @Override
+    public Resolution resolve(PrincipalType type, String name) {
+        lastCause.remove();
+        Optional<String> arn = switch (type) {
+            case USER -> resolveUser(name);
+            case GROUP -> resolveGroup(name);
+            case ROLE -> resolveRole(name);
+        };
+        if (arn.isPresent()) {
+            return Resolution.of(arn.get());
+        }
+        UnresolvedCause cause = lastCause.get();
+        lastCause.remove();
+        // A null-name argument short-circuits before any catch block runs, so fall back.
+        return Resolution.unresolved(cause != null ? cause : UnresolvedCause.NO_MAPPING);
+    }
+
     private static final Logger LOG = LoggerFactory.getLogger(IdentityCenterPrincipalMapper.class);
 
     private final String identityStoreId;
@@ -103,6 +132,7 @@ public class IdentityCenterPrincipalMapper implements PrincipalMapper {
             if (metricsEmitter != null) {
                 metricsEmitter.recordUnmappedPrincipal("user");
             }
+            lastCause.set(UnresolvedCause.NOT_FOUND);
             return Optional.empty();
 
         } catch (SdkException e) {
@@ -110,6 +140,7 @@ public class IdentityCenterPrincipalMapper implements PrincipalMapper {
             if (metricsEmitter != null) {
                 metricsEmitter.recordUnmappedPrincipal("user");
             }
+            lastCause.set(UnresolvedCause.LOOKUP_FAILED);
             return Optional.empty();
         }
     }
@@ -156,6 +187,7 @@ public class IdentityCenterPrincipalMapper implements PrincipalMapper {
             if (metricsEmitter != null) {
                 metricsEmitter.recordUnmappedPrincipal("group");
             }
+            lastCause.set(UnresolvedCause.NOT_FOUND);
             return Optional.empty();
 
         } catch (SdkException e) {
@@ -163,6 +195,7 @@ public class IdentityCenterPrincipalMapper implements PrincipalMapper {
             if (metricsEmitter != null) {
                 metricsEmitter.recordUnmappedPrincipal("group");
             }
+            lastCause.set(UnresolvedCause.LOOKUP_FAILED);
             return Optional.empty();
         }
     }
@@ -183,6 +216,9 @@ public class IdentityCenterPrincipalMapper implements PrincipalMapper {
         if (metricsEmitter != null) {
             metricsEmitter.recordUnmappedPrincipal("role");
         }
+        // Not NOT_FOUND: the directory was never asked. Identity Center has no role concept at
+        // all, so the remedy is a static or composite mapper, which is what NO_MAPPING advises.
+        lastCause.set(UnresolvedCause.NO_MAPPING);
         return Optional.empty();
     }
 }

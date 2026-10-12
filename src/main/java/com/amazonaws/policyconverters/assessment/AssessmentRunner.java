@@ -32,6 +32,8 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.glue.GlueClient;
 import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -189,6 +191,8 @@ public class AssessmentRunner {
 
         List<KnownUnmappableActionSummary> knownUnmappable =
                 buildKnownUnmappableRollup(rawGapReport);
+        List<UnresolvedPrincipalSummary> unresolvedPrincipals =
+                buildUnresolvedPrincipalRollup(rawGapReport);
         List<NarrowedActionSummary> narrowed = buildNarrowedActionRollup(rawGapReport);
         GapReport gapReport = collapseKnownUnmappableEntries(rawGapReport, knownUnmappable);
         gapReport = collapseNarrowedActionEntries(gapReport, narrowed);
@@ -206,13 +210,90 @@ public class AssessmentRunner {
                 ops,
                 convertibility.policyGapSummaries,
                 knownUnmappable,
-                narrowed);
+                narrowed,
+                unresolvedPrincipals);
     }
 
     /**
      * Rolls KNOWN_UNMAPPABLE_ACTION entries up to one row per (serviceType, accessType),
      * ordered by descending occurrence count so the console leads with the worst offender.
      */
+    /**
+     * Rolls UNRESOLVED_PRINCIPAL entries up to one row per principal, carrying the cause and the
+     * policies that name it.
+     *
+     * <h4>Known fragility — read before changing either side</h4>
+     *
+     * This method recovers the principal labels and the cause by <strong>parsing the gap's details
+     * text</strong> with a regex, because {@code GapEntry} has no principal or cause field. The
+     * message is built in {@code RangerToCedarConverter.convertSinglePolicy} (search for
+     * {@code UNRESOLVED_PRINCIPAL}) in the form:
+     *
+     * <pre>  ... : [label, label] (cause description), [label] (cause description).</pre>
+     *
+     * so the regex here depends on {@code UnresolvedCause.getDescription()} and on that bracket
+     * layout. <b>Change one side and this rollup silently produces nothing</b> — no exception, just
+     * an empty list and a missing report section.
+     *
+     * <p>This was a deliberate trade, not an oversight: the alternative is adding principal and
+     * cause fields to {@code GapEntry}, which is shared with the sync server and every other gap
+     * type, for data only the assessment tool consumes. Accepted on 2026-10-12 as not worth the
+     * churn while this is the only consumer.
+     *
+     * <p><b>If it needs fixing later</b>, the clean shape is to carry the data structurally rather
+     * than textually — either a {@code List<String> subjects} plus {@code cause} on
+     * {@code GapEntry}, or a dedicated side table on {@code GapReporter} keyed by policy id. Then
+     * delete this parsing entirely. A round-trip test guards the coupling in the meantime; if you
+     * find yourself editing the regex to make a test pass, that is the signal to do the structural
+     * fix instead.
+     */
+    private static List<UnresolvedPrincipalSummary> buildUnresolvedPrincipalRollup(GapReport report) {
+        // principal -> (cause, policy ids)
+        Map<String, PrincipalMapper.UnresolvedCause> causeByPrincipal = new LinkedHashMap<>();
+        Map<String, List<String>> policiesByPrincipal = new LinkedHashMap<>();
+
+        for (GapEntry entry : report.getEntries()) {
+            if (entry.getGapType() != GapType.UNRESOLVED_PRINCIPAL || entry.getDetails() == null) {
+                continue;
+            }
+            for (PrincipalMapper.UnresolvedCause cause : PrincipalMapper.UnresolvedCause.values()) {
+                Matcher m = Pattern
+                        .compile("\\[([^\\]]*)\\] \\(" + Pattern.quote(cause.getDescription()) + "\\)")
+                        .matcher(entry.getDetails());
+                while (m.find()) {
+                    for (String label : m.group(1).split(",\\s*")) {
+                        if (label.isBlank()) {
+                            continue;
+                        }
+                        causeByPrincipal.putIfAbsent(label, cause);
+                        if (entry.getPolicyId() != null) {
+                            policiesByPrincipal
+                                    .computeIfAbsent(label, k -> new ArrayList<>())
+                                    .add(entry.getPolicyId());
+                        }
+                    }
+                }
+            }
+        }
+
+        List<UnresolvedPrincipalSummary> rollup = new ArrayList<>();
+        causeByPrincipal.forEach((label, cause) -> {
+            List<String> policies = policiesByPrincipal.getOrDefault(label, List.of());
+            rollup.add(UnresolvedPrincipalSummary.of(label, cause, policies.size(),
+                    policies.stream().limit(UnresolvedPrincipalSummary.SAMPLE_LIMIT)
+                            .collect(java.util.stream.Collectors.toList())));
+        });
+        // Worst first: lookup failures mean the numbers are unreliable, then missing mappings
+        // (real access being lost), then confirmed-absent principals (merely stale policies).
+        rollup.sort(Comparator
+                .comparingInt((UnresolvedPrincipalSummary r) ->
+                        PrincipalMapper.UnresolvedCause.valueOf(r.getCause()).ordinal())
+                .reversed()
+                .thenComparing(Comparator.comparingInt(
+                        UnresolvedPrincipalSummary::getPolicyCount).reversed()));
+        return rollup;
+    }
+
     private static List<KnownUnmappableActionSummary> buildKnownUnmappableRollup(GapReport report) {
         // LinkedHashMap keeps first-seen order stable before the final sort, which keeps
         // output deterministic for equal counts (important for the demo's expected output).

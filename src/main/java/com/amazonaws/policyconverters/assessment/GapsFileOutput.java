@@ -19,6 +19,7 @@ public class GapsFileOutput {
     private final List<PolicyGapSummary> policies;
     private final List<KnownUnmappableActionSummary> knownUnmappableActions;
     private final List<NarrowedActionSummary> narrowedActions;
+    private final List<UnresolvedPrincipalSummary> unresolvedPrincipals;
 
     public GapsFileOutput(
             List<PolicyGapSummary> policies,
@@ -32,13 +33,24 @@ public class GapsFileOutput {
             @JsonProperty("knownUnmappableActions")
                     List<KnownUnmappableActionSummary> knownUnmappableActions,
             @JsonProperty("narrowedActions")
-                    List<NarrowedActionSummary> narrowedActions) {
+                    List<NarrowedActionSummary> narrowedActions,
+            @JsonProperty("unresolvedPrincipals")
+                    List<UnresolvedPrincipalSummary> unresolvedPrincipals) {
         this.policies = policies != null
                 ? Collections.unmodifiableList(policies) : Collections.emptyList();
         this.knownUnmappableActions = knownUnmappableActions != null
                 ? Collections.unmodifiableList(knownUnmappableActions) : Collections.emptyList();
+        this.unresolvedPrincipals = unresolvedPrincipals != null
+                ? Collections.unmodifiableList(unresolvedPrincipals) : Collections.emptyList();
         this.narrowedActions = narrowedActions != null
                 ? Collections.unmodifiableList(narrowedActions) : Collections.emptyList();
+    }
+
+    /** Convenience overload for callers with no unresolved-principal rollup. */
+    public GapsFileOutput(List<PolicyGapSummary> policies,
+                          List<KnownUnmappableActionSummary> knownUnmappableActions,
+                          List<NarrowedActionSummary> narrowedActions) {
+        this(policies, knownUnmappableActions, narrowedActions, Collections.emptyList());
     }
 
     public List<PolicyGapSummary> getPolicies() { return policies; }
@@ -46,6 +58,11 @@ public class GapsFileOutput {
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     public List<KnownUnmappableActionSummary> getKnownUnmappableActions() {
         return knownUnmappableActions;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    public List<UnresolvedPrincipalSummary> getUnresolvedPrincipals() {
+        return unresolvedPrincipals;
     }
 
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
