@@ -33,6 +33,8 @@ import java.util.List;
  *     --output-dir &lt;dir&gt;        Directory for JSON report (default: current dir)
  *     --aws-region &lt;region&gt;     Enable Glue wildcard expansion
  *     --console-only            Print report to console, skip JSON file
+ *     --log-level &lt;level&gt;       TRACE|DEBUG|INFO|WARN|ERROR (default INFO)
+ *     --log-file &lt;path&gt;         Also write a plain-text log to this file
  *     --skip-validation         Skip Cedar schema validation (use for large policy sets)
  *
  *   file &lt;export-file.json&gt; [options]
@@ -40,6 +42,8 @@ import java.util.List;
  *     --output-dir &lt;dir&gt;        Directory for JSON report (default: current dir)
  *     --aws-region &lt;region&gt;     Enable Glue wildcard expansion
  *     --console-only            Print report to console, skip JSON file
+ *     --log-level &lt;level&gt;       TRACE|DEBUG|INFO|WARN|ERROR (default INFO)
+ *     --log-file &lt;path&gt;         Also write a plain-text log to this file
  *     --skip-validation         Skip Cedar schema validation (use for large policy sets)
  * </pre>
  */
@@ -58,6 +62,8 @@ public class AssessmentMain {
             "    --output-lf-policies-path <path>   Write projected LF permission operations to this JSON file",
             "    --output-gaps-path <path>          Write partially/not-convertible policies with gap details to this JSON file",
             "    --console-only                     Print report to console, skip JSON file",
+            "    --log-level <level>                TRACE|DEBUG|INFO|WARN|ERROR (default INFO)",
+            "    --log-file <path>                  Also write a plain-text log to this file",
             "    --skip-validation                  Skip Cedar schema validation (use for large policy sets)",
             "",
             "  file <export-file.json> [options]",
@@ -156,6 +162,22 @@ public class AssessmentMain {
                 case "--console-only":
                     configBuilder.consoleOnly(true);
                     break;
+                case "--log-level": {
+                    String level = nextArg(flagArgs, i++, flag);
+                    if (ch.qos.logback.classic.Level.toLevel(level, null) == null) {
+                        System.err.println("Invalid --log-level '" + level
+                                + "'. Expected one of: TRACE, DEBUG, INFO, WARN, ERROR, OFF");
+                        return 1;
+                    }
+                    applyLogLevel(level);
+                    break;
+                }
+                case "--log-file": {
+                    if (!applyLogFile(nextArg(flagArgs, i++, flag))) {
+                        return 1;
+                    }
+                    break;
+                }
                 case "--skip-validation":
                     configBuilder.skipCedarValidation(true);
                     break;
@@ -251,6 +273,22 @@ public class AssessmentMain {
                 case "--console-only":
                     configBuilder.consoleOnly(true);
                     break;
+                case "--log-level": {
+                    String level = nextArg(flagArgs, i++, flag);
+                    if (ch.qos.logback.classic.Level.toLevel(level, null) == null) {
+                        System.err.println("Invalid --log-level '" + level
+                                + "'. Expected one of: TRACE, DEBUG, INFO, WARN, ERROR, OFF");
+                        return 1;
+                    }
+                    applyLogLevel(level);
+                    break;
+                }
+                case "--log-file": {
+                    if (!applyLogFile(nextArg(flagArgs, i++, flag))) {
+                        return 1;
+                    }
+                    break;
+                }
                 case "--skip-validation":
                     configBuilder.skipCedarValidation(true);
                     break;
@@ -359,5 +397,64 @@ public class AssessmentMain {
         if (lower.contains("presto")) return "presto";
         if (lower.contains("trino")) return "trino";
         return "lakeformation";
+    }
+
+    /**
+     * Applies {@code --log-level}, overriding the {@code INFO} baked into {@code logback.xml}.
+     *
+     * <p>Applied during argument parsing rather than at run time so that anything logged while
+     * wiring the pipeline is already captured at the requested level.
+     */
+    private static void applyLogLevel(String level) {
+        ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        root.setLevel(ch.qos.logback.classic.Level.toLevel(level, ch.qos.logback.classic.Level.INFO));
+    }
+
+    /**
+     * Adds a file appender at {@code path}, in addition to the console and the default rolling
+     * file.
+     *
+     * <p>Note the tool already writes {@code logs/ranger-lf-sync.log} via the {@code FILE} appender
+     * in {@code logback.xml}; this flag exists so a run can be captured somewhere specific and
+     * shared, without the caller needing to know that default path or supply their own logback
+     * configuration.
+     *
+     * <p>Plain text rather than the JSON layout the default file uses: the point of this flag is a
+     * log a human can read and paste into a ticket. Not rolling either — a single assessment run is
+     * bounded, unlike the sync server's indefinite lifetime.
+     */
+    private static boolean applyLogFile(String path) {
+        ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        ch.qos.logback.classic.LoggerContext context = root.getLoggerContext();
+
+        ch.qos.logback.classic.encoder.PatternLayoutEncoder encoder =
+                new ch.qos.logback.classic.encoder.PatternLayoutEncoder();
+        encoder.setContext(context);
+        encoder.setPattern("%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%logger{36}] %msg%n");
+        encoder.start();
+
+        ch.qos.logback.core.FileAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.FileAppender<>();
+        appender.setContext(context);
+        appender.setName("ASSESSMENT_FILE");
+        appender.setFile(path);
+        appender.setAppend(false);
+        appender.setEncoder(encoder);
+        try {
+            appender.start();
+        } catch (RuntimeException e) {
+            System.err.println("Cannot write log file '" + path + "': " + e.getMessage());
+            return false;
+        }
+        if (!appender.isStarted()) {
+            // Logback reports a bad path via its status manager rather than by throwing.
+            System.err.println("Cannot write log file '" + path
+                    + "' — check the directory exists and is writable.");
+            return false;
+        }
+        root.addAppender(appender);
+        return true;
     }
 }

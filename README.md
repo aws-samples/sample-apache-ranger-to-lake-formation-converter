@@ -943,6 +943,8 @@ server [<config-file>] [options]
   --output-lf-policies-path <path> Write projected LF permission operations to this JSON file
   --output-gaps-path <path>        Write partially/not-convertible policies with gap details to this JSON file
   --console-only                   Print report to console only, skip JSON file
+  --log-level <level>              TRACE|DEBUG|INFO|WARN|ERROR (default INFO)
+  --log-file <path>                Also write a plain-text log to this file
   --skip-validation                Skip Cedar schema validation (required for large policy sets)
 
 file <export-file.json> [options]
@@ -952,8 +954,46 @@ file <export-file.json> [options]
   --output-lf-policies-path <path> Write projected LF permission operations to this JSON file
   --output-gaps-path <path>        Write partially/not-convertible policies with gap details to this JSON file
   --console-only                   Print report to console only, skip JSON file
+  --log-level <level>              TRACE|DEBUG|INFO|WARN|ERROR (default INFO)
+  --log-file <path>                Also write a plain-text log to this file
   --skip-validation                Skip Cedar schema validation (required for large policy sets)
 ```
+
+### Diagnostic logging
+
+By default the tool logs at `INFO` to the console **and** to a rolling JSON file at
+`logs/ranger-lf-sync.log` (configurable via the `LOG_DIR` environment variable or the `log.dir`
+system property). That default file exists whether or not you pass any logging flag — if you are
+chasing a problem on someone else's run, it is the first place to look.
+
+Two flags give you control without needing a custom logback configuration:
+
+```bash
+java -jar target/assessment-jar-with-dependencies.jar \
+  file ./ranger-export.json \
+  --log-level DEBUG \
+  --log-file ./assessment.log \
+  --console-only
+```
+
+| Flag | Effect |
+|---|---|
+| `--log-level <level>` | Overrides the `INFO` default. An unrecognised level fails fast rather than silently falling back. |
+| `--log-file <path>` | Adds a plain-text (non-JSON, non-rolling) log at `path`, in addition to the console and the default rolling file. Truncates on each run, so one file is one run. An unwritable path fails fast. |
+
+**What `DEBUG` adds that matters.** Several conditions are deliberately logged at `DEBUG` because
+they are expected outcomes rather than problems, and logging them at an operator-facing level
+produced dozens of identical lines per policy:
+
+- each individual occurrence of an unmappable access type (the operator-facing summary is one
+  aggregated `ERROR` per conversion cycle — see `UNSUPPORTED_ACTION`);
+- access types deliberately dropped by design (`KNOWN_UNMAPPABLE_ACTION`);
+- access types narrowed to a weaker permission (`NARROWED_ACTION`);
+- Presto/Trino policies skipped because their catalog is out of scope.
+
+So if a policy is reported `NOT_CONVERTIBLE` and the gap report does not explain it to your
+satisfaction, re-running at `DEBUG` with `--log-file` will show the per-policy decisions behind it.
+Expect substantial output on a large export — this is for targeted investigation, not routine runs.
 
 ### Obtaining a Ranger Export File
 

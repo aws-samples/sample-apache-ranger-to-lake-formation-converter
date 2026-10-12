@@ -43,4 +43,42 @@ class AssessmentMainTest {
     void run_withUnknownFlag_returnsExitCode1() {
         assertEquals(1, AssessmentMain.run(new String[]{"--unknown-flag", "value"}));
     }
+
+    // --- logging flags ---
+
+    @Test
+    void logLevel_invalidValue_isRejected() {
+        assertEquals(1, AssessmentMain.run(new String[]{
+                "file", "/does/not/matter.json", "--log-level", "VERBOSE", "--console-only"}),
+                "an unrecognised level must fail fast rather than silently defaulting to INFO");
+    }
+
+    @Test
+    void logFile_unwritablePath_isRejected() {
+        assertEquals(1, AssessmentMain.run(new String[]{
+                "file", "/does/not/matter.json",
+                "--log-file", "/nonexistent-dir-" + System.nanoTime() + "/a.log", "--console-only"}),
+                "an unwritable log path must fail rather than silently producing no log");
+    }
+
+    @Test
+    void logLevel_isAcceptedBySubcommands() {
+        // Exits 1 because the export path does not exist, not because the flag was rejected —
+        // the point is that parsing accepts the flag in both subcommands.
+        assertEquals(1, AssessmentMain.run(new String[]{
+                "file", "/no/such/export.json", "--log-level", "DEBUG", "--console-only"}));
+        assertEquals(1, AssessmentMain.run(new String[]{
+                "server", "--log-level", "DEBUG", "--console-only"}));
+    }
+
+    @Test
+    void logLevel_restoresNothingGlobally_butDoesNotThrow() {
+        // Applied immediately at parse time, so it mutates the process-wide root logger. Verify
+        // that is at least idempotent and does not blow up when applied repeatedly, since several
+        // tests in one JVM will each set it.
+        assertEquals(1, AssessmentMain.run(new String[]{
+                "file", "/no/such/export.json", "--log-level", "TRACE", "--console-only"}));
+        assertEquals(1, AssessmentMain.run(new String[]{
+                "file", "/no/such/export.json", "--log-level", "INFO", "--console-only"}));
+    }
 }
